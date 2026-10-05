@@ -1,0 +1,5 @@
+# Compiler for the dependency-free scaffold; see docs/development.md.
+[toolchain]
+channel = "1.85.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

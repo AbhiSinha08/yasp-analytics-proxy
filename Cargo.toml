@@ -1,0 +1,10 @@
+[package]
+name = "yasp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Yet Another SQL Proxy: a multi-database analytics gateway"
+publish = false
+
+# Add runtime dependencies alongside their implementation milestones.
+[dependencies]

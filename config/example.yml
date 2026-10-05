@@ -1,0 +1,88 @@
+# Proposed v1 configuration: no loader is implemented yet.
+# *_env fields name environment variables, not literal secret values.
+# The selection callback chooses a target/login per query within configured bounds.
+version: 1
+
+gateway:
+  protocol: postgresql
+  listen: "127.0.0.1:6432"
+  max_sessions: 32
+  tls:
+    mode: local_development # Non-local deployments require certificates.
+
+targets:
+  primary:
+    engine: postgresql
+    host: "127.0.0.1"
+    port: 5432
+    database: yasp_primary
+    tls_mode: disable # Local development only.
+    logins:
+      restricted:
+        username: yasp_restricted
+        password_env: YASP_PRIMARY_RESTRICTED_PASSWORD
+      analyst:
+        username: yasp_analyst
+        password_env: YASP_PRIMARY_ANALYST_PASSWORD
+  secondary:
+    engine: postgresql
+    host: "127.0.0.1"
+    port: 5432
+    database: yasp_secondary
+    tls_mode: disable
+    logins:
+      restricted:
+        username: yasp_restricted
+        password_env: YASP_SECONDARY_RESTRICTED_PASSWORD
+      analyst:
+        username: yasp_analyst
+        password_env: YASP_SECONDARY_ANALYST_PASSWORD
+
+principals:
+  metabase:
+    scram_verifier_env: YASP_METABASE_SCRAM_VERIFIER
+    permitted_connections:
+      primary: [restricted, analyst]
+      secondary: [restricted, analyst]
+
+backend:
+  max_connections_per_pool: 8 # Pools are partitioned by target/login.
+  connect_timeout_ms: 5000
+  acquire_timeout_ms: 5000
+  query_timeout_ms: 30000
+
+cache:
+  enabled: false # Enable with explicit deterministic-query approval.
+  url_env: YASP_REDIS_URL
+  namespace: "yasp:dev:v1"
+  ttl_seconds: 30
+  max_entry_bytes: 8388608
+  approved_queries: [] # Exact effective SQL strings; empty approves nothing.
+
+hooks:
+  selection:
+    module: "hooks/examples/role_selector.py"
+    callback: select_backend
+  result_processing:
+    enabled: false
+    modules: ["hooks/examples/passthrough.py"]
+  worker_count: 1
+  queue_capacity: 32
+  result_batch_rows: 256
+  result_batch_max_bytes: 1048576
+
+policy:
+  rbac:
+    metadata_key: group # Illustrative BI metadata field, configured for the integration.
+    mappings:
+      restricted:
+        target: primary
+        backend_login: restricted
+      analysts:
+        target: primary
+        backend_login: analyst
+    missing_or_unmapped: deny
+    discovery_connection: # For recognized metadata/setup operations only.
+      target: primary
+      backend_login: restricted
+  result_masks: [] # Optional presentation rules; source roles enforce RBAC.
