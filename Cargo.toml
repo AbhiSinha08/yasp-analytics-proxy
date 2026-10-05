@@ -2,9 +2,25 @@
 name = "yasp"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "Yet Another SQL Proxy: a multi-database analytics gateway"
 publish = false
 
-# Add runtime dependencies alongside their implementation milestones.
+[features]
+default = []
+# Rust-only hosts do not need a Python installation or libpython.
+python = ["dep:pyo3"]
+
+# Foundation only; protocol, driver, cache, and model crates accompany their milestones.
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
+thiserror = "2.0"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+pyo3 = { version = "0.29", optional = true, default-features = false }
+
+[[example]]
+name = "python_environment"
+required-features = ["python"]

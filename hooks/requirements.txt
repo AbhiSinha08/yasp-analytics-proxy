@@ -1,0 +1,4 @@
+# The supplied callback examples need only Python 3.12's standard library.
+# Consuming applications own their hook dependencies. For deployment, pin all
+# direct and transitive requirements with hashes in their requirements file.
+# Install before startup; the engine never invokes pip.

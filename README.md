@@ -16,12 +16,13 @@ Applications use the Rust library with their own context providers and hooks.
 Organization-specific customization stays outside core engine modules and is
 registered when constructing the engine.
 
-The repository currently contains a dependency-free Rust scaffold. The binary
-prints a status message; runtime components are not implemented.
+The repository currently contains a Rust scaffold with foundation dependencies
+and optional PyO3 embedding support. The binary prints a status message; runtime
+components are not implemented. Rust 1.89.0 is pinned for reproducible builds.
 
 ```sh
-cargo check --all-targets
-cargo run
+cargo check --locked --all-targets
+cargo run --locked
 ```
 
 - [Phases and components](docs/PLAN.md)

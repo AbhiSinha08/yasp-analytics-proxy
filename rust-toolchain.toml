@@ -1,5 +1,5 @@
-# Compiler for the dependency-free scaffold; see docs/development.md.
+# Minimum compiler for the selected foundation and planned pgwire adapter.
 [toolchain]
-channel = "1.85.1"
+channel = "1.89.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]

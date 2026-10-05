@@ -9,7 +9,7 @@ context derivation before role selection so their own metadata formats can be us
 
 ## Source-role selection
 
-One BI connection configuration uses shared proxy credentials. For each query,
+One BI connection configuration uses shared proxy credentials. For each executable query,
 select_backend receives extracted metadata and the RBAC policy from YAML, and
 chooses a configured backend target/login. PostgreSQL roles enforce the actual
 source privileges. The callback does not open a connection or receive passwords.
@@ -32,9 +32,17 @@ must not infer a privileged role merely from a client-supplied tag.
 Rust acquires an idle matching connection or creates one within pool limits. Queries
 in the same frontend session may select different roles in autocommit mode. An
 explicit transaction pins its selected role/connection; conflicting decisions fail.
+BEGIN can defer acquisition until the first operation requiring a backend. COMMIT,
+ROLLBACK, and cancellation use the current session's pinned state without needing
+new routing metadata. Parse/Describe may invoke selection before parameter values
+exist; policies requiring unavailable inputs must reject that preparation. Each
+execution is reauthorized, and advertised parameter/result types must stay compatible.
 
 Phase 1 assumes role-selection metadata is supplied by the trusted BI integration.
 Frontend service authentication does not independently authenticate each viewer.
+The example `group` field needs an application-defined metadata integration; it is
+not assumed to be present in stock Metabase comments. Preserve metadata provenance
+across SQL rewrites. Disable BI caching until its security scope has been verified.
 The selector example is an unimplemented stub and raises an error when called.
 
 ## Context and execution
@@ -56,6 +64,30 @@ be represented in the cache context.
 Backend adapters preserve exact values and column metadata at the hook boundary.
 Batch byte limits cover oversized individual rows. The passthrough example uses
 only the standard library and performs no result transformation.
+NULL maps to None; numbers must not lose precision through float or JSON conversion.
+Define each supported native type's conversion explicitly, including timestamps,
+arrays, and special values. Unsupported typed transformations fail explicitly.
+Validate output types, row counts, and byte limits after each callback. Preserving
+row order is also a contract of the trusted implementation.
+
+## Python dependencies
+
+Build with the optional `python` Cargo feature. Cargo installs PyO3; the consuming
+application installs its Python packages into one versioned environment before
+startup. The supplied [requirements.txt](requirements.txt) has no third-party
+requirements. Applications pin their own complete dependency set, including any
+Phase 2 model SDK or native inference runtime.
+
+PYO3_PYTHON chooses build/link settings. Runtime imports still need the environment's
+site-packages and the registered hook modules on an explicit trusted search path.
+All embedded hooks share package versions, sys.modules, and interpreter state;
+there is no venv per hook or query. Native wheels must match Python, OS, and CPU.
+No package installation happens while serving. Fail startup on missing required
+imports and replace the process to activate dependency changes.
+
+See [development setup](../docs/development.md#python-embedding) for commands and
+the runnable Rust import probe. Conflicting dependencies or enforced termination
+require separate process workers. A virtual environment is not a security sandbox.
 
 ## Phase 2 dynamic masking
 
@@ -63,6 +95,16 @@ A System 1 decision-model integration classifies column data and provides tags o
 scores to a configured masking policy. The result-processing stage applies that
 policy before forwarding affected data. The callback receives the selected role and
 query context so policy can distinguish permitted and restricted outputs.
+Run optional result transformations before mandatory masking and validation; no
+later hook may restore raw values. A prefix sample fixes a decision for the whole
+column but may miss later sensitive values. Per-batch classification cannot retract
+earlier batches; whole-result policies require a result-size cap or conservative
+masking from the start. Address columns by ordinal and metadata, not alias alone.
+
+If a later batch fails, send an error without a success completion and do not cache
+the partial result. Already emitted, authorized batches cannot be retracted. Raw
+samples must remain local unless an approved external model/data policy permits
+transmission; suppress raw sample logs.
 
 Model failure, uncertain classification, schema-preserving masks, and cache versioning
 are part of the component's contract; see docs/PLAN.md. No model SDK or inference

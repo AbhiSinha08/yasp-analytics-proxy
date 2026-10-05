@@ -7,6 +7,11 @@ gateway:
   protocol: postgresql
   listen: "127.0.0.1:6432"
   max_sessions: 32
+  max_message_bytes: 8388608
+  max_sql_bytes: 1048576
+  max_prepared_statements_per_session: 128
+  max_portals_per_session: 32
+  write_timeout_ms: 30000
   tls:
     mode: local_development # Non-local deployments require certificates.
 
@@ -47,19 +52,26 @@ principals:
 
 backend:
   max_connections_per_pool: 8 # Pools are partitioned by target/login.
+  max_connections_total: 16 # Includes pinned and retiring connections.
   connect_timeout_ms: 5000
   acquire_timeout_ms: 5000
   query_timeout_ms: 30000
+  idle_transaction_timeout_ms: 30000
+  cleanup_timeout_ms: 5000
 
 cache:
   enabled: false # Enable with explicit deterministic-query approval.
+  allow_authorization_staleness: false # Enabling cache requires accepting stale source grants too.
   url_env: YASP_REDIS_URL
   namespace: "yasp:dev:v1"
   ttl_seconds: 30
   max_entry_bytes: 8388608
+  max_buffered_bytes_total: 33554432
+  operation_timeout_ms: 100
   approved_queries: [] # Exact effective SQL strings; empty approves nothing.
 
 hooks:
+  # The host registers its context provider before loading these trusted resources.
   selection:
     module: "hooks/examples/role_selector.py"
     callback: select_backend
@@ -68,12 +80,14 @@ hooks:
     modules: ["hooks/examples/passthrough.py"]
   worker_count: 1
   queue_capacity: 32
+  queue_max_bytes: 4194304
+  execution_timeout_ms: 2000 # Stops waiting; an executing Python worker remains occupied.
   result_batch_rows: 256
   result_batch_max_bytes: 1048576
 
 policy:
   rbac:
-    metadata_key: group # Illustrative BI metadata field, configured for the integration.
+    metadata_key: group # Application-defined; stock Metabase is not assumed to emit it.
     mappings:
       restricted:
         target: primary
