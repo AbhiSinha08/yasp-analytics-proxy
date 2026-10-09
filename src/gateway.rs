@@ -3,6 +3,7 @@
 use crate::{
     backend::PostgresBackend,
     config::{GatewayConfig, GatewaySettings},
+    logger,
     query::{ParsedQuery, QueryError},
     transport::FrameGuard,
 };
@@ -70,7 +71,7 @@ pub async fn serve(
             _ = &mut shutdown => break Ok(()),
             result = sessions.join_next(), if !sessions.is_empty() => {
                 if result.is_some_and(|r| r.is_err()) {
-                    tracing::warn!("gateway session task failed");
+                    tracing::error!("gateway session task failed");
                 }
             }
             accepted = listener.accept() => {
@@ -82,16 +83,17 @@ pub async fn serve(
                     tracing::warn!(%peer, "gateway session limit reached");
                     continue;
                 }
+                let client_id = logger::next_client_id();
                 let source = source.clone();
                 let backend = backend.clone();
                 let settings = settings.clone();
                 sessions.spawn(async move {
-                    tracing::debug!(%peer, "gateway session opened");
-                    if let Err(error) = connection(socket, source, backend, settings).await {
+                    tracing::info!(client_id, %peer, "client connected");
+                    if let Err(error) = connection(socket, source, backend, settings, client_id).await {
                         // Protocol errors can contain client data. Log only their category.
-                        tracing::warn!(%peer, kind = ?error.kind(), "gateway connection failed");
+                        tracing::error!(client_id, %peer, kind = ?error.kind(), "client session failed");
                     }
-                    tracing::debug!(%peer, "gateway session closed");
+                    tracing::info!(client_id, %peer, "client disconnected");
                 });
             }
         }
@@ -147,6 +149,7 @@ async fn connection(
     source: Arc<Credentials>,
     backend: Arc<PostgresBackend>,
     settings: Arc<GatewaySettings>,
+    client_id: u64,
 ) -> io::Result<()> {
     let write_timeout = settings.write_timeout();
     socket.set_nodelay(true)?;
@@ -199,11 +202,19 @@ async fn connection(
             && let PgWireFrontendMessage::Query(query) = &message
         {
             socket.set_state(PgWireConnectionState::QueryInProgress);
+            let query_id = logger::next_query_id();
+            tracing::debug!(
+                query_id,
+                client_id,
+                sql = ?query.query,
+                "query received"
+            );
             let result = tokio::select! {
-                result = execute_query(&mut socket, &backend, &query.query, &settings) => result,
+                result = execute_query(&mut socket, &backend, &query.query, &settings, query_id, client_id) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
+                tracing::error!(query_id, client_id, "query failed");
                 let mut info: ErrorInfo = error.into();
                 if info.is_fatal() {
                     return Err(io::Error::other("frontend response failed"));
@@ -318,6 +329,7 @@ async fn connection(
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response timed out"))?;
         if let Err(error) = result {
+            tracing::error!(client_id, "client protocol operation failed");
             let mut info: ErrorInfo = error.into();
             if !authenticated {
                 info.severity = "FATAL".into();
@@ -365,6 +377,8 @@ async fn execute_query(
     backend: &PostgresBackend,
     sql: &str,
     settings: &GatewaySettings,
+    query_id: u64,
+    client_id: u64,
 ) -> PgWireResult<()> {
     let write_timeout = settings.write_timeout();
     let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
@@ -392,6 +406,13 @@ async fn execute_query(
             ));
         }
     };
+    tracing::debug!(
+        query_id,
+        client_id,
+        database = ?backend.target(),
+        sql = ?query.sql(),
+        "query sent to backend"
+    );
     backend
         .execute(&query, socket, settings.query_timeout(), write_timeout)
         .await

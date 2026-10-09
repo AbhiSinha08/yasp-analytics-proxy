@@ -20,6 +20,7 @@
   - [x] **Configurable gateway limits and listener** — Supports the optional PostgreSQL-only gateway block for a loopback listener and session/frame/SQL/write limits; omitted values use defaults. `local_development` is plaintext; real TLS is deferred.
   - [x] **Gateway timeout policy** — Configures query, client-message read, write, startup, and shutdown deadlines. PostgreSQL enforces transaction-local query timers; pool lifecycle limits remain separate.
   - [x] **Isolated database test fixture** — Creates a fresh database from `template0`, loads synthetic test data, and drops the created database during teardown; requires a test login with `CREATEDB`.
+- [x] **Shared stdout logging** — The reusable logger reads `LOG_LEVEL` (`INFO` by default; `DEBUG`, `INFO`, `WARN`, and `ERROR` are accepted). Query receive and backend dispatch logs include query ID, client ID, backend target, and SQL at DEBUG; client connection changes are logged at INFO and failures at ERROR.
 - [ ] **Prepared statements, portals, client transactions, PostgreSQL cancellation, SET, and binary formats** — Deferred beyond the simple-query milestone; full-reference prepared/portal limit fields are not active runtime settings.
 - [ ] **Metabase integration and trusted routing metadata** — Requires compatibility validation against the supplied Metabase instance.
 - [ ] **Source RBAC and per-query routing** — Requires application policy callbacks and multiple configured role/target connections.

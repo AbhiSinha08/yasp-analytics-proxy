@@ -63,6 +63,17 @@ implementation proceeds through requested subtasks
 - Use the smallest useful test suite. Do not add placeholder success tests or
   tests whose main effect is redundant maintenance during intended code changes.
 
+## Logging
+
+- Use the shared `logger` module to initialize host logging; library consumers
+  can call `yasp::logger::init()` before starting the gateway, or pass a value
+  resolved from their own configuration source to `init_with_level()`.
+- Logs go to stdout. `LOG_LEVEL` accepts `DEBUG`, `INFO`, `WARN`, or `ERROR`
+  and defaults to `INFO`; each level includes messages at higher severities.
+- Query logs at DEBUG include a query ID, client ID, backend target, and SQL.
+  Log client connection changes at INFO and failures at ERROR; avoid logging
+  secrets or raw protocol errors that may contain client data.
+
 ## Documentation and comments
 
 - Write for humans using plain language, clear component descriptions, and

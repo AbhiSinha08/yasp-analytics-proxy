@@ -10,10 +10,12 @@ use tokio::{net::TcpListener, runtime::Runtime};
 use yasp::{
     backend::PostgresBackend,
     config::{BackendConfig, FileConfig, GatewayConfig},
-    gateway,
+    gateway, logger,
 };
 
-fn load_config(path: &Path) -> Result<(GatewayConfig, BackendConfig), Box<dyn std::error::Error>> {
+fn load_config(
+    path: &Path,
+) -> Result<(GatewayConfig, BackendConfig, String), Box<dyn std::error::Error>> {
     let file = FileConfig::read(path)?;
     let (target, login) = file.connection()?;
     // dotenv errors can contain source text, so expose a fixed diagnostic.
@@ -28,6 +30,16 @@ fn load_config(path: &Path) -> Result<(GatewayConfig, BackendConfig), Box<dyn st
         Err(dotenvy::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(io::Error::other("cannot read .env").into()),
     }
+    let log_level = match env::var("LOG_LEVEL") {
+        Ok(level) => level,
+        Err(env::VarError::NotPresent) => values
+            .get("LOG_LEVEL")
+            .cloned()
+            .unwrap_or_else(|| "INFO".to_owned()),
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::other("invalid LOG_LEVEL").into());
+        }
+    };
     let required = |name: &str, label: &str| -> Result<String, io::Error> {
         if name.is_empty() || name.contains(['\0', '=']) {
             return Err(io::Error::other("invalid password_env key"));
@@ -57,7 +69,7 @@ fn load_config(path: &Path) -> Result<(GatewayConfig, BackendConfig), Box<dyn st
         )?,
         target.database.clone(),
     )?;
-    Ok((gateway, backend))
+    Ok((gateway, backend, log_level))
 }
 
 fn main() {
@@ -78,12 +90,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err(io::Error::other("usage: yasp [--config PATH]").into()),
     };
-    let (config, backend_config) = load_config(&path)?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let (config, backend_config, log_level) = load_config(&path)?;
+    logger::init_with_level(&log_level)?;
     Runtime::new()?.block_on(async {
         let backend = Arc::new(PostgresBackend::new(backend_config)?);
         let listener = TcpListener::bind(config.settings().listen).await?;

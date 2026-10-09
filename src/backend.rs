@@ -41,10 +41,12 @@ const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_confo
 /// One target/login pool. No organization routing or callback policy is embedded.
 pub struct PostgresBackend {
     pool: Pool<PgManager>,
+    target: String,
 }
 
 impl PostgresBackend {
     pub fn new(config: BackendConfig) -> io::Result<Self> {
+        let target = format!("{}:{}/{}", config.host, config.port, config.database);
         let mut wire = Config::new();
         wire.user(config.username)
             .password(config.password)
@@ -65,7 +67,11 @@ impl PostgresBackend {
             })
             .build()
             .map_err(|_| io::Error::other("cannot construct PostgreSQL pool"))?;
-        Ok(Self { pool })
+        Ok(Self { pool, target })
+    }
+
+    pub(crate) fn target(&self) -> &str {
+        &self.target
     }
 
     /// Execute the already parsed statement. Native PostgreSQL messages stay
