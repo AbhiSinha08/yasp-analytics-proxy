@@ -1,11 +1,16 @@
 //! PostgreSQL frontend sessions, authentication, and responses.
 
-use crate::config::GatewayConfig;
+use crate::{
+    backend::PostgresBackend,
+    config::GatewayConfig,
+    query::{ParsedQuery, QueryError},
+    transport::FrameGuard,
+};
 use async_trait::async_trait;
-use futures::{Sink, SinkExt, StreamExt, stream};
+use futures::{SinkExt, StreamExt};
 use pgwire::{
     api::{
-        ClientInfo, ClientPortalStore, DefaultClient, NoopHandler, PgWireConnectionState, Type,
+        ClientInfo, DefaultClient, NoopHandler, PgWireConnectionState,
         auth::{
             AuthSource, DefaultServerParameterProvider, LoginInfo, Password,
             sasl::{
@@ -13,28 +18,18 @@ use pgwire::{
                 scram::{SCRAM_ITERATIONS, ScramAuth, gen_salted_password, random_nonce},
             },
         },
-        query::SimpleQueryHandler,
-        results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response},
-        store::PortalStore,
     },
     error::{ErrorInfo, PgWireError, PgWireResult},
     messages::{
         PgWireBackendMessage, PgWireFrontendMessage, SslNegotiationMetaMessage,
-        response::{GssEncResponse, SslResponse},
+        response::{
+            EmptyQueryResponse, GssEncResponse, ReadyForQuery, SslResponse, TransactionStatus,
+        },
     },
     tokio::server::{PgWireMessageServerCodec, process_error, process_message},
 };
-use std::{
-    fmt,
-    future::Future,
-    io,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{fmt, future::Future, io, sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
@@ -42,16 +37,16 @@ use tokio::{
 use tokio_util::codec::Framed;
 
 const MAX_SESSIONS: usize = 32;
-const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 /// Serve on a host-owned loopback listener (port 0 is useful in tests).
-/// Stop accepting on shutdown, then close remaining sessions after five seconds.
+/// Stop accepting on shutdown, then close remaining sessions after ten seconds.
 pub async fn serve(
     listener: TcpListener,
     config: GatewayConfig,
+    backend: Arc<PostgresBackend>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
     if !listener.local_addr()?.ip().is_loopback() {
@@ -92,9 +87,10 @@ pub async fn serve(
                     continue;
                 }
                 let source = source.clone();
+                let backend = backend.clone();
                 sessions.spawn(async move {
                     tracing::debug!(%peer, "gateway session opened");
-                    if let Err(error) = connection(socket, source).await {
+                    if let Err(error) = connection(socket, source, backend).await {
                         // Protocol errors can contain client data. Log only their category.
                         tracing::warn!(%peer, kind = ?error.kind(), "gateway connection failed");
                     }
@@ -114,6 +110,7 @@ pub async fn serve(
         sessions.abort_all();
         while sessions.join_next().await.is_some() {}
     }
+    backend.close();
     outcome
 }
 
@@ -147,61 +144,31 @@ fn protocol_error(severity: &str, code: &str, message: &str) -> PgWireError {
     )))
 }
 
-struct HealthQuery;
-
-#[async_trait]
-impl SimpleQueryHandler for HealthQuery {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
-    where
-        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
-        C::PortalStore: PortalStore,
-        C::Error: fmt::Debug,
-        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
-    {
-        let sql = query.trim();
-        let sql = sql.strip_suffix(';').unwrap_or(sql).trim();
-        let mut words = sql.split_ascii_whitespace();
-        if !words
-            .next()
-            .is_some_and(|s| s.eq_ignore_ascii_case("SELECT"))
-            || words.next() != Some("1")
-            || words.next().is_some()
-        {
-            return Err(protocol_error(
-                "ERROR",
-                "0A000",
-                "only simple-query SELECT 1 is supported",
-            ));
-        }
-        let schema = Arc::new(vec![
-            FieldInfo::new("?column?".into(), None, None, Type::INT4, FieldFormat::Text)
-                .with_type_size(4),
-        ]);
-        let mut encoder = DataRowEncoder::new(schema.clone());
-        encoder.encode_field(&1_i32)?;
-        Ok(vec![Response::Query(QueryResponse::new(
-            schema,
-            stream::iter([Ok(encoder.take_row())]),
-        ))])
-    }
-}
-
-async fn connection(socket: TcpStream, source: Arc<Credentials>) -> io::Result<()> {
+async fn connection(
+    socket: TcpStream,
+    source: Arc<Credentials>,
+    backend: Arc<PostgresBackend>,
+) -> io::Result<()> {
     socket.set_nodelay(true)?;
+    // A second descriptor observes disconnects without consuming protocol bytes.
+    let raw_socket = socket.into_std()?;
+    let observer = TcpStream::from_std(raw_socket.try_clone()?)?;
+    let socket = TcpStream::from_std(raw_socket)?;
     let client = DefaultClient::<String>::new(socket.peer_addr()?, false);
     let mut socket = Framed::new(
-        FrameGuard::new(socket),
+        FrameGuard::frontend(socket),
         PgWireMessageServerCodec::new(client),
     );
     let mut parameters = DefaultServerParameterProvider::default();
     parameters.is_superuser = false;
     parameters.default_transaction_read_only = true;
+    parameters.date_style = "ISO, MDY".into();
+    parameters.time_zone = "UTC".into();
     // SASL state belongs to one session; only immutable salted credentials are shared.
     let auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
             .with_scram(ScramAuth::new(source.clone())),
     );
-    let query = Arc::new(HealthQuery);
     let noop = Arc::new(NoopHandler);
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut authenticated = false;
@@ -223,6 +190,42 @@ async fn connection(socket: TcpStream, source: Arc<Credentials>) -> io::Result<(
             PgWireFrontendMessage::Terminate(_) | PgWireFrontendMessage::CancelRequest(_)
         ) {
             return Ok(());
+        }
+        if authenticated
+            && !matches!(socket.state(), PgWireConnectionState::AwaitingSync)
+            && let PgWireFrontendMessage::Query(query) = &message
+        {
+            socket.set_state(PgWireConnectionState::QueryInProgress);
+            let result = tokio::select! {
+                result = execute_query(&mut socket, &backend, &query.query) => result,
+                _ = disconnected(&observer) => return Ok(()),
+            };
+            if let Err(error) = result {
+                let mut info: ErrorInfo = error.into();
+                if info.is_fatal() {
+                    return Err(io::Error::other("frontend response failed"));
+                }
+                info.severity = "ERROR".into();
+                timeout(
+                    WRITE_TIMEOUT,
+                    socket.send(PgWireBackendMessage::ErrorResponse(info.into())),
+                )
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "error response timed out")
+                })??;
+            }
+            socket.set_state(PgWireConnectionState::ReadyForQuery);
+            socket.set_transaction_status(TransactionStatus::Idle);
+            timeout(
+                WRITE_TIMEOUT,
+                socket.send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
+                    TransactionStatus::Idle,
+                ))),
+            )
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "ready response timed out"))??;
+            continue;
         }
         let extended = message.is_extended_query();
         let operation = async {
@@ -294,7 +297,7 @@ async fn connection(socket: TcpStream, source: Arc<Credentials>) -> io::Result<(
                         message,
                         &mut socket,
                         auth.clone(),
-                        query.clone(),
+                        noop.clone(),
                         noop.clone(),
                         noop.clone(),
                         noop.clone(),
@@ -343,128 +346,46 @@ async fn connection(socket: TcpStream, source: Arc<Credentials>) -> io::Result<(
     }
 }
 
-/// Check the length before delivering a frame header to pgwire. Never read ahead
-/// into another frame: pipelined requests each pass through this same bound.
-struct FrameGuard {
-    socket: TcpStream,
-    startup: bool,
-    header: [u8; 8],
-    read: usize,
-    sent: usize,
-    header_len: usize,
-    remaining: usize,
-}
-
-impl FrameGuard {
-    fn new(socket: TcpStream) -> Self {
-        Self {
-            socket,
-            startup: true,
-            header: [0; 8],
-            read: 0,
-            sent: 0,
-            header_len: 8,
-            remaining: 0,
-        }
+async fn disconnected(socket: &TcpStream) {
+    let mut byte = [0];
+    match socket.peek(&mut byte).await {
+        Ok(0) | Err(_) => {}
+        Ok(_) if byte[0] == b'X' => {}
+        // Pipelined requests remain in the protocol reader. Query deadlines
+        // bound their wait; this observer never consumes another request.
+        Ok(_) => std::future::pending::<()>().await,
     }
 }
 
-impl AsyncRead for FrameGuard {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        if buf.remaining() == 0 {
-            return Poll::Ready(Ok(()));
+async fn execute_query(
+    socket: &mut Framed<FrameGuard, PgWireMessageServerCodec<String>>,
+    backend: &PostgresBackend,
+    sql: &str,
+) -> PgWireResult<()> {
+    let query = match ParsedQuery::parse(sql) {
+        Ok(query) => query,
+        Err(QueryError::Empty) => {
+            timeout(
+                WRITE_TIMEOUT,
+                socket.send(PgWireBackendMessage::EmptyQueryResponse(
+                    EmptyQueryResponse::new(),
+                )),
+            )
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "empty response timed out"))??;
+            return Ok(());
         }
-        while this.read < this.header_len {
-            // Validate startup length after four bytes, before reading the code.
-            let end = if this.startup && this.read < 4 {
-                4
-            } else {
-                this.header_len
-            };
-            let mut header = ReadBuf::new(&mut this.header[this.read..end]);
-            match Pin::new(&mut this.socket).poll_read(cx, &mut header) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(())) => {}
-            }
-            let n = header.filled().len();
-            if n == 0 {
-                return Poll::Ready(if this.read == 0 {
-                    Ok(())
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "truncated frame header",
-                    ))
-                });
-            }
-            this.read += n;
-            if (this.startup && this.read >= 4) || (!this.startup && this.read == 5) {
-                let offset = usize::from(!this.startup);
-                let length = u32::from_be_bytes(this.header[offset..offset + 4].try_into().unwrap())
-                    as usize;
-                let minimum = if this.startup { 8 } else { 4 };
-                if length < minimum || length > MAX_FRAME_BYTES - offset {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "invalid frame length",
-                    )));
-                }
-                this.remaining = length + offset - this.header_len;
-            }
+        Err(error) => {
+            return Err(protocol_error(
+                "ERROR",
+                match error {
+                    QueryError::Syntax => "42601",
+                    QueryError::TooLarge | QueryError::TooComplex => "54000",
+                    _ => "0A000",
+                },
+                &error.to_string(),
+            ));
         }
-        if this.sent < this.header_len {
-            let n = (this.header_len - this.sent).min(buf.remaining());
-            buf.put_slice(&this.header[this.sent..this.sent + n]);
-            this.sent += n;
-        } else if this.remaining > 0 {
-            let n = this.remaining.min(buf.remaining());
-            let mut payload = ReadBuf::new(buf.initialize_unfilled_to(n));
-            match Pin::new(&mut this.socket).poll_read(cx, &mut payload) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(())) => {}
-            }
-            let n = payload.filled().len();
-            if n == 0 {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "truncated frame",
-                )));
-            }
-            buf.advance(n);
-            this.remaining -= n;
-        }
-        if this.sent == this.header_len && this.remaining == 0 {
-            if this.startup {
-                let code = u32::from_be_bytes(this.header[4..8].try_into().unwrap());
-                this.startup = matches!(code, 80877103 | 80877104);
-            }
-            this.header_len = if this.startup { 8 } else { 5 };
-            this.read = 0;
-            this.sent = 0;
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl AsyncWrite for FrameGuard {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().socket).poll_write(cx, buf)
-    }
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().socket).poll_flush(cx)
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().socket).poll_shutdown(cx)
-    }
+    };
+    backend.execute(&query, socket).await
 }

@@ -1,4 +1,4 @@
-# Proposed v1 configuration: no loader is implemented yet.
+# Proposed full v1 configuration; the runtime currently supports only a subset.
 # *_env fields name environment variables, not literal secret values.
 # The selection callback chooses a target/login per query within configured bounds.
 version: 1

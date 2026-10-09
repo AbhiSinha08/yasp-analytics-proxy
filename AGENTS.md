@@ -74,3 +74,5 @@ implementation proceeds through requested subtasks
   or maintained documentation. Use commits and review descriptions for history.
 - Keep comments focused on purpose, contracts, constraints, and non-obvious
   reasons. Keep README, plan, setup instructions, and examples consistent.
+- Add Sub items to the file docs/deliverables.md if a plan implements multiple
+  features or som sub-item is left delegated to the next session.

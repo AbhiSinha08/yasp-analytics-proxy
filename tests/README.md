@@ -6,32 +6,47 @@ Do not duplicate small implementation logic, test trivial helpers independently,
 or assert private structure. Refactoring should preserve tests when behavior is
 unchanged; intended behavior changes can change contract expectations.
 
-The gateway check starts the compiled Rust host and invokes real
-`psql`. It covers SCRAM authentication failures, `.env` failures and overrides,
-simple-query errors and recovery, exact INT4 metadata and completion, empty queries,
-extended-protocol recovery at Sync, concurrent clients, malformed/oversized frames,
-SSL/GSS refusal, the 32-session cap, disconnect cleanup, and graceful shutdown.
+The gateway integration harness reads `tests/config.yml` by default. The test YAML
+uses `version: 1` and the existing `targets.<target>.logins.<login>` layout, with one
+PostgreSQL target and one login; it has no `gateway` YAML section. Set
+`YASP_TEST_CONFIG` only to override the config file path. The test target password is
+resolved from `YASP_TEST_TARGET_PASSWORD`. Frontend username, password, and database
+label come from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and
+`YASP_GATEWAY_DATABASE`, supplied by process environment or optional repository-root
+`.env`; process values take precedence.
 
-Run `cargo test --locked --all-targets` on WSL/Linux with Python 3 and
-`psql`/libpq installed. Port `127.0.0.1:6432` must be free. The test uses temporary
-environment files and shuts down its processes. To run the same check directly:
+The target database in the test config is the `postgres` maintenance database used to
+create a fresh `yasp_test_<UUID>` database from `template0`. The test login must have
+`CREATEDB`; it can be a non-superuser. The harness loads the SQL fixture into the
+new database and drops only that database with `FORCE` during teardown. It does not
+modify PostgreSQL roles or populate a shared development database.
+
+Run on WSL/Linux with Rust 1.89, Python 3, `psql`/libpq, and a local PostgreSQL
+server. The configured loopback address and `127.0.0.1:6432` must be available.
 
 ```sh
-cargo build --locked
-python3 tests/gateway_check.py target/debug/yasp
+cargo test --locked --all-targets
 ```
 
-Tested client: `psql`/libpq 18.6. The Python check uses only the standard library
-and the installed libpq for authentication; the gateway's Rust-only build does
-not embed Python.
+To use a different test configuration file:
 
-Also check locked default/`python` builds, formatting,
-Clippy, and the [Python import probe](../docs/development.md#python-embedding).
-Test imports from the application's venv inside the Rust process, including a native
-standard-library module such as _ssl, and verify that a missing module fails. These
-checks do not establish proxy, worker, or service compatibility.
+```sh
+YASP_TEST_CONFIG=/path/to/test-config.yml cargo test --locked --all-targets
+```
 
-## Phase 1 scenarios
+The test scope exercises simple-query forwarding for supported SELECT/read-only
+WITH queries, subqueries, joins, aggregates, unions, catalog queries, and SHOW
+variable/ALL requests. It checks raw PostgreSQL metadata and text-row forwarding,
+query/frame bounds, and backend cleanup. SQL inspection is limited to 1 MiB, 4,096
+significant tokens, and parser recursion limit 64. Unicode escaped identifiers
+(`U&"..."`) are unsupported. `set_config` is allowed only with the constant
+setting-name argument `application_name`; its value may be an expression. Calls
+targeting serialization or resource settings are rejected. PostgreSQL-reported
+protected text parameter changes cause the backend connection to be discarded.
+
+The deferred scenarios below describe coverage beyond the current milestone.
+
+## Deferred Phase 1 scenarios
 
 1. **Gateway and execution:** simple/parameterized queries, prepared statements,
    metadata/type fidelity, session/transaction lifecycle, cancellation, errors,

@@ -111,20 +111,50 @@ core modules; consuming projects keep their custom Rust code in their own crates
 
 ## Current implementation
 
-Phase 1's first gateway milestone serves loopback PostgreSQL connections with
-SCRAM-SHA-256 authentication and simple-query `SELECT 1`. The host loads dummy
-credentials from `.env` at startup. Other SQL and prepared execution are explicitly
-unsupported; errors recover through PostgreSQL's simple-query or Sync boundary.
-Frontend frames and sessions are bounded, and the host supports graceful shutdown.
-See [development setup](development.md) for limits, startup, and psql validation.
-Backend execution, role selection, hooks, caching, full YAML configuration, and
-Metabase discovery/questions are planned capabilities, not implemented features.
-The binary does not load `config/example.yml` or the example Python callbacks.
-The selector example raises an error when called.
+The current PostgreSQL milestone serves loopback clients over the simple-query
+protocol and forwards supported read-only queries to one loopback PostgreSQL
+backend through a bounded pool. Supported statements include `SELECT`, read-only
+`WITH`, subqueries, joins, aggregates, unions, catalog queries, and `SHOW` variable
+or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AST;
+`ParsedQuery` retains the original SQL and an immutable statement tree for read-only
+inspection. Results preserve PostgreSQL column metadata and stream text rows without
+driver value conversion.
 
-Validation uses `psql`/libpq 18.6 on WSL Linux. The gateway integration check
-covers authentication failures, environment overrides, query and Sync recovery,
-wire metadata, frame/session limits, and shutdown.
+SQL parsing is bounded to 1 MiB, 4,096 significant tokens, and a parser recursion
+limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported. Frontend and
+backend frames are limited to 8 MiB before payload allocation. Queries run in
+read-only backend transactions. `set_config` is allowed only when its setting-name
+argument is the constant `application_name`; its value may be an expression. Calls
+targeting serialization or resource settings are rejected. SQL inspection does not
+analyze custom function bodies, so functions that change engine session settings are
+unsupported. Rollback and `DISCARD ALL` clean up a lease. PostgreSQL reported text
+`ParameterStatus` changes outside the allowed application name, failed cleanup,
+interrupted queries, or unhealthy leases cause the connection to be discarded. The
+PostgreSQL server checks disconnected clients every second. Backend connect, acquire,
+query, frontend-write, and shutdown operations have separate bounds. Frontend and
+backend access are loopback-only, and TLS is not available in this milestone.
+
+The host loads ignored `config/local.yml` by default; `--config PATH` selects another
+file. Runtime YAML uses `version: 1` and the existing
+`targets.<target>.logins.<login>` structure with exactly one PostgreSQL target and
+one login. Unsupported engines, TLS modes, or multiple targets/logins fail startup.
+Gateway username, password, and frontend database label come only from
+`YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` in the
+process environment or optional `.env`; the target login password is resolved using
+its YAML `password_env` name. The frontend database label is separate from the
+actual database in `targets.<target>.database`. Library consumers can construct
+`BackendConfig` and `GatewayConfig` directly and pass them to `PostgresBackend` and
+`gateway::serve`. Per-query routing is not implemented.
+
+`tests/config.yml` uses the same version/target/login layout, with the target database
+set to `postgres` for test database administration and the target secret named
+`YASP_TEST_TARGET_PASSWORD`. The harness creates a fresh database from `template0`,
+loads the SQL fixture, runs the proxy against that database, and drops only the
+database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
+The runtime creates no application database or persistent data fixture.
+Client transactions, PostgreSQL cancel requests, prepared statements, `SET`, binary
+results, routing, RBAC callbacks, hooks, caching, TLS, and Metabase integration are
+not implemented. See [development setup](development.md) and [test guidance](../tests/README.md).
 
 ## Phase 0 — Project foundation
 

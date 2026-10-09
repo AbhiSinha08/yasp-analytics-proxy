@@ -1,0 +1,12 @@
+version: 1
+targets:
+  primary:
+    engine: postgresql
+    host: localhost
+    port: 5432
+    database: postgres
+    tls_mode: disable
+    logins:
+      restricted:
+        username: local
+        password_env: YASP_TEST_TARGET_PASSWORD
