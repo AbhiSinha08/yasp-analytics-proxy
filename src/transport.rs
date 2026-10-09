@@ -15,6 +15,7 @@ const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 /// into another frame: pipelined requests each pass through this same bound.
 pub(crate) struct FrameGuard {
     socket: TcpStream,
+    max_frame_bytes: usize,
     startup: bool,
     header: [u8; 8],
     read: usize,
@@ -24,9 +25,10 @@ pub(crate) struct FrameGuard {
 }
 
 impl FrameGuard {
-    pub(crate) fn frontend(socket: TcpStream) -> Self {
+    pub(crate) fn frontend(socket: TcpStream, max_frame_bytes: usize) -> Self {
         Self {
             socket,
+            max_frame_bytes,
             startup: true,
             header: [0; 8],
             read: 0,
@@ -39,7 +41,7 @@ impl FrameGuard {
 
 impl FrameGuard {
     pub(crate) fn backend(socket: TcpStream) -> Self {
-        let mut guard = Self::frontend(socket);
+        let mut guard = Self::frontend(socket, MAX_FRAME_BYTES);
         guard.startup = false;
         guard.header_len = 5;
         guard
@@ -86,7 +88,7 @@ impl AsyncRead for FrameGuard {
                 let length = u32::from_be_bytes(this.header[offset..offset + 4].try_into().unwrap())
                     as usize;
                 let minimum = if this.startup { 8 } else { 4 };
-                if length < minimum || length > MAX_FRAME_BYTES - offset {
+                if length < minimum || length > this.max_frame_bytes - offset {
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "invalid frame length",

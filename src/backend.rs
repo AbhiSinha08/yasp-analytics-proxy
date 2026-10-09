@@ -36,9 +36,7 @@ use tokio_util::codec::Framed;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
-const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
-const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET default_transaction_read_only = on; SET statement_timeout = '60s'; SET idle_in_transaction_session_timeout = '60s'; SET client_connection_check_interval = '1s'";
+const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET default_transaction_read_only = on; SET client_connection_check_interval = '1s'";
 
 /// One target/login pool. No organization routing or callback policy is embedded.
 pub struct PostgresBackend {
@@ -72,7 +70,13 @@ impl PostgresBackend {
 
     /// Execute the already parsed statement. Native PostgreSQL messages stay
     /// inside the PostgreSQL adapter, preserving opaque values and type metadata.
-    pub async fn execute<S>(&self, query: &ParsedQuery, output: &mut S) -> PgWireResult<()>
+    pub async fn execute<S>(
+        &self,
+        query: &ParsedQuery,
+        output: &mut S,
+        query_timeout: Duration,
+        write_timeout: Duration,
+    ) -> PgWireResult<()>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
@@ -94,7 +98,14 @@ impl PostgresBackend {
         let connection = lease.0.as_mut().unwrap();
         connection.clean = false;
         connection.query_complete = false;
-        timeout(CONNECT_TIMEOUT, connection.control("BEGIN READ ONLY"))
+        // The gateway owns execution policy; PostgreSQL also enforces that budget.
+        // Local settings end at rollback and cannot leak to the next pool borrower.
+        let transaction = format!(
+            "BEGIN READ ONLY; SET LOCAL statement_timeout = '{}ms'; SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
+            query_timeout.as_millis(),
+            query_timeout.max(write_timeout).as_millis(),
+        );
+        timeout(CONNECT_TIMEOUT, connection.control(&transaction))
             .await
             .map_err(|_| error_response("08006", "PostgreSQL transaction setup timed out"))??;
         if connection.status != TransactionStatus::Transaction {
@@ -103,7 +114,9 @@ impl PostgresBackend {
                 "unexpected PostgreSQL transaction state",
             ));
         }
-        let completion = connection.stream_query(query.sql(), output).await;
+        let completion = connection
+            .stream_query(query.sql(), output, query_timeout, write_timeout)
+            .await;
         // A cancelled future may have unread protocol messages. Its lease is
         // discarded; it must never enter the pool's idle queue.
         if !connection.query_complete {
@@ -146,7 +159,7 @@ impl PostgresBackend {
                 return Err(error);
             }
         };
-        timeout(WRITE_TIMEOUT, output.send(message))
+        timeout(write_timeout, output.send(message))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out"))??;
         lease.release();
@@ -312,6 +325,8 @@ impl PgConnection {
         &mut self,
         sql: &str,
         output: &mut S,
+        query_timeout: Duration,
+        write_timeout: Duration,
     ) -> PgWireResult<PgWireBackendMessage>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
@@ -320,13 +335,13 @@ impl PgConnection {
     {
         let started = Instant::now();
         timeout(
-            QUERY_TIMEOUT,
+            query_timeout,
             self.socket
                 .send(PgWireFrontendMessage::Query(Query::new(sql.into()))),
         )
         .await
         .map_err(|_| error_response("57014", "PostgreSQL query timed out"))??;
-        let mut remaining = QUERY_TIMEOUT.saturating_sub(started.elapsed());
+        let mut remaining = query_timeout.saturating_sub(started.elapsed());
         let mut completion = None;
         let mut error = None;
         loop {
@@ -389,7 +404,7 @@ impl PgConnection {
                     if let PgWireBackendMessage::DataRow(row) = &message {
                         validate_text_row(row)?;
                     }
-                    timeout(WRITE_TIMEOUT, output.send(message))
+                    timeout(write_timeout, output.send(message))
                         .await
                         .map_err(|_| {
                             io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out")

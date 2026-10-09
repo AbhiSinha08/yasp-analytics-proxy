@@ -17,10 +17,11 @@ import time
 import uuid
 
 BINARY = str(Path(sys.argv[1]).resolve())
-ADDRESS = ("127.0.0.1", 6432)
 ROOT = Path(__file__).resolve().parents[1]
 INPUT = json.loads(sys.stdin.read())
 CONFIG, GATEWAY = INPUT["config"], INPUT["gateway"]
+listen_host, listen_port = CONFIG.get("gateway", {}).get("listen", "127.0.0.1:6432").rsplit(":", 1)
+ADDRESS = (listen_host.strip("[]"), int(listen_port))
 TARGET_NAME, TARGET = next(iter(CONFIG["targets"].items()))
 LOGIN_NAME, LOGIN = next(iter(TARGET["logins"].items()))
 MAINTENANCE_TARGET = TARGET.copy()
@@ -327,11 +328,6 @@ def backend_recovery_checks(schema):
         time.sleep(0.03)
     health()
 
-    result = psql("SELECT pg_sleep(61)", "SELECT 1", timeout=75)
-    assert "57014" in result.stderr and result.stdout.strip() == "1", result
-    health()
-
-
 def pool_checks():
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as clients:
         running = [clients.submit(psql, "SELECT pg_sleep(12)") for _ in range(8)]
@@ -411,7 +407,7 @@ def wire_checks():
 def session_checks(process):
     held = []
     try:
-        for _ in range(32):
+        for _ in range(CONFIG["gateway"]["max_sessions"]):
             stream = socket.create_connection(ADDRESS, timeout=3)
             held.append(stream)
             stream.sendall(struct.pack("!II", 8, 80877103))
@@ -432,9 +428,10 @@ def session_checks(process):
         started = time.monotonic()
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=13)
-        assert process.returncode == 0 and 9.5 <= time.monotonic() - started < 13
+        drain_seconds = CONFIG["gateway"]["shutdown_timeout_ms"] / 1000
+        assert process.returncode == 0 and drain_seconds - 0.1 <= time.monotonic() - started < drain_seconds + 3
         closed(idle)
-        with socket.socket() as probe:
+        with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as probe:
             assert probe.connect_ex(ADDRESS) != 0, "listener remains open after shutdown"
     finally:
         for stream in held:
@@ -484,6 +481,29 @@ def startup_checks(directory):
         (variant(lambda config: config["targets"].update({TARGET_NAME + "_extra": TARGET})), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME]["logins"].update({LOGIN_NAME + "_extra": LOGIN})), secret_file),
         (variant(lambda config: config.update(source={"password": "SECRET_MARKER"})), secret_file),
+        (variant(lambda config: config["gateway"].update(protocol="SECRET_MARKER")), secret_file),
+        (variant(lambda config: config["gateway"].update(listen="0.0.0.0:6432")), secret_file),
+        (variant(lambda config: config["gateway"].update(listen="127.0.0.1:0")), secret_file),
+        (variant(lambda config: config["gateway"].update(max_sessions=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_message_bytes=7)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_message_bytes=2147483648)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_sql_bytes=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(write_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(write_timeout_ms=2147483648)), secret_file),
+        (variant(lambda config: config["gateway"].update(write_timeout_ms=4294967296)), secret_file),
+        (variant(lambda config: config["gateway"].update(query_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(query_timeout_ms=2147483648)), secret_file),
+        (variant(lambda config: config["gateway"].update(read_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(read_timeout_ms=4294967296)), secret_file),
+        (variant(lambda config: config["gateway"].update(startup_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(startup_timeout_ms=4294967296)), secret_file),
+        (variant(lambda config: config["gateway"].update(shutdown_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(shutdown_timeout_ms=4294967296)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_sessions="SECRET_MARKER")), secret_file),
+        (variant(lambda config: config["gateway"].update(tls={"mode": "require"})), secret_file),
+        (variant(lambda config: config["gateway"].update(max_prepared_statements_per_session=1)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_portals_per_session=1)), secret_file),
+        (config_text[:-1] + ', "gateway": ' + json.dumps(CONFIG["gateway"]) + '}', secret_file),
         (config_text[:-1] + ', "version": 1}', secret_file),
         (duplicate_targets, secret_file),
         (duplicate_logins, secret_file),
@@ -531,9 +551,117 @@ def custom_config_checks(directory):
         assert process.returncode == 0
 
 
+def gateway_settings_checks(directory):
+    global ADDRESS
+    original_address = ADDRESS
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        ADDRESS = available.getsockname()
+    custom = json.loads(json.dumps(CONFIG))
+    # Protocol and TLS are omitted to exercise their local development defaults.
+    custom["gateway"] = {"listen": f"{ADDRESS[0]}:{ADDRESS[1]}", "max_sessions": 2,
+                         "max_message_bytes": 4096, "max_sql_bytes": 256,
+                         "query_timeout_ms": 1000, "read_timeout_ms": 100,
+                         "startup_timeout_ms": 500, "shutdown_timeout_ms": 200,
+                         "write_timeout_ms": 100}
+    custom_path = Path(directory) / "gateway-settings.yml"
+    custom_path.write_text(json.dumps(custom))
+    try:
+        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+            wait_ready(process)
+            with socket.socket(socket.AF_INET6 if ":" in original_address[0] else socket.AF_INET) as previous:
+                assert previous.connect_ex(original_address) != 0, "gateway also bound the previous port"
+            result = psql("SELECT pg_sleep(0.4), 1", timeout=3)
+            assert result.returncode == 0 and result.stdout.strip() == "|1", result
+            result = psql("SELECT current_setting('statement_timeout')::interval = interval '1 second'")
+            assert result.returncode == 0 and result.stdout.strip() == "t", result
+            result = psql("SELECT pg_sleep(3)", "SELECT 1", timeout=6)
+            assert "57014" in result.stderr and result.stdout.strip() == "1", result
+            # An authenticated idle frontend is closed by the message-read deadline.
+            with authenticated_socket() as idle:
+                time.sleep(0.3)
+                closed(idle)
+            with authenticated_socket() as partial:
+                partial.sendall(b"Q\0\0")
+                time.sleep(0.3)
+                closed(partial)
+            with socket.create_connection(ADDRESS, timeout=3) as partial_startup:
+                partial_startup.sendall(b"\0\0")
+                time.sleep(0.8)
+                closed(partial_startup)
+            health()
+            query = "SELECT 'é'::text"
+            query += " " * (256 - len(query.encode()))
+            assert psql(query).stdout.strip() == "é"
+            result = psql(query + " ", "SELECT 1")
+            assert "54000" in result.stderr and result.stdout.strip() == "1", result
+            result = psql("SELECT repeat('x', 8192)")
+            assert result.returncode == 0 and len(result.stdout.strip()) == 8192, result.stderr
+
+            held = []
+            try:
+                for _ in range(2):
+                    stream = socket.create_connection(ADDRESS, timeout=3)
+                    held.append(stream)
+                    stream.sendall(struct.pack("!II", 8, 80877103))
+                    assert stream.recv(1) == b"N"
+                with socket.create_connection(ADDRESS, timeout=3) as excess:
+                    closed(excess)
+            finally:
+                for stream in held:
+                    stream.close()
+            wait_ready(process)
+            with socket.create_connection(ADDRESS, timeout=3) as oversized:
+                oversized.sendall(struct.pack("!I", 4097))
+                closed(oversized)
+            with authenticated_socket() as oversized:
+                oversized.sendall(b"Q" + struct.pack("!I", 4096))
+                closed(oversized)
+            health()
+
+            with authenticated_socket() as slow:
+                slow.sendall(packet(b"Q", b"SELECT pg_backend_pid()\0"))
+                pid = int(responses(slow)[1][1][6:])
+                slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+                slow.sendall(packet(b"Q", b"SELECT repeat('x', 1048576) FROM generate_series(1, 128)\0"))
+                assert read_exact(slow, 1) == b"T", "streamed query did not start"
+                length = struct.unpack("!I", read_exact(slow, 4))[0]
+                read_exact(slow, length - 4)
+                # Stop reading after metadata. Socket buffers fill, so a streamed
+                # frontend write must hit its own deadline and release the slot.
+                deadline = time.monotonic() + 3
+                while True:
+                    remaining = psql(f"SELECT count(*) FROM pg_stat_activity WHERE pid = {pid}", backend=True)
+                    assert remaining.returncode == 0, remaining.stderr
+                    if remaining.stdout.strip() == "0":
+                        break
+                    assert time.monotonic() < deadline, "slow frontend retained a backend lease"
+                    time.sleep(0.03)
+                probes = []
+                try:
+                    for _ in range(2):
+                        probe = socket.create_connection(ADDRESS, timeout=3)
+                        probes.append(probe)
+                        probe.sendall(struct.pack("!II", 8, 80877103))
+                        assert probe.recv(1) == b"N", "slow frontend retained a session slot"
+                finally:
+                    for probe in probes:
+                        probe.close()
+                slow.shutdown(socket.SHUT_RDWR)
+            wait_ready(process)
+    finally:
+        ADDRESS = original_address
+    if ADDRESS == ("127.0.0.1", 6432):
+        custom.pop("gateway")
+        custom_path.write_text(json.dumps(custom))
+        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+            wait_ready(process)
+            health()
+
+
 def main():
-    with socket.socket() as probe:
-        assert probe.connect_ex(ADDRESS) != 0, "port 6432 is occupied; stop the existing gateway before testing"
+    with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as probe:
+        assert probe.connect_ex(ADDRESS) != 0, "configured gateway port is occupied; stop the existing gateway before testing"
     with tempfile.TemporaryDirectory(prefix="yasp-gateway-") as directory:
         startup_checks(directory)
         assert all(PASSWORDS.values()), "supply the password environment variables named by tests/config.yml"
@@ -556,7 +684,8 @@ def main():
                 session_checks(process)
 
             custom_config_checks(directory)
-        with socket.socket() as reusable:
+            gateway_settings_checks(directory)
+        with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as reusable:
             reusable.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             reusable.bind(ADDRESS)
     print("Gateway checks passed in a disposable database: read/SHOW forwarding, native metadata and values, read-only enforcement, pool cleanup/bounds, timeout/failure recovery, authentication, frontend bounds, shutdown, and YAML/secret validation.")

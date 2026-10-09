@@ -46,7 +46,9 @@ fn gateway_contract() {
         gateway_password.clone(),
         gateway_database.clone(),
     )
-    .expect("test gateway settings must be valid");
+    .expect("test gateway identity must be valid")
+    .with_settings(config.gateway.clone())
+    .expect("test gateway settings must be valid before database provisioning");
     BackendConfig::new(
         target.host.clone(),
         target.port,

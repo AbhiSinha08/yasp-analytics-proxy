@@ -2,7 +2,7 @@
 
 use crate::{
     backend::PostgresBackend,
-    config::GatewayConfig,
+    config::{GatewayConfig, GatewaySettings},
     query::{ParsedQuery, QueryError},
     transport::FrameGuard,
 };
@@ -36,13 +36,8 @@ use tokio::{
 };
 use tokio_util::codec::Framed;
 
-const MAX_SESSIONS: usize = 32;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
-
 /// Serve on a host-owned loopback listener (port 0 is useful in tests).
-/// Stop accepting on shutdown, then close remaining sessions after ten seconds.
+/// Stop accepting on shutdown, then close sessions after the configured drain timeout.
 pub async fn serve(
     listener: TcpListener,
     config: GatewayConfig,
@@ -55,6 +50,7 @@ pub async fn serve(
             "gateway requires a loopback listener",
         ));
     }
+    let settings = Arc::new(config.settings);
     let salt = random_nonce().into_bytes();
     let password = Password::new(
         Some(salt.clone()),
@@ -82,15 +78,16 @@ pub async fn serve(
                     Ok(accepted) => accepted,
                     Err(error) => break Err(error),
                 };
-                if sessions.len() >= MAX_SESSIONS {
+                if sessions.len() >= settings.max_sessions {
                     tracing::warn!(%peer, "gateway session limit reached");
                     continue;
                 }
                 let source = source.clone();
                 let backend = backend.clone();
+                let settings = settings.clone();
                 sessions.spawn(async move {
                     tracing::debug!(%peer, "gateway session opened");
-                    if let Err(error) = connection(socket, source, backend).await {
+                    if let Err(error) = connection(socket, source, backend, settings).await {
                         // Protocol errors can contain client data. Log only their category.
                         tracing::warn!(%peer, kind = ?error.kind(), "gateway connection failed");
                     }
@@ -101,9 +98,10 @@ pub async fn serve(
     };
     drop(listener);
     tracing::info!("gateway shutting down");
-    if timeout(SHUTDOWN_GRACE, async {
-        while sessions.join_next().await.is_some() {}
-    })
+    if timeout(
+        Duration::from_millis(u64::from(settings.shutdown_timeout_ms)),
+        async { while sessions.join_next().await.is_some() {} },
+    )
     .await
     .is_err()
     {
@@ -148,7 +146,9 @@ async fn connection(
     socket: TcpStream,
     source: Arc<Credentials>,
     backend: Arc<PostgresBackend>,
+    settings: Arc<GatewaySettings>,
 ) -> io::Result<()> {
+    let write_timeout = settings.write_timeout();
     socket.set_nodelay(true)?;
     // A second descriptor observes disconnects without consuming protocol bytes.
     let raw_socket = socket.into_std()?;
@@ -156,7 +156,7 @@ async fn connection(
     let socket = TcpStream::from_std(raw_socket)?;
     let client = DefaultClient::<String>::new(socket.peer_addr()?, false);
     let mut socket = Framed::new(
-        FrameGuard::frontend(socket),
+        FrameGuard::frontend(socket, settings.max_message_bytes),
         PgWireMessageServerCodec::new(client),
     );
     let mut parameters = DefaultServerParameterProvider::default();
@@ -170,11 +170,14 @@ async fn connection(
             .with_scram(ScramAuth::new(source.clone())),
     );
     let noop = Arc::new(NoopHandler);
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let deadline = Instant::now() + Duration::from_millis(u64::from(settings.startup_timeout_ms));
+    let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
     loop {
         let message = if authenticated {
-            socket.next().await
+            timeout(read_timeout, socket.next())
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend read timed out"))?
         } else {
             timeout_at(deadline, socket.next())
                 .await
@@ -197,7 +200,7 @@ async fn connection(
         {
             socket.set_state(PgWireConnectionState::QueryInProgress);
             let result = tokio::select! {
-                result = execute_query(&mut socket, &backend, &query.query) => result,
+                result = execute_query(&mut socket, &backend, &query.query, &settings) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
@@ -207,7 +210,7 @@ async fn connection(
                 }
                 info.severity = "ERROR".into();
                 timeout(
-                    WRITE_TIMEOUT,
+                    write_timeout,
                     socket.send(PgWireBackendMessage::ErrorResponse(info.into())),
                 )
                 .await
@@ -218,7 +221,7 @@ async fn connection(
             socket.set_state(PgWireConnectionState::ReadyForQuery);
             socket.set_transaction_status(TransactionStatus::Idle);
             timeout(
-                WRITE_TIMEOUT,
+                write_timeout,
                 socket.send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
                     TransactionStatus::Idle,
                 ))),
@@ -307,9 +310,9 @@ async fn connection(
             }
         };
         let response_deadline = if authenticated {
-            Instant::now() + WRITE_TIMEOUT
+            Instant::now() + write_timeout
         } else {
-            deadline.min(Instant::now() + WRITE_TIMEOUT)
+            deadline.min(Instant::now() + write_timeout)
         };
         let result = timeout_at(response_deadline, operation)
             .await
@@ -361,12 +364,14 @@ async fn execute_query(
     socket: &mut Framed<FrameGuard, PgWireMessageServerCodec<String>>,
     backend: &PostgresBackend,
     sql: &str,
+    settings: &GatewaySettings,
 ) -> PgWireResult<()> {
-    let query = match ParsedQuery::parse(sql) {
+    let write_timeout = settings.write_timeout();
+    let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
         Ok(query) => query,
         Err(QueryError::Empty) => {
             timeout(
-                WRITE_TIMEOUT,
+                write_timeout,
                 socket.send(PgWireBackendMessage::EmptyQueryResponse(
                     EmptyQueryResponse::new(),
                 )),
@@ -387,5 +392,7 @@ async fn execute_query(
             ));
         }
     };
-    backend.execute(&query, socket).await
+    backend
+        .execute(&query, socket, settings.query_timeout(), write_timeout)
+        .await
 }

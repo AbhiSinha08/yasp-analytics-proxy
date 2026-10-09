@@ -35,7 +35,7 @@ are not present in the current dependency graph.
 | thiserror 2 | Added: typed library errors. | Keep recoverable error categories; add no generic error framework to the library. |
 | tracing 0.1 + tracing-subscriber 0.3 | Added: structured events and host log filtering/output. | The library emits events; the host alone installs the subscriber. Redact query data and secrets. |
 | PyO3 0.29 | Added behind the `python` feature: embed CPython for trusted callbacks. | No extension-module, abi3, auto-initialize, or unused conversion features. Initialize explicitly after configuring imports. Rust-only applications do not link Python. |
-| pgwire 0.41 | Added with `server-api-ring` and `client-api-ring`: frontend protocol handling and native PostgreSQL backend client. | Streams text rows and PostgreSQL metadata without converting values through a driver value model. The guarded frontend transport checks the 8 MiB frame bound before payload allocation. |
+| pgwire 0.41 | Added with `server-api-ring` and `client-api-ring`: frontend protocol handling and native PostgreSQL backend client. | Streams text rows and PostgreSQL metadata without converting values through a driver value model. The guarded frontend transport checks the configured frame bound before payload allocation. |
 | dotenvy 0.15 | Added: host-only `.env` parsing. | Iterator API avoids process environment mutation; parse before runtime startup and redact parser diagnostics. |
 | futures 0.3 + async-trait 0.1 + tokio-util 0.7 | Added: asynchronous protocol handlers and framed transport. | Uses pgwire streaming APIs; no separate query framework. |
 | deadpool 0.13 (`managed`, `rt_tokio_1`) | Added: bounded PostgreSQL backend pool. | Uses the managed pool API; `deadpool-postgres` and `tokio-postgres` are not installed. |
@@ -153,24 +153,74 @@ new packages; do not pip-install or reload native modules in a serving interpret
 
 ## Runtime configuration
 
-The host loads the ignored `config/local.yml` by default. Create it with only
-`version: 1` and one target/login from the full planned reference in
-`config/example.yml`. Copy the environment template for local secrets:
+The host loads ignored `config/local.yml` by default. Use `--config PATH` to select
+another YAML file. Create it using the supported fields from the full reference in
+`config/example.yml`, and copy the secret template:
 
 ```sh
 cp .env.example .env
 ```
 
-Use `--config PATH` to select another YAML file. Runtime YAML contains `version: 1`
-and one PostgreSQL target with one login (`engine: postgresql`), under the existing
-`targets.<target>.logins.<login>` structure. Configure the target host, port, actual
+`config/example.yml` also contains planned settings beyond the current loader. Keep
+only supported fields in `config/local.yml`:
+`version: 1`, an optional `gateway` block, and exactly one PostgreSQL target with one
+login under `targets.<target>.logins.<login>`. Unknown fields and sections are
+rejected.
+The loader also rejects duplicate keys, invalid types, and YAML files larger than
+64 KiB.
+
+The optional `gateway` block supports these settings; omitted fields use the defaults
+shown:
+
+```yaml
+gateway:
+  protocol: postgresql
+  listen: "127.0.0.1:6432"
+  max_sessions: 32
+  max_message_bytes: 8388608
+  max_sql_bytes: 1048576
+  query_timeout_ms: 60000
+  read_timeout_ms: 60000
+  write_timeout_ms: 60000
+  startup_timeout_ms: 120000
+  shutdown_timeout_ms: 10000
+  tls:
+    mode: local_development
+```
+
+`protocol` must be `postgresql`, and `listen` must be a loopback socket address with
+a nonzero port. `tls.mode` must be `local_development`, which uses plaintext.
+Real TLS is deferred.
+`max_message_bytes` bounds incoming frontend frames; the backend frame limit remains
+fixed at 8 MiB. `max_sql_bytes` and the frontend write timeout are configurable here.
+Gateway credentials and the frontend database label are not YAML settings.
+Session, SQL, and timeout limits must be positive; incoming frame limits must be
+between 8 and 2,147,483,647 bytes. Query and write timeouts cannot exceed
+2,147,483,647 milliseconds, the PostgreSQL timer limit.
+
+Timeouts under `gateway` describe proxy policy:
+
+| Setting | What it bounds |
+| --- | --- |
+| `query_timeout_ms` | Database query wait budget and PostgreSQL statement timeout. Frontend writes, pool acquisition, and cleanup have separate deadlines. |
+| `read_timeout_ms` | Waiting for the next complete message from an authenticated client, including idle and partial requests. It does not run during query execution. |
+| `write_timeout_ms` | Each response write to a client that is not consuming data quickly enough. |
+| `startup_timeout_ms` | The complete frontend startup and authentication exchange. |
+| `shutdown_timeout_ms` | Draining existing frontend sessions after the listener stops accepting clients. |
+
+The PostgreSQL adapter enforces the gateway query budget when sending a query and
+waiting for database replies. Statement and idle-transaction timers are scoped to
+that query's read-only transaction; the idle timer uses the larger query/write
+budget. Pool connection, acquisition, and cleanup limits are separate operational
+bounds, rather than target database credentials.
+
+The runtime accepts exactly one target and one login and rejects unsupported engines,
+TLS modes, or multiple targets/logins. Configure the target host, port, actual
 PostgreSQL database name, and `tls_mode: disable`; give its login a username and a
-`password_env` key naming the environment variable that holds its password. The
-runtime accepts exactly one target and one login and rejects unsupported engines or
-TLS modes. Additional configured targets or logins are not silently ignored or
-selected; per-query routing is not implemented.
-The loader rejects unknown fields, duplicate keys, invalid types, and YAML files
-larger than 64 KiB.
+`password_env` key naming the environment variable that holds its password. Additional
+configured targets or logins are not silently ignored or selected; per-query routing
+is not implemented. Prepared-statement and portal limit fields in the full reference
+are planned settings and are not runtime options in this milestone.
 
 Gateway credentials are supplied only through `YASP_GATEWAY_USERNAME`,
 `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` in the process environment or
@@ -181,14 +231,19 @@ take precedence over `.env`; the file is optional when all required variables
 are already supplied. Target connection settings come from YAML.
 
 The listener and backend must use loopback addresses. The listener defaults to
-`127.0.0.1:6432`; TLS is not available in this milestone. The same existing target
-and login structure is used by `tests/config.yml`.
+`127.0.0.1:6432` and can be changed in the optional gateway block. TLS is not
+available in this milestone. The same target/login structure and optional gateway
+settings are used by `tests/config.yml`.
 
-The current limits are: 32 frontend sessions, 8 MiB per frontend or backend frame
+The default limits are: 32 frontend sessions, 8 MiB per frontend or backend frame
 including its header, 1 MiB SQL text, 4,096 significant SQL tokens, and a parser
 recursion limit of 64; eight backend pool connections; 10 seconds each for backend
 connect/acquire/cleanup; and 60 seconds each for backend query waits and frontend
-writes. Startup is limited to 120 seconds and shutdown to 10 seconds. Runtime sets
+writes. The gateway settings for session count, incoming frontend frame size, SQL
+size, listener, and query/read/write/startup/shutdown timeouts can be overridden in
+the optional YAML block. Authenticated frontend message reads default to 60 seconds,
+startup to 120 seconds, and shutdown to 10 seconds. The backend frame limit and pool
+connect/acquire/cleanup limits remain fixed. Runtime sets
 UTF8 client encoding, `DateStyle = ISO, MDY`, UTC timezone, `IntervalStyle = postgres`,
 and the default `bytea_output = hex`. Each query runs in a read-only transaction.
 

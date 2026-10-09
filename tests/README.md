@@ -8,7 +8,8 @@ unchanged; intended behavior changes can change contract expectations.
 
 The gateway integration harness reads `tests/config.yml` by default. The test YAML
 uses `version: 1` and the existing `targets.<target>.logins.<login>` layout, with one
-PostgreSQL target and one login; it has no `gateway` YAML section. Set
+PostgreSQL target and one login. It may also contain the supported optional `gateway`
+block; gateway credentials remain environment-only. Set
 `YASP_TEST_CONFIG` only to override the config file path. The test target password is
 resolved from `YASP_TEST_TARGET_PASSWORD`. Frontend username, password, and database
 label come from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and
@@ -34,10 +35,16 @@ To use a different test configuration file:
 YASP_TEST_CONFIG=/path/to/test-config.yml cargo test --locked --all-targets
 ```
 
+The optional gateway block can set PostgreSQL protocol, a loopback listener, frontend
+session/frame/SQL limits, query/read/startup/shutdown/write timeouts, and
+`tls.mode: local_development` (plaintext). Omitted values use defaults; backend frame
+size stays fixed at 8 MiB. Prepared-statement and portal limits from the full
+reference are not supported runtime settings.
+
 The test scope exercises simple-query forwarding for supported SELECT/read-only
 WITH queries, subqueries, joins, aggregates, unions, catalog queries, and SHOW
 variable/ALL requests. It checks raw PostgreSQL metadata and text-row forwarding,
-query/frame bounds, and backend cleanup. SQL inspection is limited to 1 MiB, 4,096
+query/frame bounds, and backend cleanup. SQL inspection defaults to 1 MiB, with 4,096
 significant tokens, and parser recursion limit 64. Unicode escaped identifiers
 (`U&"..."`) are unsupported. `set_config` is allowed only with the constant
 setting-name argument `application_name`; its value may be an expression. Calls

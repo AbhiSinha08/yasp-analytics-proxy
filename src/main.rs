@@ -45,7 +45,8 @@ fn load_config(path: &Path) -> Result<(GatewayConfig, BackendConfig), Box<dyn st
         required("YASP_GATEWAY_USERNAME", "YASP_GATEWAY_USERNAME")?,
         required("YASP_GATEWAY_PASSWORD", "YASP_GATEWAY_PASSWORD")?,
         required("YASP_GATEWAY_DATABASE", "YASP_GATEWAY_DATABASE")?,
-    )?;
+    )?
+    .with_settings(file.gateway.clone())?;
     let backend = BackendConfig::new(
         target.host.clone(),
         target.port,
@@ -85,7 +86,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     Runtime::new()?.block_on(async {
         let backend = Arc::new(PostgresBackend::new(backend_config)?);
-        let listener = TcpListener::bind("127.0.0.1:6432").await?;
+        let listener = TcpListener::bind(config.settings().listen).await?;
         tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
         gateway::serve(listener, config, backend, async {
             #[cfg(unix)]

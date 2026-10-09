@@ -120,9 +120,10 @@ or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AS
 inspection. Results preserve PostgreSQL column metadata and stream text rows without
 driver value conversion.
 
-SQL parsing is bounded to 1 MiB, 4,096 significant tokens, and a parser recursion
-limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported. Frontend and
-backend frames are limited to 8 MiB before payload allocation. Queries run in
+SQL parsing defaults to a 1 MiB byte limit, with 4,096 significant tokens and a parser
+recursion limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported.
+Incoming frontend frames default to 8 MiB; backend frames have a fixed 8 MiB limit,
+both checked before payload allocation. Queries run in
 read-only backend transactions. `set_config` is allowed only when its setting-name
 argument is the constant `application_name`; its value may be an expression. Calls
 targeting serialization or resource settings are rejected. SQL inspection does not
@@ -135,16 +136,24 @@ query, frontend-write, and shutdown operations have separate bounds. Frontend an
 backend access are loopback-only, and TLS is not available in this milestone.
 
 The host loads ignored `config/local.yml` by default; `--config PATH` selects another
-file. Runtime YAML uses `version: 1` and the existing
-`targets.<target>.logins.<login>` structure with exactly one PostgreSQL target and
-one login. Unsupported engines, TLS modes, or multiple targets/logins fail startup.
-Gateway username, password, and frontend database label come only from
-`YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` in the
-process environment or optional `.env`; the target login password is resolved using
-its YAML `password_env` name. The frontend database label is separate from the
-actual database in `targets.<target>.database`. Library consumers can construct
-`BackendConfig` and `GatewayConfig` directly and pass them to `PostgresBackend` and
-`gateway::serve`. Per-query routing is not implemented.
+file. Runtime YAML uses `version: 1`, one PostgreSQL target/login, and an optional
+`gateway` block for the loopback listener, session/frame/SQL bounds,
+query/read/write/startup/shutdown timeouts, and local-development transport mode.
+Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
+adapter for database waits and a transaction-local statement timeout. Frontend read
+limits apply between authenticated client messages, independently of query execution.
+`protocol` accepts only PostgreSQL; listener addresses must be loopback;
+`tls.mode: local_development` is plaintext. Frontend message size is configurable,
+while the backend frame cap remains fixed at 8 MiB. Full `config/example.yml` fields
+for prepared statements, portals, and other planned features are not all accepted by
+the runtime loader. Gateway username, password, and frontend database label come only
+from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`
+in the process environment or optional `.env`; target login password is resolved
+using YAML `password_env`. The frontend database label is separate from the actual
+database in `targets.<target>.database`. Unsupported engines or multiple targets or
+logins fail startup; per-query routing is not implemented. Library consumers can
+construct `BackendConfig` and `GatewayConfig` directly and pass them to
+`PostgresBackend` and `gateway::serve`.
 
 `tests/config.yml` uses the same version/target/login layout, with the target database
 set to `postgres` for test database administration and the target secret named

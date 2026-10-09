@@ -13,13 +13,14 @@
 - [x] **Simple-query PostgreSQL gateway** — Accepts loopback clients, authenticates with SCRAM, streams backend results, and reports PostgreSQL metadata.
   - [x] **Supported read-only SQL subset** — Handles SELECT, read-only WITH, subqueries, joins, aggregates, unions, catalog queries, and SHOW variable/ALL requests.
   - [x] **Parsed-query inspection** — Preserves original SQL and a PostgreSQL AST for read-only inspection and future hook use; hooks are not implemented.
-  - [x] **Bounded protocol and SQL input** — Enforces the 8 MiB frontend/backend frame bound before payload allocation, and bounds SQL to 1 MiB and 4,096 significant tokens, with parser recursion budget 64.
+  - [x] **Bounded protocol and SQL input** — Enforces the configurable frontend frame bound before payload allocation (8 MiB by default), the fixed 8 MiB backend frame bound, and SQL/token/parser recursion limits.
 - [x] **Single PostgreSQL backend and pool** — Uses one configured backend with bounded pool capacity and connect/acquire/query/cleanup timeouts.
   - [x] **Read-only execution and lease cleanup** — Runs each query in a read-only transaction, verifies rollback and DISCARD ALL cleanup, and discards interrupted or unhealthy connections and connections with changed protected text parameters.
-  - [x] **Runtime YAML connection configuration** — Loads one PostgreSQL target/login from `config/local.yml` or `--config PATH`; gateway credentials and the named target password come from the process environment or optional `.env`.
+  - [x] **Runtime YAML connection configuration** — Loads one PostgreSQL target/login and environment-sourced credentials from `config/local.yml` or `--config PATH`.
+  - [x] **Configurable gateway limits and listener** — Supports the optional PostgreSQL-only gateway block for a loopback listener and session/frame/SQL/write limits; omitted values use defaults. `local_development` is plaintext; real TLS is deferred.
+  - [x] **Gateway timeout policy** — Configures query, client-message read, write, startup, and shutdown deadlines. PostgreSQL enforces transaction-local query timers; pool lifecycle limits remain separate.
   - [x] **Isolated database test fixture** — Creates a fresh database from `template0`, loads synthetic test data, and drops the created database during teardown; requires a test login with `CREATEDB`.
-- [x] **Milestone validation** — Rust formatting, all-feature Clippy, and the live PostgreSQL suite pass with the canonical target/login configuration and an isolated test database.
-- [ ] **Client transactions, cancellation, prepared statements, SET, and binary formats** — Deferred beyond the simple-query milestone.
+- [ ] **Prepared statements, portals, client transactions, PostgreSQL cancellation, SET, and binary formats** — Deferred beyond the simple-query milestone; full-reference prepared/portal limit fields are not active runtime settings.
 - [ ] **Metabase integration and trusted routing metadata** — Requires compatibility validation against the supplied Metabase instance.
 - [ ] **Source RBAC and per-query routing** — Requires application policy callbacks and multiple configured role/target connections.
 - [ ] **Result processing, hooks, and Redis cache** — Requires bounded extension invocation and authorized result/cache contracts.

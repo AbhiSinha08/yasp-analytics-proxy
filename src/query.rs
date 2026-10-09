@@ -31,7 +31,7 @@ pub enum QueryError {
     Empty,
     #[error("one SQL statement per query is required")]
     MultipleStatements,
-    #[error("SQL exceeds the 1 MiB limit")]
+    #[error("SQL exceeds the configured byte limit")]
     TooLarge,
     #[error("SQL exceeds the 4096 significant-token limit")]
     TooComplex,
@@ -43,7 +43,11 @@ pub enum QueryError {
 
 impl ParsedQuery {
     pub fn parse(sql: &str) -> Result<Self, QueryError> {
-        if sql.len() > MAX_SQL_BYTES {
+        Self::parse_with_limit(sql, MAX_SQL_BYTES)
+    }
+
+    pub(crate) fn parse_with_limit(sql: &str, max_sql_bytes: usize) -> Result<Self, QueryError> {
+        if sql.len() > max_sql_bytes {
             return Err(QueryError::TooLarge);
         }
         let dialect = PostgreSqlDialect {};
