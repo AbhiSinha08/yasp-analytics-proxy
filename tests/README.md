@@ -6,18 +6,54 @@ Do not duplicate small implementation logic, test trivial helpers independently,
 or assert private structure. Refactoring should preserve tests when behavior is
 unchanged; intended behavior changes can change contract expectations.
 
-The scaffold contains no runtime features or placeholder success tests. Rust
-integration tests live here as components become executable. A function-level test
-is useful when it covers a meaningful contract, boundary case, or known bug that
-is not adequately exercised by component scenarios.
+The gateway integration harness reads `tests/config.yml` by default. The test YAML
+uses `version: 1` and the existing `targets.<target>.logins.<login>` layout, with one
+PostgreSQL target and one login. It may also contain the supported optional `gateway`
+block; gateway credentials remain environment-only. Set
+`YASP_TEST_CONFIG` only to override the config file path. The test target password is
+resolved from `YASP_TEST_TARGET_PASSWORD`. Frontend username, password, and database
+label come from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and
+`YASP_GATEWAY_DATABASE`, supplied by process environment or optional repository-root
+`.env`; process values take precedence.
 
-For the current dependency scaffold, check locked default/`python` builds, formatting,
-Clippy, and the [Python import probe](../docs/development.md#python-embedding).
-Test imports from the application's venv inside the Rust process, including a native
-standard-library module such as _ssl, and verify that a missing module fails. These
-checks do not establish proxy, worker, or service compatibility.
+The target database in the test config is the `postgres` maintenance database used to
+create a fresh `yasp_test_<UUID>` database from `template0`. The test login must have
+`CREATEDB`; it can be a non-superuser. The harness loads the SQL fixture into the
+new database and drops only that database with `FORCE` during teardown. It does not
+modify PostgreSQL roles or populate a shared development database.
 
-## Phase 1 scenarios
+Run on WSL/Linux with Rust 1.89, Python 3, `psql`/libpq, and a local PostgreSQL
+server. The configured loopback address and `127.0.0.1:6432` must be available.
+
+```sh
+cargo test --locked --all-targets
+```
+
+To use a different test configuration file:
+
+```sh
+YASP_TEST_CONFIG=/path/to/test-config.yml cargo test --locked --all-targets
+```
+
+The optional gateway block can set PostgreSQL protocol, a loopback listener, frontend
+session/frame/SQL limits, query/read/startup/shutdown/write timeouts, and
+`tls.mode: local_development` (plaintext). Omitted values use defaults; backend frame
+size stays fixed at 8 MiB. Prepared-statement and portal limits from the full
+reference are not supported runtime settings.
+
+The test scope exercises simple-query forwarding for supported SELECT/read-only
+WITH queries, subqueries, joins, aggregates, unions, catalog queries, and SHOW
+variable/ALL requests. It checks raw PostgreSQL metadata and text-row forwarding,
+query/frame bounds, and backend cleanup. SQL inspection defaults to 1 MiB, with 4,096
+significant tokens, and parser recursion limit 64. Unicode escaped identifiers
+(`U&"..."`) are unsupported. `set_config` is allowed only with the constant
+setting-name argument `application_name`; its value may be an expression. Calls
+targeting serialization or resource settings are rejected. PostgreSQL-reported
+protected text parameter changes cause the backend connection to be discarded.
+
+The deferred scenarios below describe coverage beyond the current milestone.
+
+## Deferred Phase 1 scenarios
 
 1. **Gateway and execution:** simple/parameterized queries, prepared statements,
    metadata/type fidelity, session/transaction lifecycle, cancellation, errors,

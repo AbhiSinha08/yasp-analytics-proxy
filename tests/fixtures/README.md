@@ -1,25 +1,11 @@
 # Database fixtures
 
-Fixture scripts belong to the component tests that require them. No executable
-fixtures are present in the scaffold.
+The test harness creates a fresh database from PostgreSQL's `template0`, loads the
+SQL fixture into it, and drops that database during teardown. The fixture contains
+test-only synthetic records; it does not require a retained application database.
 
-The PostgreSQL phase needs:
-
-- Dedicated yasp_primary and yasp_secondary databases for target isolation.
-- Least-privileged yasp_restricted and yasp_analyst login roles.
-- Separate owning/migration roles. Runtime logins must not own protected tables,
-  have BYPASSRLS/superuser privileges, or inherit escalation-capable roles.
-- Tables covering NULLs, numeric precision, timestamps/time zones, text, booleans,
-  UUIDs, JSON, binary data, and arrays exercised by client compatibility scenarios.
-- NUMERIC values beyond fixed decimal precision, timestamp/date infinities,
-  duplicate aliases, domains/unknown types, and single rows exceeding byte limits.
-- Grants, row-level security, and restricted views demonstrating different source
-  access for the selected login roles.
-- Metadata/policy cases selecting each role through one BI connection, plus denied
-  mappings and a restricted route for schema discovery.
-- Different target data to expose accidental cross-target cache reuse.
-- Permission/RLS changes after cache fill, attempted role changes, and functions
-  with restricted execution rights to exercise the source-security boundary.
-
-Each later engine supplies equivalent scenarios through its own fixture setup.
-Tests use isolated data and credentials, with documented teardown.
+The configured test login needs `CREATEDB` permission. A non-superuser account is
+sufficient. The harness only drops the database it created for that run and does
+not alter PostgreSQL roles. Its target password is read from
+`YASP_TEST_TARGET_PASSWORD`; frontend credentials come from
+`YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`.

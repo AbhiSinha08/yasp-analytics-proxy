@@ -1,0 +1,25 @@
+version: 1
+gateway:
+  protocol: postgresql
+  listen: "127.0.0.1:6432"
+  max_sessions: 32
+  max_message_bytes: 8388608
+  max_sql_bytes: 1048576
+  query_timeout_ms: 60000
+  read_timeout_ms: 60000
+  startup_timeout_ms: 120000
+  shutdown_timeout_ms: 200
+  write_timeout_ms: 60000
+  tls:
+    mode: local_development
+targets:
+  primary:
+    engine: postgresql
+    host: localhost
+    port: 5432
+    database: postgres
+    tls_mode: disable
+    logins:
+      restricted:
+        username: local
+        password_env: YASP_TEST_TARGET_PASSWORD

@@ -109,6 +109,62 @@ Phase 2 adds the decision-model extension. Support application-defined Rust prov
 without runtime compilation or a dynamic plugin framework. Examples remain outside
 core modules; consuming projects keep their custom Rust code in their own crates.
 
+## Current implementation
+
+The current PostgreSQL milestone serves loopback clients over the simple-query
+protocol and forwards supported read-only queries to one loopback PostgreSQL
+backend through a bounded pool. Supported statements include `SELECT`, read-only
+`WITH`, subqueries, joins, aggregates, unions, catalog queries, and `SHOW` variable
+or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AST;
+`ParsedQuery` retains the original SQL and an immutable statement tree for read-only
+inspection. Results preserve PostgreSQL column metadata and stream text rows without
+driver value conversion.
+
+SQL parsing defaults to a 1 MiB byte limit, with 4,096 significant tokens and a parser
+recursion limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported.
+Incoming frontend frames default to 8 MiB; backend frames have a fixed 8 MiB limit,
+both checked before payload allocation. Queries run in
+read-only backend transactions. `set_config` is allowed only when its setting-name
+argument is the constant `application_name`; its value may be an expression. Calls
+targeting serialization or resource settings are rejected. SQL inspection does not
+analyze custom function bodies, so functions that change engine session settings are
+unsupported. Rollback and `DISCARD ALL` clean up a lease. PostgreSQL reported text
+`ParameterStatus` changes outside the allowed application name, failed cleanup,
+interrupted queries, or unhealthy leases cause the connection to be discarded. The
+PostgreSQL server checks disconnected clients every second. Backend connect, acquire,
+query, frontend-write, and shutdown operations have separate bounds. Frontend and
+backend access are loopback-only, and TLS is not available in this milestone.
+
+The host loads ignored `config/local.yml` by default; `--config PATH` selects another
+file. Runtime YAML uses `version: 1`, one PostgreSQL target/login, and an optional
+`gateway` block for the loopback listener, session/frame/SQL bounds,
+query/read/write/startup/shutdown timeouts, and local-development transport mode.
+Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
+adapter for database waits and a transaction-local statement timeout. Frontend read
+limits apply between authenticated client messages, independently of query execution.
+`protocol` accepts only PostgreSQL; listener addresses must be loopback;
+`tls.mode: local_development` is plaintext. Frontend message size is configurable,
+while the backend frame cap remains fixed at 8 MiB. Full `config/example.yml` fields
+for prepared statements, portals, and other planned features are not all accepted by
+the runtime loader. Gateway username, password, and frontend database label come only
+from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`
+in the process environment or optional `.env`; target login password is resolved
+using YAML `password_env`. The frontend database label is separate from the actual
+database in `targets.<target>.database`. Unsupported engines or multiple targets or
+logins fail startup; per-query routing is not implemented. Library consumers can
+construct `BackendConfig` and `GatewayConfig` directly and pass them to
+`PostgresBackend` and `gateway::serve`.
+
+`tests/config.yml` uses the same version/target/login layout, with the target database
+set to `postgres` for test database administration and the target secret named
+`YASP_TEST_TARGET_PASSWORD`. The harness creates a fresh database from `template0`,
+loads the SQL fixture, runs the proxy against that database, and drops only the
+database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
+The runtime creates no application database or persistent data fixture.
+Client transactions, PostgreSQL cancel requests, prepared statements, `SET`, binary
+results, routing, RBAC callbacks, hooks, caching, TLS, and Metabase integration are
+not implemented. See [development setup](development.md) and [test guidance](../tests/README.md).
+
 ## Phase 0 — Project foundation
 
 **Outcome:** a buildable scaffold, a clear design, and setup instructions.
@@ -117,7 +173,7 @@ core modules; consuming projects keep their custom Rust code in their own crates
   gateway, query processing, backend execution, policy, caching, and hooks.
 - Example configuration and external callback scaffolds documenting intended contracts.
 - Component-level test scenarios and database fixture requirements.
-- The binary prints a scaffold status. It does not serve queries or contact services.
+- The foundation provides module boundaries; Phase 1 adds runtime capabilities.
 - An optional Python embedding example checks linking and imports without starting
   the proxy. No hook execution API is implemented yet.
 

@@ -1,17 +1,14 @@
 # Development setup
 
-## Current repository
-
-The single Cargo package contains foundation dependencies and an optional Python
-embedding check. The binary only prints scaffold status. No listener, configuration
-loader, hook runtime, database adapter, or cache is implemented.
+## Rust toolchain
 
 Use Rust 1.89.0 with rustfmt and Clippy, as pinned in rust-toolchain.toml. The package
-minimum is Rust 1.89; serde-saphyr and the planned pgwire 0.41 adapter require it.
+minimum is Rust 1.89; serde-saphyr and pgwire 0.41 require it.
 A system Cargo/Rust installation does not automatically honor rustup toolchain files.
 Check `rustc --version`; with rustup, install the pinned toolchain:
 
 ```sh
+export PATH="$HOME/.cargo/bin:$PATH"
 rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
 cargo check --locked --all-targets
 cargo fmt --all -- --check
@@ -21,13 +18,15 @@ cargo run --locked
 
 Commit Cargo.lock for the repository host application. Library consumers resolve
 their own dependency graph. Recheck the minimum compiler and features on upgrades.
-The scaffold has no runtime behavior to cover with service integration tests.
+The integration check creates a fresh PostgreSQL database for each run and drops
+that database during teardown. It requires a PostgreSQL login with `CREATEDB`
+permission, Python 3, `psql`/libpq, and a free `127.0.0.1:6432`. See
+[test guidance](../tests/README.md) for setup and fixture behavior.
 
 ## Dependency choices through Phase 2
 
-Versions below describe the selected foundation and candidate release lines reviewed
-for the plan. Cargo.lock pins installed versions. Deferred crates must be resolved
-and checked together when their implementation begins.
+Cargo.lock pins installed versions. Rows marked deferred describe future choices and
+are not present in the current dependency graph.
 
 | Dependency | Status and purpose | Constraints and alternatives |
 | --- | --- | --- |
@@ -36,10 +35,12 @@ and checked together when their implementation begins.
 | thiserror 2 | Added: typed library errors. | Keep recoverable error categories; add no generic error framework to the library. |
 | tracing 0.1 + tracing-subscriber 0.3 | Added: structured events and host log filtering/output. | The library emits events; the host alone installs the subscriber. Redact query data and secrets. |
 | PyO3 0.29 | Added behind the `python` feature: embed CPython for trusted callbacks. | No extension-module, abi3, auto-initialize, or unused conversion features. Initialize explicitly after configuring imports. Rust-only applications do not link Python. |
-| pgwire 0.41 | Deferred to frontend implementation. | Suitable server APIs for SCRAM, simple/extended queries, TLS, and cancellation. Use explicit server/TLS features and only needed type codecs. Its newer client API targets proxies but is documented as incomplete; evaluate it only if the driver compatibility spike fails. |
-| tokio-postgres 0.7 + deadpool-postgres 0.14 | Deferred to PostgreSQL adapter. | Good initial driver/pool pair for a supported SQL/type subset. Stream rows, prove conversion and frame bounds, and implement session cleanup. SQLx/ORMs do not remove proxy protocol work and add no benefit here. |
+| pgwire 0.41 | Added with `server-api-ring` and `client-api-ring`: frontend protocol handling and native PostgreSQL backend client. | Streams text rows and PostgreSQL metadata without converting values through a driver value model. The guarded frontend transport checks the configured frame bound before payload allocation. |
+| dotenvy 0.15 | Added: host-only `.env` parsing. | Iterator API avoids process environment mutation; parse before runtime startup and redact parser diagnostics. |
+| futures 0.3 + async-trait 0.1 + tokio-util 0.7 | Added: asynchronous protocol handlers and framed transport. | Uses pgwire streaming APIs; no separate query framework. |
+| deadpool 0.13 (`managed`, `rt_tokio_1`) | Added: bounded PostgreSQL backend pool. | Uses the managed pool API; `deadpool-postgres` and `tokio-postgres` are not installed. |
 | rustls + tokio-rustls; compatible PostgreSQL TLS connector | Deferred to transport implementation. | Frontend TLS does not secure backend connections. Validate CA roots and hostnames on both database and Redis transports. Select compatible versions and one crypto provider with pgwire; avoid duplicate providers. |
-| sqlparser 0.63 | Deferred to query inspection. | Multi-dialect syntax inspection fits the product. Keep recursion protection and input bounds; no semantic/authorization guarantees. pg_query is an alternative if exact PostgreSQL grammar is needed, at the cost of a native libpg_query build and PostgreSQL-only parsing. |
+| sqlparser 0.63 (`visitor`) | Added: bounded PostgreSQL-dialect syntax inspection. | The parser recursion budget is 64; this is not a limit of 64 SQL nesting levels. Parsing is syntax inspection, not semantic authorization. |
 | redis 1.7 | Deferred until cache eligibility and serialization exist. | Async Tokio support and a multiplexed connection are sufficient initially; no separate pool/cluster/cache framework. Enable verified TLS when deployed off-host. |
 | Axum 0.8 | Deferred to Phase 2 management APIs. | Fits Tokio. Add authentication/authorization and request limits before exposing configuration or execution. No UI tooling is needed now. |
 | Warehouse/model SDKs | Deferred to the chosen Phase 2 adapters. | Choose an actual backend/model first. Reuse an existing HTTP client when sufficient; keep vendor SDKs in the consuming application's model adapter or the database adapter. |
@@ -65,15 +66,15 @@ Metabase, not necessarily in the YASP workspace. No duplicate instance is needed
 
 ## Metabase connectivity
 
-The Metabase version, endpoint, networking details, and representative query metadata
-are pending. Record them before the connectivity acceptance milestone. Metabase's
+Record the Metabase version, endpoint, networking details, and representative query
+metadata when configuring the integration. Metabase's
 web endpoint and the database/proxy endpoint are different connections; container
 localhost normally means the container itself. Select a reachable proxy address,
 with TLS and authentication for non-local access.
 
 Use one BI database connection with shared proxy credentials. Supply the integration's
-context provider, RBAC data, and role selector. The illustrative `group` field in the
-configuration is not a built-in Metabase metadata guarantee. Native SQL authors must
+context provider, RBAC data, and role selector. Application-defined metadata such as
+`group` is not a built-in Metabase metadata guarantee. Native SQL authors must
 not be able to select a stronger role by forging a comment. If trustworthy routing
 context is unavailable, the prototype cannot claim viewer isolation.
 
@@ -128,7 +129,7 @@ cargo run --locked --features python --example python_environment -- passthrough
 
 Replace `passthrough` with an installed package's import name to check that dependency
 inside the Rust process. The probe only initializes Python and imports a module; it
-does not validate the future worker runtime. A missing module exits with an error.
+does not validate worker execution. A missing module exits with an error.
 On platforms with separate purelib and platlib paths, provide both. Do not set
 PYTHONHOME to the venv: it usually lacks the base standard library.
 
@@ -150,37 +151,125 @@ it finishes. Conflicting package versions, untrusted code, or hard kill deadline
 require process workers with separate environments. Replace processes to activate
 new packages; do not pip-install or reload native modules in a serving interpreter.
 
-## Configuration and library integration
+## Runtime configuration
 
-config/example.yml documents the proposed Phase 1 settings and is not loaded yet.
-config/local.yml is ignored for local settings. Fields ending in _env reference
-environment secrets: the BI service has one SCRAM verifier and each source login
-has its own password. Credentials stay in the connection layer.
+The host loads ignored `config/local.yml` by default. Use `--config PATH` to select
+another YAML file. Create it using the supported fields from the full reference in
+`config/example.yml`, and copy the secret template:
 
-The host registers application-specific context derivation, role selection, and
-optional Rust/Python hooks before constructing the engine. Keep custom Rust code in
-the consuming application or an organization crate. Configuration names registered
-callbacks; the library owns validation, limits, connections, and invocation. No
-engine construction API exists in the scaffold.
+```sh
+cp .env.example .env
+```
 
-Reject duplicate/unknown settings and inconsistent limits during future startup
-validation. Resolve secrets only for enabled features. Keep result caching disabled
-unless both data staleness and authorization staleness are accepted; a cache hit
-cannot recheck source grants. Non-local use requires frontend certificates and
-verified backend TLS. Service tests must use dedicated databases and a unique Redis
-namespace, with fixture provisioning/teardown owned by those tests.
+`config/example.yml` also contains planned settings beyond the current loader. Keep
+only supported fields in `config/local.yml`:
+`version: 1`, an optional `gateway` block, and exactly one PostgreSQL target with one
+login under `targets.<target>.logins.<login>`. Unknown fields and sections are
+rejected.
+The loader also rejects duplicate keys, invalid types, and YAML files larger than
+64 KiB.
 
-The proposed `cache.allow_authorization_staleness` must be explicitly true to enable
-the Phase 1 TTL cache. Keeping it false requires `cache.enabled: false`; it does not
-enable a source reauthorization mechanism. Coordinated invalidation is later work.
+The optional `gateway` block supports these settings; omitted fields use the defaults
+shown:
+
+```yaml
+gateway:
+  protocol: postgresql
+  listen: "127.0.0.1:6432"
+  max_sessions: 32
+  max_message_bytes: 8388608
+  max_sql_bytes: 1048576
+  query_timeout_ms: 60000
+  read_timeout_ms: 60000
+  write_timeout_ms: 60000
+  startup_timeout_ms: 120000
+  shutdown_timeout_ms: 10000
+  tls:
+    mode: local_development
+```
+
+`protocol` must be `postgresql`, and `listen` must be a loopback socket address with
+a nonzero port. `tls.mode` must be `local_development`, which uses plaintext.
+Real TLS is deferred.
+`max_message_bytes` bounds incoming frontend frames; the backend frame limit remains
+fixed at 8 MiB. `max_sql_bytes` and the frontend write timeout are configurable here.
+Gateway credentials and the frontend database label are not YAML settings.
+Session, SQL, and timeout limits must be positive; incoming frame limits must be
+between 8 and 2,147,483,647 bytes. Query and write timeouts cannot exceed
+2,147,483,647 milliseconds, the PostgreSQL timer limit.
+
+Timeouts under `gateway` describe proxy policy:
+
+| Setting | What it bounds |
+| --- | --- |
+| `query_timeout_ms` | Database query wait budget and PostgreSQL statement timeout. Frontend writes, pool acquisition, and cleanup have separate deadlines. |
+| `read_timeout_ms` | Waiting for the next complete message from an authenticated client, including idle and partial requests. It does not run during query execution. |
+| `write_timeout_ms` | Each response write to a client that is not consuming data quickly enough. |
+| `startup_timeout_ms` | The complete frontend startup and authentication exchange. |
+| `shutdown_timeout_ms` | Draining existing frontend sessions after the listener stops accepting clients. |
+
+The PostgreSQL adapter enforces the gateway query budget when sending a query and
+waiting for database replies. Statement and idle-transaction timers are scoped to
+that query's read-only transaction; the idle timer uses the larger query/write
+budget. Pool connection, acquisition, and cleanup limits are separate operational
+bounds, rather than target database credentials.
+
+The runtime accepts exactly one target and one login and rejects unsupported engines,
+TLS modes, or multiple targets/logins. Configure the target host, port, actual
+PostgreSQL database name, and `tls_mode: disable`; give its login a username and a
+`password_env` key naming the environment variable that holds its password. Additional
+configured targets or logins are not silently ignored or selected; per-query routing
+is not implemented. Prepared-statement and portal limit fields in the full reference
+are planned settings and are not runtime options in this milestone.
+
+Gateway credentials are supplied only through `YASP_GATEWAY_USERNAME`,
+`YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` in the process environment or
+optional `.env`. The gateway database value is the frontend connection label;
+`targets.<target>.database` selects the actual PostgreSQL database. The target login
+password comes from its named `password_env` variable. Process environment values
+take precedence over `.env`; the file is optional when all required variables
+are already supplied. Target connection settings come from YAML.
+
+The listener and backend must use loopback addresses. The listener defaults to
+`127.0.0.1:6432` and can be changed in the optional gateway block. TLS is not
+available in this milestone. The same target/login structure and optional gateway
+settings are used by `tests/config.yml`.
+
+The default limits are: 32 frontend sessions, 8 MiB per frontend or backend frame
+including its header, 1 MiB SQL text, 4,096 significant SQL tokens, and a parser
+recursion limit of 64; eight backend pool connections; 10 seconds each for backend
+connect/acquire/cleanup; and 60 seconds each for backend query waits and frontend
+writes. The gateway settings for session count, incoming frontend frame size, SQL
+size, listener, and query/read/write/startup/shutdown timeouts can be overridden in
+the optional YAML block. Authenticated frontend message reads default to 60 seconds,
+startup to 120 seconds, and shutdown to 10 seconds. The backend frame limit and pool
+connect/acquire/cleanup limits remain fixed. Runtime sets
+UTF8 client encoding, `DateStyle = ISO, MDY`, UTC timezone, `IntervalStyle = postgres`,
+and the default `bytea_output = hex`. Each query runs in a read-only transaction.
+
+For tests, `tests/config.yml` uses the same version/target/login structure and sets
+the target database to the `postgres` maintenance database. The harness creates a
+fresh test database from `template0`, runs the proxy against it, and drops only that
+database during teardown. The test target password uses the named variable
+`YASP_TEST_TARGET_PASSWORD`.
+
+`BackendConfig::new(host, port, username, password, database)` configures the
+PostgreSQL backend, and `PostgresBackend::new(config)` constructs its pool.
+`gateway::serve(listener, config, Arc<PostgresBackend>, shutdown)` serves through
+a host-owned loopback listener. `ParsedQuery` retains the original SQL text and an
+immutable PostgreSQL statement tree. `statement()` provides borrowed read-only
+statement access for future Rust hooks. Python hooks are not implemented. The gateway
+supports simple-query requests; client transactions, prepared statements, PostgreSQL
+cancel requests, `SET`, binary results, and Unicode escaped identifiers (`U&"..."`)
+are unsupported. A frontend disconnect aborts that connection's active backend work.
+
+See [the project plan](PLAN.md) for phase boundaries and planned components.
 
 ## References
 
 - [pgwire APIs and feature flags](https://docs.rs/pgwire/0.41.1/pgwire/)
 - [serde-saphyr configuration parsing](https://docs.rs/serde-saphyr/1.3.0/serde_saphyr/)
 - [serde_yaml maintenance status](https://github.com/dtolnay/serde-yaml)
-- [tokio-postgres](https://docs.rs/tokio-postgres/latest/tokio_postgres/)
-- [Deadpool recycling](https://docs.rs/deadpool-postgres/latest/deadpool_postgres/enum.RecyclingMethod.html)
 - [sqlparser capabilities](https://github.com/apache/datafusion-sqlparser-rs)
 - [pg_query alternative](https://docs.rs/pg_query/latest/pg_query/)
 - [Axum](https://docs.rs/axum/latest/axum/)

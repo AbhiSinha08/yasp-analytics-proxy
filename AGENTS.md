@@ -8,7 +8,7 @@ Phase 1 uses one BI connection configuration and a custom callback that selects
 source-role credentials per query using BI metadata and a local RBAC policy.
 Source roles enforce database access. Phase 2 adds decision-model dynamic masking.
 Read docs/PLAN.md for phase boundaries and component responsibilities. Runtime
-implementation starts only when requested; the current repository is a scaffold.
+implementation proceeds through requested subtasks
 
 ## Design and implementation
 
@@ -63,6 +63,17 @@ implementation starts only when requested; the current repository is a scaffold.
 - Use the smallest useful test suite. Do not add placeholder success tests or
   tests whose main effect is redundant maintenance during intended code changes.
 
+## Logging
+
+- Use the shared `logger` module to initialize host logging; library consumers
+  can call `yasp::logger::init()` before starting the gateway, or pass a value
+  resolved from their own configuration source to `init_with_level()`.
+- Logs go to stdout. `LOG_LEVEL` accepts `DEBUG`, `INFO`, `WARN`, or `ERROR`
+  and defaults to `INFO`; each level includes messages at higher severities.
+- Query logs at DEBUG include a query ID, client ID, backend target, and SQL.
+  Log client connection changes at INFO and failures at ERROR; avoid logging
+  secrets or raw protocol errors that may contain client data.
+
 ## Documentation and comments
 
 - Write for humans using plain language, clear component descriptions, and
@@ -74,3 +85,5 @@ implementation starts only when requested; the current repository is a scaffold.
   or maintained documentation. Use commits and review descriptions for history.
 - Keep comments focused on purpose, contracts, constraints, and non-obvious
   reasons. Keep README, plan, setup instructions, and examples consistent.
+- Add Sub items to the file docs/deliverables.md if a plan implements multiple
+  features or som sub-item is left delegated to the next session.
