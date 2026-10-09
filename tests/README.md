@@ -6,12 +6,26 @@ Do not duplicate small implementation logic, test trivial helpers independently,
 or assert private structure. Refactoring should preserve tests when behavior is
 unchanged; intended behavior changes can change contract expectations.
 
-The scaffold contains no runtime features or placeholder success tests. Rust
-integration tests live here as components become executable. A function-level test
-is useful when it covers a meaningful contract, boundary case, or known bug that
-is not adequately exercised by component scenarios.
+The gateway check starts the compiled Rust host and invokes real
+`psql`. It covers SCRAM authentication failures, `.env` failures and overrides,
+simple-query errors and recovery, exact INT4 metadata and completion, empty queries,
+extended-protocol recovery at Sync, concurrent clients, malformed/oversized frames,
+SSL/GSS refusal, the 32-session cap, disconnect cleanup, and graceful shutdown.
 
-For the current dependency scaffold, check locked default/`python` builds, formatting,
+Run `cargo test --locked --all-targets` on WSL/Linux with Python 3 and
+`psql`/libpq installed. Port `127.0.0.1:6432` must be free. The test uses temporary
+environment files and shuts down its processes. To run the same check directly:
+
+```sh
+cargo build --locked
+python3 tests/gateway_check.py target/debug/yasp
+```
+
+Tested client: `psql`/libpq 18.6. The Python check uses only the standard library
+and the installed libpq for authentication; the gateway's Rust-only build does
+not embed Python.
+
+Also check locked default/`python` builds, formatting,
 Clippy, and the [Python import probe](../docs/development.md#python-embedding).
 Test imports from the application's venv inside the Rust process, including a native
 standard-library module such as _ssl, and verify that a missing module fails. These

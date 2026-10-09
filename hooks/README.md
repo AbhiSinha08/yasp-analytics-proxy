@@ -108,4 +108,4 @@ transmission; suppress raw sample logs.
 
 Model failure, uncertain classification, schema-preserving masks, and cache versioning
 are part of the component's contract; see docs/PLAN.md. No model SDK or inference
-implementation is present in the scaffold.
+implementation is present in the repository.

@@ -109,6 +109,23 @@ Phase 2 adds the decision-model extension. Support application-defined Rust prov
 without runtime compilation or a dynamic plugin framework. Examples remain outside
 core modules; consuming projects keep their custom Rust code in their own crates.
 
+## Current implementation
+
+Phase 1's first gateway milestone serves loopback PostgreSQL connections with
+SCRAM-SHA-256 authentication and simple-query `SELECT 1`. The host loads dummy
+credentials from `.env` at startup. Other SQL and prepared execution are explicitly
+unsupported; errors recover through PostgreSQL's simple-query or Sync boundary.
+Frontend frames and sessions are bounded, and the host supports graceful shutdown.
+See [development setup](development.md) for limits, startup, and psql validation.
+Backend execution, role selection, hooks, caching, full YAML configuration, and
+Metabase discovery/questions are planned capabilities, not implemented features.
+The binary does not load `config/example.yml` or the example Python callbacks.
+The selector example raises an error when called.
+
+Validation uses `psql`/libpq 18.6 on WSL Linux. The gateway integration check
+covers authentication failures, environment overrides, query and Sync recovery,
+wire metadata, frame/session limits, and shutdown.
+
 ## Phase 0 — Project foundation
 
 **Outcome:** a buildable scaffold, a clear design, and setup instructions.
@@ -117,7 +134,7 @@ core modules; consuming projects keep their custom Rust code in their own crates
   gateway, query processing, backend execution, policy, caching, and hooks.
 - Example configuration and external callback scaffolds documenting intended contracts.
 - Component-level test scenarios and database fixture requirements.
-- The binary prints a scaffold status. It does not serve queries or contact services.
+- The foundation provides module boundaries; Phase 1 adds runtime capabilities.
 - An optional Python embedding example checks linking and imports without starting
   the proxy. No hook execution API is implemented yet.
 

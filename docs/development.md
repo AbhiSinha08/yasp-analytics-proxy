@@ -1,27 +1,28 @@
 # Development setup
 
-## Current repository
-
-The single Cargo package contains foundation dependencies and an optional Python
-embedding check. The binary only prints scaffold status. No listener, configuration
-loader, hook runtime, database adapter, or cache is implemented.
+## Rust toolchain
 
 Use Rust 1.89.0 with rustfmt and Clippy, as pinned in rust-toolchain.toml. The package
-minimum is Rust 1.89; serde-saphyr and the planned pgwire 0.41 adapter require it.
+minimum is Rust 1.89; serde-saphyr and pgwire 0.41 require it.
 A system Cargo/Rust installation does not automatically honor rustup toolchain files.
 Check `rustc --version`; with rustup, install the pinned toolchain:
 
 ```sh
+export PATH="$HOME/.cargo/bin:$PATH"
 rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
 cargo check --locked --all-targets
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
+cp .env.example .env # Initial local setup only.
 cargo run --locked
 ```
 
 Commit Cargo.lock for the repository host application. Library consumers resolve
 their own dependency graph. Recheck the minimum compiler and features on upgrades.
-The scaffold has no runtime behavior to cover with service integration tests.
+The gateway integration test starts the compiled binary and invokes `psql`, then
+uses installed libpq for authentication before testing unusual wire sequences.
+It requires a free `127.0.0.1:6432`, Python 3, and `psql`/libpq; no backend service
+or Python embedding feature is needed. Run `cargo test --locked --all-targets`.
 
 ## Dependency choices through Phase 2
 
@@ -36,7 +37,9 @@ and checked together when their implementation begins.
 | thiserror 2 | Added: typed library errors. | Keep recoverable error categories; add no generic error framework to the library. |
 | tracing 0.1 + tracing-subscriber 0.3 | Added: structured events and host log filtering/output. | The library emits events; the host alone installs the subscriber. Redact query data and secrets. |
 | PyO3 0.29 | Added behind the `python` feature: embed CPython for trusted callbacks. | No extension-module, abi3, auto-initialize, or unused conversion features. Initialize explicitly after configuring imports. Rust-only applications do not link Python. |
-| pgwire 0.41 | Deferred to frontend implementation. | Suitable server APIs for SCRAM, simple/extended queries, TLS, and cancellation. Use explicit server/TLS features and only needed type codecs. Its newer client API targets proxies but is documented as incomplete; evaluate it only if the driver compatibility spike fails. |
+| pgwire 0.41 | Added: frontend authentication and simple-query health response. | Defaults disabled; `server-api-ring` enabled. Extended execution, TLS certificates, and backend cancellation remain future work. A guarded transport checks the 8 MiB frame bound before the decoder receives its payload. |
+| dotenvy 0.15 | Added: host-only `.env` parsing. | Iterator API avoids process environment mutation; parse before runtime startup and redact parser diagnostics. |
+| futures 0.3 + async-trait 0.1 + tokio-util 0.7 | Added: pgwire handlers, single-row stream, and framed transport. | Reuse the protocol library's APIs and Tokio codec; no separate query framework. |
 | tokio-postgres 0.7 + deadpool-postgres 0.14 | Deferred to PostgreSQL adapter. | Good initial driver/pool pair for a supported SQL/type subset. Stream rows, prove conversion and frame bounds, and implement session cleanup. SQLx/ORMs do not remove proxy protocol work and add no benefit here. |
 | rustls + tokio-rustls; compatible PostgreSQL TLS connector | Deferred to transport implementation. | Frontend TLS does not secure backend connections. Validate CA roots and hostnames on both database and Redis transports. Select compatible versions and one crypto provider with pgwire; avoid duplicate providers. |
 | sqlparser 0.63 | Deferred to query inspection. | Multi-dialect syntax inspection fits the product. Keep recursion protection and input bounds; no semantic/authorization guarantees. pg_query is an alternative if exact PostgreSQL grammar is needed, at the cost of a native libpg_query build and PostgreSQL-only parsing. |
@@ -65,8 +68,8 @@ Metabase, not necessarily in the YASP workspace. No duplicate instance is needed
 
 ## Metabase connectivity
 
-The Metabase version, endpoint, networking details, and representative query metadata
-are pending. Record them before the connectivity acceptance milestone. Metabase's
+Record the Metabase version, endpoint, networking details, and representative query
+metadata when configuring the integration. Metabase's
 web endpoint and the database/proxy endpoint are different connections; container
 localhost normally means the container itself. Select a reachable proxy address,
 with TLS and authentication for non-local access.
@@ -128,7 +131,7 @@ cargo run --locked --features python --example python_environment -- passthrough
 
 Replace `passthrough` with an installed package's import name to check that dependency
 inside the Rust process. The probe only initializes Python and imports a module; it
-does not validate the future worker runtime. A missing module exits with an error.
+does not validate worker execution. A missing module exits with an error.
 On platforms with separate purelib and platlib paths, provide both. Do not set
 PYTHONHOME to the venv: it usually lacks the base standard library.
 
@@ -152,27 +155,26 @@ new packages; do not pip-install or reload native modules in a serving interpret
 
 ## Configuration and library integration
 
-config/example.yml documents the proposed Phase 1 settings and is not loaded yet.
-config/local.yml is ignored for local settings. Fields ending in _env reference
-environment secrets: the BI service has one SCRAM verifier and each source login
-has its own password. Credentials stay in the connection layer.
+The host requires `.env` in its working directory with
+`YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`.
+Copy `.env.example` for dummy credentials. Existing process variables override
+file values; the first duplicate file entry wins. Missing/malformed files and
+missing/empty credentials fail before binding. Values are validated without
+logging them. Startup rejects replication and `options` settings.
 
-The host registers application-specific context derivation, role selection, and
-optional Rust/Python hooks before constructing the engine. Keep custom Rust code in
-the consuming application or an organization crate. Configuration names registered
-callbacks; the library owns validation, limits, connections, and invocation. No
-engine construction API exists in the scaffold.
+The listener is `127.0.0.1:6432`. SSL/GSS negotiation is declined; use
+`sslmode=disable` or `prefer`. The library also rejects non-loopback listeners.
+Limits are fixed: 32 sessions including unauthenticated sockets,
+8 MiB per frontend frame including its header, 60 seconds for startup,
+30 seconds per response operation, and five seconds for shutdown drain.
 
-Reject duplicate/unknown settings and inconsistent limits during future startup
-validation. Resolve secrets only for enabled features. Keep result caching disabled
-unless both data staleness and authorization staleness are accepted; a cache hit
-cannot recheck source grants. Non-local use requires frontend certificates and
-verified backend TLS. Service tests must use dedicated databases and a unique Redis
-namespace, with fixture provisioning/teardown owned by those tests.
+`GatewayConfig::new(username, password, database)` validates host-supplied
+credentials. `gateway::serve(listener, config, shutdown)` accepts a host-owned
+loopback listener and a shutdown future. Library consumers supply configuration
+directly without an environment file.
 
-The proposed `cache.allow_authorization_staleness` must be explicitly true to enable
-the Phase 1 TTL cache. Keeping it false requires `cache.enabled: false`; it does not
-enable a source reauthorization mechanism. Coordinated invalidation is later work.
+See [the project plan](PLAN.md) for component responsibilities, configuration
+design, extension contracts, and implementation status.
 
 ## References
 

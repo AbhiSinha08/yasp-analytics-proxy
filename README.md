@@ -27,6 +27,6 @@ cargo run --locked
 
 - [Phases and components](docs/PLAN.md)
 - [Development setup](docs/development.md)
-- [Example configuration](config/example.yml)
+- [Configuration Design](config/example.yml)
 - [Python callback design](hooks/README.md)
 - [Test strategy](tests/README.md)

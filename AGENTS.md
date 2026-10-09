@@ -8,7 +8,7 @@ Phase 1 uses one BI connection configuration and a custom callback that selects
 source-role credentials per query using BI metadata and a local RBAC policy.
 Source roles enforce database access. Phase 2 adds decision-model dynamic masking.
 Read docs/PLAN.md for phase boundaries and component responsibilities. Runtime
-implementation starts only when requested; the current repository is a scaffold.
+implementation proceeds through requested subtasks
 
 ## Design and implementation
 
