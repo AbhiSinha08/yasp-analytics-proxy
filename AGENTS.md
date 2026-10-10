@@ -49,6 +49,14 @@ implementation proceeds through requested subtasks
   from derived custom context. Extensions cannot bypass configured bounds.
 - Shared components consume extension decisions through contracts; they must not
   import organization code or interpret hard-coded organization metadata formats.
+- Reuse `hooks::bind_select_backend` for compiled routing callbacks and
+  `hooks::builtin::select_backend::passthrough` for a configured default route.
+  The host maps names at startup. Add reusable repository hooks under
+  `hooks/builtin`; application-specific callbacks belong in the consuming host.
+  Add lifecycle contracts only when their milestone is active.
+- Routed PostgreSQL hosts construct `backend::PostgresBackends` with configured
+  pairs and pool limits, then use `gateway::serve_routed`. The fixed-backend
+  `gateway::serve` shares the same session and cleanup handling.
 
 ## Tests
 
@@ -70,7 +78,8 @@ implementation proceeds through requested subtasks
   resolved from their own configuration source to `init_with_level()`.
 - Logs go to stdout. `LOG_LEVEL` accepts `DEBUG`, `INFO`, `WARN`, or `ERROR`
   and defaults to `INFO`; each level includes messages at higher severities.
-- Query logs at DEBUG include a query ID, client ID, backend target, and SQL.
+- Query logs at DEBUG include a query ID, client ID, backend target, database user,
+  and SQL.
   Log client connection changes at INFO and failures at ERROR; avoid logging
   secrets or raw protocol errors that may contain client data.
 

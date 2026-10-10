@@ -1,74 +1,74 @@
-# Python callback design
+# Backend selection callbacks
 
-These signatures and scaffold examples describe the planned API; the Rust binary
-does not load them yet. Python files are trusted local code loaded at startup.
-Rust callbacks and context providers are supplied by the consuming application
-and compiled with it. The engine defines their contracts and invokes registrations;
-organization implementations remain outside core modules. Applications register
-context derivation before role selection so their own metadata formats can be used.
+The library exposes a typed Rust selector contract. The consuming application
+registers its callback and any application-owned policy data when constructing the
+engine. It can use `yasp::hooks::bind_select_backend` to bind a callback that reads
+application state. Organization-specific metadata parsing and RBAC interpretation
+remain in the host application.
 
-## Source-role selection
+The binder accepts `Fn(&SelectionRequest, &State) -> Result<BackendSelection,
+SelectionError>` and owns the registered state through an `Arc`.
 
-One BI connection configuration uses shared proxy credentials. For each executable query,
-select_backend receives extracted metadata and the RBAC policy from YAML, and
-chooses a configured backend target/login. PostgreSQL roles enforce the actual
-source privileges. The callback does not open a connection or receive passwords.
+Both state and function must be `Send + Sync + 'static`. Rust checks callback
+arguments, return types, and these bounds when the host registers the function.
 
-| Callback | Input | Return contract |
-| --- | --- | --- |
-| select_backend(context, policy) | Effective query context and configured RBAC data | Required mapping with target, backend_login, and cache_scope. |
-| before_query(context, sql, parameters) | Query context, SQL, typed binds | None for no rewrite, or a mapping containing sql. |
-| after_result(context, columns, rows) | Selected-role context, column metadata, bounded typed batch | A batch preserving schema and row order. |
-| on_connection(context, event) | Connection context and lifecycle event | None. |
+```rust
+use yasp::hooks::{bind_select_backend, BackendSelection, SelectionRequest};
 
-The selector's cache_scope identifies additional metadata/policy inputs affecting
-results; None disables caching. Target and selected role are always separate cache
-key inputs. Selection runs before cache lookup on both hits and misses. Decisions
-outside configured permitted target/login pairs fail, as do missing/unmapped required
-metadata or callback errors. Recognized discovery/setup operations have an explicit
-restricted selection in policy. Query context identifies these operations; scripts
-must not infer a privileged role merely from a client-supplied tag.
+let default_pair = BackendSelection {
+    target: "primary".into(),
+    backend_login: "reader".into(),
+};
+let selector = bind_select_backend(
+    default_pair,
+    |_request: &SelectionRequest<'_>, pair| Ok((*pair).clone()),
+);
+```
 
-Rust acquires an idle matching connection or creates one within pool limits. Queries
-in the same frontend session may select different roles in autocommit mode. An
-explicit transaction pins its selected role/connection; conflicting decisions fail.
-BEGIN can defer acquisition until the first operation requiring a backend. COMMIT,
-ROLLBACK, and cancellation use the current session's pinned state without needing
-new routing metadata. Parse/Describe may invoke selection before parameter values
-exist; policies requiring unavailable inputs must reject that preparation. Each
-execution is reauthorized, and advertised parameter/result types must stay compatible.
+`SelectionRequest<'a>` carries the client and query IDs and borrows the authenticated
+frontend user and parsed query. It does not expose backend credentials. A callback returns a
+`BackendSelection` containing a configured target and backend login, or a
+`SelectionError` (`Denied` or `Failed`). The router validates the returned pair and
+owns connection acquisition and credential use. Denial is returned as SQLSTATE
+`42501`; selector failure is returned as `XX000`. An invalid configured-pair decision
+is denied with `42501`.
 
-Phase 1 assumes role-selection metadata is supplied by the trusted BI integration.
-Frontend service authentication does not independently authenticate each viewer.
-The example `group` field needs an application-defined metadata integration; it is
-not assumed to be present in stock Metabase comments. Preserve metadata provenance
-across SQL rewrites. Disable BI caching until its security scope has been verified.
-The selector example is an unimplemented stub and raises an error when called.
+The built-in `builtin.select_backend.passthrough` selector selects the configured
+default target/login pair. If only one pair is configured, it is inferred; with
+multiple pairs, set `routing.default_backend`. The repository host currently registers
+this built-in selector. A consuming host can map `hooks.select_backend` to its own
+compiled Rust callback. Add and test reusable repository selectors under
+`hooks/builtin/`; application-specific callbacks belong in the consuming application.
 
-## Context and execution
+The callback runs synchronously on the query path. Keep it fast and nonblocking; the
+engine does not provide a dedicated callback thread or a hard callback timeout.
 
-Query context contains BI service identity, SQL/dialect, typed parameters, extracted
-metadata, session/transaction state, and configuration/policy/hook generations.
-Target and backend role are populated after selection. Connection context contains
-only fields available at its lifecycle stage. SQL rewrites precede selection and
-preserve bind positions/types. Driver objects and the Rust AST remain internal.
+Each configured pair has its own pool; physical connections open on demand.
+Per-pool capacity defaults to 8 connections and total capacity defaults to 16.
+Configuration is rejected if all
+configured per-pool capacities cannot fit within the total bound.
 
-Lifecycle events are created, checkout, return, and closed. Pool return does not
-shut down compute. Cleanup events cannot promise exactly-once delivery after a crash.
+The PostgreSQL source login remains the authority for database access. Selector
+callbacks choose only among pairs configured by the host; they do not open connections
+or receive passwords.
 
-Use bounded workers outside Tokio's async workers. Python 3.12 CPU callbacks share
-the GIL, and a timeout does not terminate executing embedded code. Required callback
-errors fail the query. Nondeterministic work disables caching unless its inputs can
-be represented in the cache context.
+For the current simple-query protocol, selection runs for each executable request,
+then the router executes and cleans up the selected backend lease. Transactions,
+prepared statements, and cancellation are later gateway capabilities.
 
-Backend adapters preserve exact values and column metadata at the hook boundary.
-Batch byte limits cover oversized individual rows. The passthrough example uses
-only the standard library and performs no result transformation.
-NULL maps to None; numbers must not lose precision through float or JSON conversion.
-Define each supported native type's conversion explicitly, including timestamps,
-arrays, and special values. Unsupported typed transformations fail explicitly.
-Validate output types, row counts, and byte limits after each callback. Preserving
-row order is also a contract of the trusted implementation.
+The current selector request does not claim to authenticate each BI viewer or derive
+organization-specific metadata. Applications must supply trusted context and policy
+data appropriate to their deployment. BI client compatibility, RBAC policy, and
+per-viewer identity remain separate integration work.
+
+## Later hook capabilities
+
+Query rewrites, result processing, lifecycle hooks, and Python callback execution are
+not part of this routing milestone. Their contracts will be documented when those
+capabilities are implemented. Metadata extraction, load balancing, and caching are
+also later milestones. Rust selectors can inspect the borrowed PostgreSQL
+statement tree through `request.query.statement()`; driver objects remain internal.
+Python receives no Rust AST and will need its own bounded context projection.
 
 ## Python dependencies
 

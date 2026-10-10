@@ -7,11 +7,14 @@ or assert private structure. Refactoring should preserve tests when behavior is
 unchanged; intended behavior changes can change contract expectations.
 
 The gateway integration harness reads `tests/config.yml` by default. The test YAML
-uses `version: 1` and the existing `targets.<target>.logins.<login>` layout, with one
-PostgreSQL target and one login. It may also contain the supported optional `gateway`
-block; gateway credentials remain environment-only. Set
+uses `version: 1`, configured PostgreSQL targets/logins, and the supported optional
+`gateway`, `routing`, `hooks`, and `backend` blocks; gateway credentials remain
+environment-only. Set
 `YASP_TEST_CONFIG` only to override the config file path. The test target password is
-resolved from `YASP_TEST_TARGET_PASSWORD`. Frontend username, password, and database
+resolved from `YASP_TEST_TARGET_PASSWORD`. The YAML also configures the existing
+`local2` login under `primary.logins.secondary`; its password comes from
+`YASP_TEST_SECOND_PASSWORD`. Usernames are configured directly in YAML.
+Frontend username, password, and database
 label come from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and
 `YASP_GATEWAY_DATABASE`, supplied by process environment or optional repository-root
 `.env`; process values take precedence.
@@ -27,6 +30,7 @@ server. The configured loopback address and `127.0.0.1:6432` must be available.
 
 ```sh
 cargo test --locked --all-targets
+cargo test --locked --doc
 ```
 
 To use a different test configuration file:
@@ -51,6 +55,17 @@ setting-name argument `application_name`; its value may be an expression. Calls
 targeting serialization or resource settings are rejected. PostgreSQL-reported
 protected text parameter changes cause the backend connection to be discarded.
 
+`tests/routing.rs` covers two configured database routes, selector denial/failure and
+invalid-pair results, recovery on the same frontend session, per-route pool reuse,
+separate login pools on one target, and isolation during pool exhaustion.
+Configuration tests cover per-pool and total pool bounds. The routing integration
+test requires `logins.secondary` and its configured password environment variable.
+It verifies granted fixture reads, owner-only table denial, database connection
+restrictions, and recovery on the same frontend session. Missing credentials fail
+the test rather than skipping source-login isolation.
+The second login must be pre-provisioned and restricted; the fixture grants access
+only to disposable test data and never creates or alters PostgreSQL roles.
+
 The deferred scenarios below describe coverage beyond the current milestone.
 
 ## Deferred Phase 1 scenarios
@@ -62,16 +77,16 @@ The deferred scenarios below describe coverage beyond the current milestone.
    failed-transaction/Sync recovery, and explicit rejection of multi-statement queries.
    Cover read-only enforcement against writable CTEs, SELECT INTO, function side
    effects, and attempted SET ROLE/SESSION AUTHORIZATION/read-write changes.
-2. **Metabase:** the supplied Docker instance connects, discovers authorized
-   metadata, runs questions/dashboards, and cancels a query. Record its version
-   and endpoint in the integration environment.
-   Capture actual query metadata; test native/query-builder/prepared/background
-   queries with BI caching disabled. Verify shared discovery and field samples are
-   safe for BI consumers and that untrusted comments cannot elevate selection.
-3. **Source RBAC and routing:** queries on one frontend session with different BI
-   metadata select different source-role credentials and receive the data permitted
-   by those roles. Exercise idle reuse, bounded creation/acquisition, denied missing
-   or unmapped metadata, invalid target/login decisions, and restricted discovery.
+2. **BI client compatibility:** the intended client connects, discovers authorized
+   metadata, runs supported query forms, and cancels a query. Record its version and
+   endpoint in the integration environment. Capture actual context availability and
+   test discovery, native/query-builder/prepared/background work with BI caching
+   disabled. Verify shared discovery is safe for that deployment and untrusted request
+   data cannot elevate selection.
+3. **Source RBAC and extended routing:** queries on one frontend session with different
+   trusted BI metadata select different source-role credentials and receive the data
+   permitted by those roles. Exercise idle reuse, denied missing or unmapped metadata,
+   and restricted discovery.
    Transaction role changes fail; prepared statements and supported session settings
    work across role pools without leaking state. Optional masks preserve types.
    A bare BEGIN followed by a routed query pins that route; metadata-free rollback
