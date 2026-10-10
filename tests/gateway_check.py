@@ -22,10 +22,16 @@ INPUT = json.loads(sys.stdin.read())
 CONFIG, GATEWAY = INPUT["config"], INPUT["gateway"]
 listen_host, listen_port = CONFIG.get("gateway", {}).get("listen", "127.0.0.1:6432").rsplit(":", 1)
 ADDRESS = (listen_host.strip("[]"), int(listen_port))
-TARGET_NAME, TARGET = next(iter(CONFIG["targets"].items()))
-LOGIN_NAME, LOGIN = next(iter(TARGET["logins"].items()))
+default_route = INPUT["default_backend"]
+CONFIG["routing"]["default_backend"] = default_route
+TARGET_NAME = default_route["target"]
+TARGET = CONFIG["targets"][TARGET_NAME]
+LOGIN_NAME = default_route["backend_login"]
+LOGIN = TARGET["logins"][LOGIN_NAME]
 MAINTENANCE_TARGET = TARGET.copy()
-PASSWORDS = {settings["password_env"]: os.environ.get(settings["password_env"]) for settings in [GATEWAY, LOGIN]}
+PASSWORDS = {settings["password_env"]: os.environ.get(settings["password_env"])
+             for settings in [GATEWAY, *(login for target in CONFIG["targets"].values()
+                                       for login in target["logins"].values())]}
 FRONTEND_ENV = {"YASP_GATEWAY_USERNAME": GATEWAY["username"], "YASP_GATEWAY_DATABASE": GATEWAY["database"]}
 ENV = {k: v for k, v in os.environ.items() if not k.startswith(("PG", "YASP_")) and k not in PASSWORDS}
 ENV["RUST_LOG"] = "info"
@@ -459,9 +465,10 @@ def startup_checks(directory):
     target_text = json.dumps(TARGET)
     target_key, login_key = json.dumps(TARGET_NAME), json.dumps(LOGIN_NAME)
     login_text = json.dumps(LOGIN)
-    duplicate_targets = '{"version": 1, "targets": {' + target_key + ': ' + target_text + ', ' + target_key + ': ' + target_text + '}}'
+    config_prefix = '{"version": 1, "routing": ' + json.dumps(CONFIG["routing"]) + ', "targets": {'
+    duplicate_targets = config_prefix + target_key + ': ' + target_text + ', ' + target_key + ': ' + target_text + '}}'
     duplicate_login = target_text.replace(json.dumps(TARGET["logins"]), '{' + login_key + ': ' + login_text + ', ' + login_key + ': ' + login_text + '}')
-    duplicate_logins = '{"version": 1, "targets": {' + target_key + ': ' + duplicate_login + '}}'
+    duplicate_logins = config_prefix + target_key + ': ' + duplicate_login + '}}'
     secret_values = {**FRONTEND_ENV, **{key: "SECRET_MARKER_" + str(index) for index, key in enumerate(PASSWORDS)}}
     secret_file = env_file(secret_values)
     for content, secrets in [
@@ -478,8 +485,11 @@ def startup_checks(directory):
         (variant(lambda config: config["targets"][TARGET_NAME].update(tls_mode="require")), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME].update(logins={})), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME]["logins"][LOGIN_NAME].pop("password_env")), secret_file),
-        (variant(lambda config: config["targets"].update({TARGET_NAME + "_extra": TARGET})), secret_file),
-        (variant(lambda config: config["targets"][TARGET_NAME]["logins"].update({LOGIN_NAME + "_extra": LOGIN})), secret_file),
+        (variant(lambda config: config["routing"].update(default_backend={"target": "missing", "backend_login": LOGIN_NAME})), secret_file),
+        (variant(lambda config: config["backend"].update(max_connections_per_pool=0)), secret_file),
+        (variant(lambda config: config["backend"].update(max_connections_total=0)), secret_file),
+        (variant(lambda config: config["backend"].update(max_connections_total=1)), secret_file),
+        (variant(lambda config: config.update(hooks={"select_backend": "unknown.hook"})), secret_file),
         (variant(lambda config: config.update(source={"password": "SECRET_MARKER"})), secret_file),
         (variant(lambda config: config["gateway"].update(protocol="SECRET_MARKER")), secret_file),
         (variant(lambda config: config["gateway"].update(listen="0.0.0.0:6432")), secret_file),
@@ -529,6 +539,7 @@ def custom_config_checks(directory):
     custom = json.loads(json.dumps(CONFIG))
     custom_target = custom["targets"].pop(TARGET_NAME)
     custom["targets"][TARGET_NAME + "_custom"] = custom_target
+    custom["routing"]["default_backend"]["target"] = TARGET_NAME + "_custom"
     env_values = {**FRONTEND_ENV, **PASSWORDS}
     custom_login = custom_target["logins"][LOGIN_NAME]
     if custom_login["password_env"] == "YASP_GATEWAY_PASSWORD":
@@ -549,6 +560,37 @@ def custom_config_checks(directory):
         process.send_signal(signal.SIGINT)
         process.wait(timeout=13)
         assert process.returncode == 0
+
+
+def routing_config_checks(directory):
+    global ADDRESS
+    previous_address = ADDRESS
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        ADDRESS = available.getsockname()
+    custom = json.loads(json.dumps(CONFIG))
+    second_target_name = TARGET_NAME + "_explicit_default"
+    custom["targets"][second_target_name] = json.loads(json.dumps(TARGET))
+    custom["backend"]["max_connections_total"] = (
+        sum(len(target["logins"]) for target in custom["targets"].values())
+        * custom["backend"]["max_connections_per_pool"]
+    )
+    # Only the explicit default is reachable; a first-entry fallback must fail.
+    custom["targets"][TARGET_NAME]["database"] = "yasp_absent_" + uuid.uuid4().hex
+    custom["routing"]["default_backend"] = {
+        "target": second_target_name,
+        "backend_login": LOGIN_NAME,
+    }
+    custom["gateway"]["listen"] = f"{ADDRESS[0]}:{ADDRESS[1]}"
+    custom_path = Path(directory) / "routing-default.yml"
+    custom_path.write_text(json.dumps(custom))
+    try:
+        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+            wait_ready(process)
+            assert psql("SELECT current_database()").stdout.strip() == TARGET["database"]
+
+    finally:
+        ADDRESS = previous_address
 
 
 def gateway_settings_checks(directory):
@@ -684,6 +726,7 @@ def main():
                 session_checks(process)
 
             custom_config_checks(directory)
+            routing_config_checks(directory)
             gateway_settings_checks(directory)
         with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as reusable:
             reusable.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

@@ -10,9 +10,11 @@ fn gateway_contract() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/config.yml")));
     let config = FileConfig::read(&path).expect("test configuration must be valid YAML");
-    let (target, login) = config
-        .connection()
-        .expect("test configuration must select one supported target and login");
+    let route = config
+        .default_backend()
+        .expect("test default must be configured");
+    let target = &config.targets[&route.target];
+    let login = &target.logins[&route.backend_login];
     let file_values: HashMap<String, String> =
         match dotenvy::from_path_iter(concat!(env!("CARGO_MANIFEST_DIR"), "/.env")) {
             Ok(values) => {
@@ -57,7 +59,8 @@ fn gateway_contract() {
         target.database.clone(),
     )
     .expect("test target settings must be valid before database provisioning");
-    let mut process = std::process::Command::new("python3")
+    let mut command = std::process::Command::new("python3");
+    command
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/gateway_check.py"
@@ -67,7 +70,13 @@ fn gateway_contract() {
         .env("YASP_GATEWAY_DATABASE", &gateway_database)
         .env("YASP_GATEWAY_PASSWORD", gateway_password)
         .env(&login.password_env, target_password)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::piped());
+    for target in config.targets.values() {
+        for login in target.logins.values() {
+            command.env(&login.password_env, value(&login.password_env));
+        }
+    }
+    let mut process = command
         .spawn()
         .expect("gateway checks require Python 3 and psql/libpq");
     process
@@ -77,6 +86,7 @@ fn gateway_contract() {
         .write_all(
             serde_json::json!({
                 "config": config,
+                "default_backend": route,
                 "gateway": {
                     "username": gateway_username,
                     "database": gateway_database,

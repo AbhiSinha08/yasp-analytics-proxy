@@ -35,7 +35,7 @@ introduce only the contracts needed by the current phase.
 | Client gateway | Authenticate connections, manage client sessions, decode requests, and encode responses. | Client protocol adapters own wire messages, authentication exchanges, and response encoding. PostgreSQL is first. |
 | Query processing | Preserve SQL, expose raw query metadata to the registered context provider, inspect statements, and validate rewrites. | Dialect-specific parsing and validation stay separate from routing and policy. |
 | Backend execution | Acquire a connection, execute a request, stream results, cancel work, and clean up sessions. | Database adapters own drivers, pools, bind conversion, native types, session behavior, and error mapping. |
-| Routing | Invoke the selection callback using query metadata and configured RBAC policy, then acquire the selected target/role connection. | Depends on target identity and supported capabilities, not driver-specific objects. |
+| Routing | Invoke the registered selector with available request context, validate its configured target/login pair, and acquire that connection. | Application-specific context and policy remain outside the engine. |
 | Policy | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks. | Database access controls remain authoritative; masking preserves the result schema. |
 | Extensions | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks. | Contracts belong to the library; organization implementations live outside core engine code. |
 | Result cache | Decide eligibility and store complete authorized results for a limited time. | Keys include backend/dialect identity, security context, parameters, and relevant session state. |
@@ -112,8 +112,8 @@ core modules; consuming projects keep their custom Rust code in their own crates
 ## Current implementation
 
 The current PostgreSQL milestone serves loopback clients over the simple-query
-protocol and forwards supported read-only queries to one loopback PostgreSQL
-backend through a bounded pool. Supported statements include `SELECT`, read-only
+protocol and forwards supported read-only queries through bounded pools for
+configured PostgreSQL target/login pairs. Supported statements include `SELECT`, read-only
 `WITH`, subqueries, joins, aggregates, unions, catalog queries, and `SHOW` variable
 or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AST;
 `ParsedQuery` retains the original SQL and an immutable statement tree for read-only
@@ -132,28 +132,30 @@ unsupported. Rollback and `DISCARD ALL` clean up a lease. PostgreSQL reported te
 `ParameterStatus` changes outside the allowed application name, failed cleanup,
 interrupted queries, or unhealthy leases cause the connection to be discarded. The
 PostgreSQL server checks disconnected clients every second. Backend connect, acquire,
-query, frontend-write, and shutdown operations have separate bounds. Frontend and
-backend access are loopback-only, and TLS is not available in this milestone.
+query, frontend-write, and shutdown operations have separate bounds. The frontend
+listener is loopback-only. Configured PostgreSQL targets use `tls_mode: disable`;
+TLS is not available in this milestone.
 
 The host loads ignored `config/local.yml` by default; `--config PATH` selects another
-file. Runtime YAML uses `version: 1`, one PostgreSQL target/login, and an optional
-`gateway` block for the loopback listener, session/frame/SQL bounds,
-query/read/write/startup/shutdown timeouts, and local-development transport mode.
+file. Runtime YAML uses `version: 1`, configured PostgreSQL targets/logins, optional
+`routing.default_backend` and `hooks.select_backend` entries, an optional `backend`
+capacity block, and an optional `gateway` block for the loopback listener,
+session/frame/SQL bounds, query/read/write/startup/shutdown timeouts, and
+local-development transport mode.
 Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
 adapter for database waits and a transaction-local statement timeout. Frontend read
 limits apply between authenticated client messages, independently of query execution.
 `protocol` accepts only PostgreSQL; listener addresses must be loopback;
 `tls.mode: local_development` is plaintext. Frontend message size is configurable,
-while the backend frame cap remains fixed at 8 MiB. Full `config/example.yml` fields
-for prepared statements, portals, and other planned features are not all accepted by
-the runtime loader. Gateway username, password, and frontend database label come only
+while the backend frame cap remains fixed at 8 MiB. Prepared-statement and portal
+settings are not accepted by the runtime loader. Gateway username, password, and frontend database label come only
 from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`
 in the process environment or optional `.env`; target login password is resolved
 using YAML `password_env`. The frontend database label is separate from the actual
-database in `targets.<target>.database`. Unsupported engines or multiple targets or
-logins fail startup; per-query routing is not implemented. Library consumers can
-construct `BackendConfig` and `GatewayConfig` directly and pass them to
-`PostgresBackend` and `gateway::serve`.
+database in `targets.<target>.database`. Unsupported engines fail startup. Library
+consumers can construct `BackendConfig` and `GatewayConfig` directly. Use
+`gateway::serve` for one backend or `gateway::serve_routed` with `PostgresBackends`
+and a registered selector for routed requests.
 
 `tests/config.yml` uses the same version/target/login layout, with the target database
 set to `postgres` for test database administration and the target secret named
@@ -162,8 +164,10 @@ loads the SQL fixture, runs the proxy against that database, and drops only the
 database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
 The runtime creates no application database or persistent data fixture.
 Client transactions, PostgreSQL cancel requests, prepared statements, `SET`, binary
-results, routing, RBAC callbacks, hooks, caching, TLS, and Metabase integration are
-not implemented. See [development setup](development.md) and [test guidance](../tests/README.md).
+results, organization-specific RBAC interpretation, query/result hooks, caching, TLS,
+and BI-client integration are not implemented. The routing milestone below implements
+selection contracts, configured target/login validation, and bounded PostgreSQL pools.
+See [development setup](development.md) and [test guidance](../tests/README.md).
 
 ## Phase 0 — Project foundation
 
@@ -175,7 +179,7 @@ not implemented. See [development setup](development.md) and [test guidance](../
 - Component-level test scenarios and database fixture requirements.
 - The foundation provides module boundaries; Phase 1 adds runtime capabilities.
 - An optional Python embedding example checks linking and imports without starting
-  the proxy. No hook execution API is implemented yet.
+  the proxy. Python callback execution is not implemented.
 
 Keep modules flat until their implementations justify directories. Split workspace
 crates only when a component needs independent reuse or release.
@@ -203,6 +207,11 @@ yasp/
 ├── hooks/
 │   ├── README.md
 │   ├── requirements.txt
+│   ├── builtin/
+│   │   ├── mod.rs
+│   │   └── select_backend/
+│   │       ├── mod.rs
+│   │       └── passthrough.rs
 │   └── examples/
 │       ├── role_selector.py
 │       └── passthrough.py
@@ -216,10 +225,10 @@ yasp/
 
 ## Phase 1 — PostgreSQL analytics proxy
 
-**Outcome:** a read-only PostgreSQL proxy with one BI connection configuration.
-For each query, a custom callback uses extracted metadata and a configured RBAC
-policy to choose the backend target and role-specific credentials. PostgreSQL roles
-enforce source access; configured result callbacks can additionally mask outputs.
+**Goal:** a read-only PostgreSQL proxy with one BI connection configuration.
+The current milestone selects configured target/login pairs with a typed Rust
+callback. Trusted BI context integration and application-owned RBAC policy remain
+planned work. PostgreSQL logins enforce source access; result callbacks are planned.
 
 One BI connection configuration may use multiple transport sessions through the BI
 client's pool. Neither a separate BI connection nor separate proxy credentials are
@@ -227,45 +236,35 @@ required for each source role.
 
 ```text
 BI query through shared proxy credentials
-  -> extract metadata and apply any SQL rewrite
-  -> select_backend callback with metadata and configured RBAC policy
-  -> validate target/role decision and transaction compatibility
-  -> role- and policy-scoped cache lookup
-  -> acquire a matching backend connection on a miss, or create one within limits
-  -> execute under the selected source role
-  -> configured result processing and cache storage
+  -> inspect the parsed query and build a borrowed selection request
+  -> registered selector returns a configured target/login pair
+  -> validate the pair and acquire from its pool, opening connections on demand
+  -> execute the read-only simple query under the selected source login
   -> return result through the same BI connection
 ```
 
-Deliver a local protocol/type compatibility spike first, then governance, hooks,
-and routing. Validate Metabase with caching disabled before adding the result cache.
+Deliver a local protocol/type compatibility spike first, then backend selection and
+bounded routing. Validate the intended BI client with caching disabled before adding
+the result cache.
 An incomplete connectivity spike is not an access-controlled deployment.
 
-### BI integration contract
+### BI context and client validation (planned)
 
-The example `group` field is application-defined; a stock Metabase connection is
-not assumed to emit it. Record the actual Metabase version, available SQL comments
-and metadata, and how the consuming application's context provider obtains routing
-attributes. Exercise native SQL, query-builder questions, prepared execution,
-background jobs, and missing metadata. Preserve request provenance separately from
-rewritten SQL; a rewrite must not manufacture authenticated identity.
-
-Disable Metabase result caching for initial validation. A BI cache hit never reaches
-YASP, so enable it only after proving equivalent identity/policy isolation. Shared
-schema metadata, field-value scans, saved questions, downloads, and subscriptions
-also require appropriate BI permissions. The discovery role must expose only data
-safe for that shared metadata surface. Per-query routing alone does not implement
-per-viewer BI permissions. Native Metabase impersonation is an alternative when
-database role switching alone meets the application's needs; YASP additionally
-targets reusable extensions and cross-engine execution.
+Define how the consuming application obtains trusted routing context from the BI
+client and any application-owned context provider. Validate the actual client version,
+authentication mode, setup/discovery requests, query forms, background work, and
+missing-context behavior before claiming compatibility. Keep authenticated frontend
+identity distinct from derived application context; client-supplied SQL comments do
+not establish identity by themselves. Review BI-side caching and shared metadata
+access against the deployment's own authorization model.
 
 ### Gateway and query processing
 
 - Use Tokio and pgwire for PostgreSQL frontend connections. Support simple queries,
   prepared/parameterized queries, metadata descriptions, and requested result formats.
 - Start with one SQL statement per simple-query message; reject multiple statements
-  explicitly. Extended-query Parse already requires one statement. Test JDBC setup
-  traffic against this restriction before claiming Metabase compatibility.
+  explicitly. Extended-query Parse already requires one statement. Test the intended
+  BI client's JDBC setup traffic against this restriction before claiming compatibility.
 - Preserve transaction status, backend errors and SQLSTATE codes, column metadata,
   and cancellation behavior. Document the tested client/version/feature matrix.
 - Use sqlparser's PostgreSQL dialect for supported inspection. Parsing describes
@@ -277,8 +276,8 @@ targets reusable extensions and cross-engine execution.
   selection. Service authentication authenticates that integration, not each viewer;
   query comments alone do not prove an end-user identity. Verified end-user context
   is a later integration, not a requirement for the configuration/script prototype.
-- Forward authorized catalog queries to PostgreSQL for Metabase schema discovery
-  and field scanning. Schema caching is outside this phase.
+- Forward authorized catalog queries to PostgreSQL for BI schema discovery and field
+  scanning. Schema caching is outside this phase.
 - Support read-only session setup. Reject writes, COPY, replication, and
   temporary-table workflows with explicit errors.
 - Enforce read-only backend transactions as well as least-privileged source logins.
@@ -293,7 +292,7 @@ targets reusable extensions and cross-engine execution.
 pgwire handles the frontend protocol; tokio-postgres is a database client, not a
 transparent wire relay. Before committing to the adapter, demonstrate Parse, Bind,
 Describe, Execute, Close, Flush, Sync, portal suspension/resumption, error recovery,
-and cancellation with psql and the actual Metabase JDBC driver. Serialize execution
+and cancellation with psql and the intended BI client's JDBC driver. Serialize execution
 per frontend session. Preserve the protocol's failed-transaction state and discard
 extended messages after an error until Sync as required by PostgreSQL.
 
@@ -314,12 +313,31 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 
 ### Backend execution and routing
 
-- Start the adapter spike with tokio-postgres and deadpool-postgres, subject to the
-  protocol, value, and allocation checks above.
-- Invoke the required select_backend callback for each executable query using its metadata,
-  configured RBAC policy, and current session/transaction context. Its decision
+The current routing milestone supports configured PostgreSQL target/login pairs and
+an application-registered selector. `SelectionRequest` borrows the authenticated
+frontend user, client and query IDs, and `ParsedQuery`; it contains no credentials.
+`BackendSelection` names a target and backend login, while `SelectionError` distinguishes
+denial from selector failure. The built-in passthrough selector uses the sole configured
+pair automatically and requires `routing.default_backend` when multiple pairs make the
+choice ambiguous. Denials and invalid configured-pair selections map to PostgreSQL
+SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
+total capacity to 16; startup rejects limits whose per-pool capacities cannot fit
+within the total.
+
+The library exposes `yasp::hooks::bind_select_backend` to bind a typed Rust callback
+to application state. Rust extensions compile into the consuming host. The repository's
+`hooks/builtin/select_backend/passthrough.rs` contains its built-in selector. Reusable
+repository hooks live under `hooks/builtin` and are registered by the host. A consuming
+host maps configured names to its own compiled callbacks and loads policy data at startup.
+Selectors choose only among configured pairs; the backend owns credentials and the
+router validates each result. Selection runs synchronously on the query path, so
+callbacks must be fast and nonblocking; the engine has no dedicated callback worker
+or hard selector timeout.
+
+- Invoke the configured selector for each executable query using its request context.
+  Its decision
   names a configured target and backend login profile, never arbitrary credentials.
-- Validate the selected pair against the BI service's configured access bounds.
+- Validate the selected pair against configured targets and logins.
   Acquire an idle matching connection, or open a new one with that profile's
   credentials if the bounded pool has capacity. Pool exhaustion has a bounded wait.
 - Partition pools by target and backend login. Authenticate directly using the
@@ -365,18 +383,21 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 
 ### Source RBAC and result processing
 
+The capabilities in this section are planned. The current engine validates configured
+target/login selections; it does not derive BI viewer context or interpret organization
+RBAC policy.
+
 - Source database roles define privileges, row-level security (RLS), and restricted
   views. YASP selects the appropriate role-specific login rather than implementing
   a separate source permission system or requiring per-role BI connections.
 - Use non-owner, non-superuser logins without BYPASSRLS or membership permitting
   escalation. Audit view/function execution privileges and RLS behavior with those
   actual logins; a successful test as the table owner proves nothing about isolation.
-- The local YAML supplies metadata-to-role policy data; an application-supplied
-  Rust callback or trusted Python script interprets it and selects a target/login.
-  Rust validates the permitted pair; credentials remain in the connection layer.
-- Missing required metadata, unmapped policy entries, invalid selections, and
-  callback errors deny the query. Schema discovery and connection setup use an
-  explicit configured restricted selection for operations without viewer metadata.
+- Application policy data and RBAC interpretation remain owned by the consuming
+  application; the engine validates the selected configured target/login pair.
+- Once application policy is integrated, missing required metadata, unmapped policy
+  entries, invalid selections, and callback errors must deny the query. Any distinct
+  discovery selection must be supplied by the host's policy.
 - The same BI connection can therefore receive different source-authorized results
   for queries carrying different role-selection metadata.
 - Optional result masks or result callbacks apply additional presentation rules.
@@ -390,14 +411,14 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 
 ### Hooks
 
-- Keep BI service identity, application-derived context, selected backend role,
+- Future context integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
-- Python receives a bounded context projection, SQL strings, typed bind metadata,
-  and bounded typed result batches. Keep driver objects and the Rust AST internal.
-- Optional before_query callbacks propose SQL rewrites; revalidate them and preserve
-  parameter positions/types. The required select_backend callback then receives
-  effective query context and RBAC policy and returns target/login plus cache scope.
+- Python may receive a bounded context projection, SQL strings, typed bind metadata,
+  and bounded typed result batches in a later milestone. Keep driver objects internal;
+  Rust selectors can inspect the borrowed parsed query through `query.statement()`.
+- Optional before_query callbacks may propose SQL rewrites; revalidate them and
+  preserve parameter positions/types. Application code owns policy interpretation.
 - Run selection before cache lookup, including on hits. It must not open connections
   itself. The Rust backend component handles reuse or creation using the decision.
 - Result callbacks preserve column schema and row ordering. Rust callbacks are
@@ -405,7 +426,8 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 - Apply optional transformations before mandatory classification/masking; no later
   extension may restore raw data. Validate types, row counts, and byte limits after
   each result callback. Hook logging must not expose raw query/result values.
-- Register application-provided Rust hooks and trusted Python modules at startup.
+- Register application-provided Rust hooks at startup. Python callback execution is
+  a later milestone; trusted Python modules are not loaded by the current router.
   Keep custom behavior outside engine modules. Use bounded workers outside Tokio's
   async worker threads. Python 3.12 CPU work shares the global interpreter lock (GIL).
 - Embedded Python is not a sandbox. A timeout cannot reliably terminate executing
@@ -454,9 +476,10 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 
 ### Configuration and operations
 
-- Validate versioned YAML at startup. Configuration names the frontend protocol,
-  target engines, BI service credentials, permitted target/login pairs, RBAC policy,
-  the selection callback, optional result hooks, TLS, and resource limits.
+- Future full-deployment configuration may include TLS and additional operational
+  settings. The current loader accepts connection pairs, selector registration,
+  pool bounds, and supported gateway limits; application policy data remains owned
+  by the consuming host.
 - Resolve secrets through environment references. Local development binds localhost;
   non-local use requires encrypted frontend connections and verified backend TLS.
 - Emit redacted logs and counters for latency, routing, pool waits, hooks, and cache
@@ -465,18 +488,26 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 - Limit SQL/parameter/frame sizes, prepared statements and portals per session,
   queued hook bytes, active queries, total cache buffers, and slow-client write time.
   Account for Rust/Python copies and retain worker permits after callback timeouts.
-- Use the supplied Docker-hosted Metabase instance. Record its version and reachable
-  endpoint when available; configure a proxy address reachable from its container.
+- Validate against the intended BI client. Record its version and reachable endpoint
+  when available, and configure a proxy address reachable from its runtime environment.
 
 ### Acceptance
 
-Metabase connects, discovers authorized metadata, runs parameterized questions and
-dashboards, and cancels work. psql exercises simple queries. Component scenarios
+The intended BI client connects, discovers authorized metadata, runs supported
+parameterized questions, and cancels work. psql exercises simple queries. Component scenarios
 cover role changes on the same frontend session, source access restrictions,
 connection reuse/creation, transaction pinning, prepared statements across role
 pools, type fidelity, callback failures, role-scoped cache separation, outages,
 oversized results, and cleanup. Compare throughput, latency, memory, and hook overhead with direct PostgreSQL before making performance
 claims. Production readiness requires separate operational and security validation.
+
+### Remaining Phase 1 order
+
+Next implement the Python selector option, then PostgreSQL cancellation, context and
+client compatibility, result processing and caching, and TLS/operations. Add basic
+prepared statements and portals, limited `SET` and transactions, suspended portals,
+and binary results after those slices. Treat this order as a working sequence; promote
+an item when a concrete BI compatibility requirement needs it.
 
 ## Phase 2 — Additional engines, dynamic masking, and management
 
@@ -611,8 +642,3 @@ and abandoned proposals belong in version control, not maintained design documen
 - [SQL parser capabilities](https://github.com/apache/datafusion-sqlparser-rs)
 - [PyO3 parallelism](https://pyo3.rs/main/parallelism)
 - [PyO3 embedding requirements](https://github.com/PyO3/pyo3)
-- [Metabase database connections](https://www.metabase.com/docs/latest/databases/connections/postgresql)
-- [Metabase discovery and scanning](https://www.metabase.com/docs/latest/databases/sync-scan)
-- [Metabase caching](https://www.metabase.com/docs/latest/configuring-metabase/caching)
-- [Metabase impersonation](https://www.metabase.com/docs/latest/permissions/impersonation)
-- [Metabase Docker deployment](https://www.metabase.com/docs/latest/installation-and-operation/running-metabase-on-docker)

@@ -1,23 +1,38 @@
 //! Local gateway host: environment resources, logging, and process lifecycle.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     env, io,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::{net::TcpListener, runtime::Runtime};
 use yasp::{
-    backend::PostgresBackend,
-    config::{BackendConfig, FileConfig, GatewayConfig},
-    gateway, logger,
+    backend::PostgresBackends,
+    config::{BackendConfig, BackendSettings, FileConfig, GatewayConfig},
+    gateway,
+    hooks::{BackendSelection, BackendSelector, bind_select_backend, builtin},
+    logger,
 };
 
-fn load_config(
-    path: &Path,
-) -> Result<(GatewayConfig, BackendConfig, String), Box<dyn std::error::Error>> {
+struct HostConfig {
+    gateway: GatewayConfig,
+    backends: BTreeMap<BackendSelection, BackendConfig>,
+    pool_settings: BackendSettings,
+    selector: BackendSelector,
+    log_level: String,
+}
+
+fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
     let file = FileConfig::read(path)?;
-    let (target, login) = file.connection()?;
+    // The host maps names to compiled functions once, before accepting clients.
+    if file.hooks.select_backend != "builtin.select_backend.passthrough" {
+        return Err(io::Error::other("unregistered hooks.select_backend name").into());
+    }
+    let selector = bind_select_backend(
+        file.default_backend()?,
+        builtin::select_backend::passthrough,
+    );
     // dotenv errors can contain source text, so expose a fixed diagnostic.
     let mut values = HashMap::new();
     match dotenvy::from_path_iter(".env") {
@@ -59,17 +74,33 @@ fn load_config(
         required("YASP_GATEWAY_DATABASE", "YASP_GATEWAY_DATABASE")?,
     )?
     .with_settings(file.gateway.clone())?;
-    let backend = BackendConfig::new(
-        target.host.clone(),
-        target.port,
-        login.username.clone(),
-        required(
-            &login.password_env,
-            "target login password environment variable",
-        )?,
-        target.database.clone(),
-    )?;
-    Ok((gateway, backend, log_level))
+    let mut backends = BTreeMap::new();
+    for (target_name, target) in &file.targets {
+        for (login_name, login) in &target.logins {
+            let route = BackendSelection {
+                target: target_name.clone(),
+                backend_login: login_name.clone(),
+            };
+            let config = BackendConfig::new(
+                target.host.clone(),
+                target.port,
+                login.username.clone(),
+                required(
+                    &login.password_env,
+                    "target login password environment variable",
+                )?,
+                target.database.clone(),
+            )?;
+            backends.insert(route, config);
+        }
+    }
+    Ok(HostConfig {
+        gateway,
+        backends,
+        pool_settings: file.backend,
+        selector,
+        log_level,
+    })
 }
 
 fn main() {
@@ -90,13 +121,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err(io::Error::other("usage: yasp [--config PATH]").into()),
     };
-    let (config, backend_config, log_level) = load_config(&path)?;
-    logger::init_with_level(&log_level)?;
+    let host = load_config(&path)?;
+    logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let backend = Arc::new(PostgresBackend::new(backend_config)?);
-        let listener = TcpListener::bind(config.settings().listen).await?;
+        let backends = Arc::new(PostgresBackends::new(host.backends, host.pool_settings)?);
+        let listener = TcpListener::bind(host.gateway.settings().listen).await?;
         tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-        gateway::serve(listener, config, backend, async {
+        gateway::serve_routed(listener, host.gateway, backends, host.selector, async {
             #[cfg(unix)]
             {
                 let mut terminate =

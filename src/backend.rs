@@ -1,7 +1,12 @@
 //! Concrete PostgreSQL execution: bounded pooled connections and native text
 //! responses. Query syntax lives in `query`; organization policy lives outside it.
 
-use crate::{config::BackendConfig, query::ParsedQuery, transport::FrameGuard};
+use crate::{
+    config::{BackendConfig, BackendSettings},
+    hooks::BackendSelection,
+    query::ParsedQuery,
+    transport::FrameGuard,
+};
 use deadpool::{
     Runtime,
     managed::{Manager, Metrics, Object, Pool, RecycleError, RecycleResult, Timeouts},
@@ -42,11 +47,17 @@ const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_confo
 pub struct PostgresBackend {
     pool: Pool<PgManager>,
     target: String,
+    database_user: String,
 }
 
 impl PostgresBackend {
     pub fn new(config: BackendConfig) -> io::Result<Self> {
+        Self::with_capacity(config, 8)
+    }
+
+    fn with_capacity(config: BackendConfig, capacity: usize) -> io::Result<Self> {
         let target = format!("{}:{}/{}", config.host, config.port, config.database);
+        let database_user = config.username.clone();
         let mut wire = Config::new();
         wire.user(config.username)
             .password(config.password)
@@ -58,7 +69,7 @@ impl PostgresBackend {
             config: Arc::new(wire),
         };
         let pool = Pool::builder(manager)
-            .max_size(8)
+            .max_size(capacity)
             .runtime(Runtime::Tokio1)
             .timeouts(Timeouts {
                 wait: Some(ACQUIRE_TIMEOUT),
@@ -67,11 +78,19 @@ impl PostgresBackend {
             })
             .build()
             .map_err(|_| io::Error::other("cannot construct PostgreSQL pool"))?;
-        Ok(Self { pool, target })
+        Ok(Self {
+            pool,
+            target,
+            database_user,
+        })
     }
 
     pub(crate) fn target(&self) -> &str {
         &self.target
+    }
+
+    pub(crate) fn database_user(&self) -> &str {
+        &self.database_user
     }
 
     /// Execute the already parsed statement. Native PostgreSQL messages stay
@@ -174,6 +193,60 @@ impl PostgresBackend {
 
     pub(crate) fn close(&self) {
         self.pool.close();
+    }
+}
+
+/// Configured PostgreSQL routes, each with its own bounded, lazily opened pool.
+/// Construction does not connect to PostgreSQL or expose credentials to hooks.
+pub struct PostgresBackends {
+    pools: BTreeMap<BackendSelection, PostgresBackend>,
+}
+
+impl PostgresBackends {
+    pub fn new(
+        configurations: BTreeMap<BackendSelection, BackendConfig>,
+        settings: BackendSettings,
+    ) -> io::Result<Self> {
+        let capacity = settings.max_connections_per_pool;
+        if configurations.is_empty()
+            || capacity == 0
+            || settings.max_connections_total == 0
+            || configurations
+                .keys()
+                .any(|route| route.target.is_empty() || route.backend_login.is_empty())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "routes and pool limits must be nonempty and positive",
+            ));
+        }
+        if configurations
+            .len()
+            .checked_mul(capacity)
+            .is_none_or(|total| total > settings.max_connections_total)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sum of route pool capacities exceeds max_connections_total; reduce max_connections_per_pool or increase max_connections_total",
+            ));
+        }
+        let pools = configurations
+            .into_iter()
+            .map(|(route, config)| {
+                PostgresBackend::with_capacity(config, capacity).map(|pool| (route, pool))
+            })
+            .collect::<io::Result<_>>()?;
+        Ok(Self { pools })
+    }
+
+    pub(crate) fn get(&self, route: &BackendSelection) -> Option<&PostgresBackend> {
+        self.pools.get(route)
+    }
+
+    pub(crate) fn close(&self) {
+        for pool in self.pools.values() {
+            pool.close();
+        }
     }
 }
 

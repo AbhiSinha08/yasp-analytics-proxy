@@ -12,7 +12,7 @@ gateway:
   max_prepared_statements_per_session: 128
   max_portals_per_session: 32
   query_timeout_ms: 60000
-  read_timeout_ms: 60000
+  read_timeout_ms: 600000
   write_timeout_ms: 60000
   startup_timeout_ms: 120000
   shutdown_timeout_ms: 10000

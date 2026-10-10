@@ -23,3 +23,11 @@ targets:
       restricted:
         username: local
         password_env: YASP_TEST_TARGET_PASSWORD
+      secondary:
+        username: local2
+        password_env: YASP_TEST_SECOND_PASSWORD
+
+routing:
+  default_backend:
+    target: primary
+    backend_login: restricted

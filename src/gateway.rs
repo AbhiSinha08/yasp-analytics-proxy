@@ -1,8 +1,9 @@
 //! PostgreSQL frontend sessions, authentication, and responses.
 
 use crate::{
-    backend::PostgresBackend,
+    backend::{PostgresBackend, PostgresBackends},
     config::{GatewayConfig, GatewaySettings},
+    hooks::{BackendSelector, SelectionError, SelectionRequest},
     logger,
     query::{ParsedQuery, QueryError},
     transport::FrameGuard,
@@ -45,6 +46,77 @@ pub async fn serve(
     backend: Arc<PostgresBackend>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
+    serve_sessions(listener, config, Execution::Fixed(backend), shutdown).await
+}
+
+/// Serve with an application-registered selector and configured route pools.
+/// Decisions are checked on every query before a pool connection is acquired.
+pub async fn serve_routed(
+    listener: TcpListener,
+    config: GatewayConfig,
+    backends: Arc<PostgresBackends>,
+    selector: BackendSelector,
+    shutdown: impl Future<Output = ()>,
+) -> io::Result<()> {
+    serve_sessions(
+        listener,
+        config,
+        Execution::Routed { backends, selector },
+        shutdown,
+    )
+    .await
+}
+
+enum Execution {
+    Fixed(Arc<PostgresBackend>),
+    Routed {
+        backends: Arc<PostgresBackends>,
+        selector: BackendSelector,
+    },
+}
+
+impl Execution {
+    fn select(&self, request: &SelectionRequest<'_>) -> PgWireResult<&PostgresBackend> {
+        match self {
+            Self::Fixed(backend) => Ok(backend),
+            Self::Routed { backends, selector } => {
+                let route = selector(request).map_err(|error| match error {
+                    SelectionError::Denied => {
+                        protocol_error("ERROR", "42501", "backend selection denied")
+                    }
+                    SelectionError::Failed => {
+                        protocol_error("ERROR", "XX000", "backend selection failed")
+                    }
+                })?;
+                let backend = backends.get(&route).ok_or_else(|| {
+                    protocol_error("ERROR", "42501", "backend selection is not configured")
+                })?;
+                tracing::debug!(
+                    query_id = request.query_id,
+                    client_id = request.client_id,
+                    target = %route.target,
+                    backend_login = %route.backend_login,
+                    "backend selected"
+                );
+                Ok(backend)
+            }
+        }
+    }
+
+    fn close(&self) {
+        match self {
+            Self::Fixed(backend) => backend.close(),
+            Self::Routed { backends, .. } => backends.close(),
+        }
+    }
+}
+
+async fn serve_sessions(
+    listener: TcpListener,
+    config: GatewayConfig,
+    execution: Execution,
+    shutdown: impl Future<Output = ()>,
+) -> io::Result<()> {
     if !listener.local_addr()?.ip().is_loopback() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -52,6 +124,7 @@ pub async fn serve(
         ));
     }
     let settings = Arc::new(config.settings);
+    let execution = Arc::new(execution);
     let salt = random_nonce().into_bytes();
     let password = Password::new(
         Some(salt.clone()),
@@ -85,11 +158,11 @@ pub async fn serve(
                 }
                 let client_id = logger::next_client_id();
                 let source = source.clone();
-                let backend = backend.clone();
+                let execution = execution.clone();
                 let settings = settings.clone();
                 sessions.spawn(async move {
                     tracing::info!(client_id, %peer, "client connected");
-                    if let Err(error) = connection(socket, source, backend, settings, client_id).await {
+                    if let Err(error) = connection(socket, source, execution, settings, client_id).await {
                         // Protocol errors can contain client data. Log only their category.
                         tracing::error!(client_id, %peer, kind = ?error.kind(), "client session failed");
                     }
@@ -110,7 +183,7 @@ pub async fn serve(
         sessions.abort_all();
         while sessions.join_next().await.is_some() {}
     }
-    backend.close();
+    execution.close();
     outcome
 }
 
@@ -147,7 +220,7 @@ fn protocol_error(severity: &str, code: &str, message: &str) -> PgWireError {
 async fn connection(
     socket: TcpStream,
     source: Arc<Credentials>,
-    backend: Arc<PostgresBackend>,
+    execution: Arc<Execution>,
     settings: Arc<GatewaySettings>,
     client_id: u64,
 ) -> io::Result<()> {
@@ -210,7 +283,7 @@ async fn connection(
                 "query received"
             );
             let result = tokio::select! {
-                result = execute_query(&mut socket, &backend, &query.query, &settings, query_id, client_id) => result,
+                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
@@ -374,11 +447,12 @@ async fn disconnected(socket: &TcpStream) {
 
 async fn execute_query(
     socket: &mut Framed<FrameGuard, PgWireMessageServerCodec<String>>,
-    backend: &PostgresBackend,
+    execution: &Execution,
     sql: &str,
     settings: &GatewaySettings,
     query_id: u64,
     client_id: u64,
+    authenticated_user: &str,
 ) -> PgWireResult<()> {
     let write_timeout = settings.write_timeout();
     let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
@@ -406,10 +480,20 @@ async fn execute_query(
             ));
         }
     };
+    query
+        .validate_read_only()
+        .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
+    let backend = execution.select(&SelectionRequest {
+        authenticated_user,
+        client_id,
+        query_id,
+        query: &query,
+    })?;
     tracing::debug!(
         query_id,
         client_id,
         database = ?backend.target(),
+        database_user = %backend.database_user(),
         sql = ?query.sql(),
         "query sent to backend"
     );
