@@ -28,7 +28,7 @@
   - [x] **Test query routing** — Tests routing to two databases, separate connection pools, pool limits, selector errors, and recovery.
   - [x] **Test source-login access** — Checks that `local2` can read granted test data but is denied access to another database and a restricted table, then verifies the client can query again. Test usernames are in YAML; passwords are in environment variables or `.env`.
 - [ ] **Python backend selector** — Add a selector written in Python. Its execution limits and runtime behavior need separate design.
-- [ ] **PostgreSQL cancellation** — Let clients cancel a query that is still running.
+- [x] **PostgreSQL cancellation** — Handle client cancel requests and Forward backend cancellation safely.
 - [ ] **BI client context and compatibility** — Check what identity information the BI client provides and test its connection and queries.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
 - [ ] **Result processing, hooks, and Redis cache** — Requires bounded extension invocation and authorized result/cache contracts.

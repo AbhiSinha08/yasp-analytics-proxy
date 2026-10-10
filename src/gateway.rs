@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use pgwire::{
     api::{
-        ClientInfo, DefaultClient, NoopHandler, PgWireConnectionState,
+        ClientInfo, ConnectionHandle, ConnectionManager, DefaultClient, NoopHandler,
+        PgWireConnectionState,
         auth::{
             AuthSource, DefaultServerParameterProvider, LoginInfo, Password,
             sasl::{
@@ -37,6 +38,9 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 use tokio_util::codec::Framed;
+
+const MAX_CANCEL_CONNECTIONS: usize = 8;
+const CANCEL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Serve on a host-owned loopback listener (port 0 is useful in tests).
 /// Stop accepting on shutdown, then close sessions after the configured drain timeout.
@@ -125,6 +129,7 @@ async fn serve_sessions(
     }
     let settings = Arc::new(config.settings);
     let execution = Arc::new(execution);
+    let cancel_manager = Arc::new(ConnectionManager::new());
     let salt = random_nonce().into_bytes();
     let password = Password::new(
         Some(salt.clone()),
@@ -152,7 +157,10 @@ async fn serve_sessions(
                     Ok(accepted) => accepted,
                     Err(error) => break Err(error),
                 };
-                if sessions.len() >= settings.max_sessions {
+                let session_limit = settings.max_sessions as usize;
+                let cancel_only = sessions.len() >= session_limit;
+                // CancelRequest uses a new connection, even when all client slots are occupied.
+                if sessions.len() >= session_limit.saturating_add(MAX_CANCEL_CONNECTIONS) {
                     tracing::warn!(%peer, "gateway session limit reached");
                     continue;
                 }
@@ -160,9 +168,20 @@ async fn serve_sessions(
                 let source = source.clone();
                 let execution = execution.clone();
                 let settings = settings.clone();
+                let cancel_manager = cancel_manager.clone();
                 sessions.spawn(async move {
                     tracing::info!(client_id, %peer, "client connected");
-                    if let Err(error) = connection(socket, source, execution, settings, client_id).await {
+                    if let Err(error) = connection(
+                        socket,
+                        source,
+                        execution,
+                        settings,
+                        cancel_manager,
+                        cancel_only,
+                        client_id,
+                    )
+                    .await
+                    {
                         // Protocol errors can contain client data. Log only their category.
                         tracing::error!(client_id, %peer, kind = ?error.kind(), "client session failed");
                     }
@@ -222,6 +241,8 @@ async fn connection(
     source: Arc<Credentials>,
     execution: Arc<Execution>,
     settings: Arc<GatewaySettings>,
+    cancel_manager: Arc<ConnectionManager>,
+    cancel_only: bool,
     client_id: u64,
 ) -> io::Result<()> {
     let write_timeout = settings.write_timeout();
@@ -243,10 +264,16 @@ async fn connection(
     // SASL state belongs to one session; only immutable salted credentials are shared.
     let auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
-            .with_scram(ScramAuth::new(source.clone())),
+            .with_scram(ScramAuth::new(source.clone()))
+            .with_connection_manager(cancel_manager.clone()),
     );
     let noop = Arc::new(NoopHandler);
-    let deadline = Instant::now() + Duration::from_millis(u64::from(settings.startup_timeout_ms));
+    let startup_timeout = if cancel_only {
+        CANCEL_CONNECTION_TIMEOUT
+    } else {
+        Duration::from_millis(u64::from(settings.startup_timeout_ms))
+    };
+    let deadline = Instant::now() + startup_timeout;
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
     loop {
@@ -264,10 +291,19 @@ async fn connection(
         };
         let message = message
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid frontend frame"))?;
-        if matches!(
-            message,
-            PgWireFrontendMessage::Terminate(_) | PgWireFrontendMessage::CancelRequest(_)
-        ) {
+        if matches!(&message, PgWireFrontendMessage::Terminate(_)) {
+            return Ok(());
+        }
+        if let PgWireFrontendMessage::CancelRequest(cancel) = &message {
+            cancel_manager.cancel(cancel.pid, &cancel.secret_key).await;
+            return Ok(());
+        }
+        if cancel_only
+            && !matches!(
+                &message,
+                PgWireFrontendMessage::SslNegotiation(SslNegotiationMetaMessage::None)
+            )
+        {
             return Ok(());
         }
         if authenticated
@@ -282,8 +318,14 @@ async fn connection(
                 sql = ?query.query,
                 "query received"
             );
+            let cancel = socket
+                .session_extensions()
+                .get::<Arc<ConnectionHandle>>()
+                .expect("authenticated session has a registered cancellation handle")
+                .start_query()
+                .await;
             let result = tokio::select! {
-                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username) => result,
+                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username, cancel) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
@@ -453,6 +495,7 @@ async fn execute_query(
     query_id: u64,
     client_id: u64,
     authenticated_user: &str,
+    cancel: futures::channel::oneshot::Receiver<()>,
 ) -> PgWireResult<()> {
     let write_timeout = settings.write_timeout();
     let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
@@ -498,6 +541,12 @@ async fn execute_query(
         "query sent to backend"
     );
     backend
-        .execute(&query, socket, settings.query_timeout(), write_timeout)
+        .execute_with_cancel(
+            &query,
+            socket,
+            settings.query_timeout(),
+            write_timeout,
+            cancel,
+        )
         .await
 }

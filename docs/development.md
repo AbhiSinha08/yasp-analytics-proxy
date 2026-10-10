@@ -307,9 +307,10 @@ The library exposes `yasp::hooks::SelectionRequest`, `BackendSelection`,
 `ParsedQuery` values; it contains no backend credentials. Rust selectors can inspect
 the borrowed statement tree through `request.query.statement()`. A returned pair is
 validated against configuration before the router acquires a connection. The gateway
-supports simple-query requests; client transactions, prepared statements, PostgreSQL
-cancel requests, `SET`, binary results, and Unicode escaped identifiers (`U&"..."`)
-are unsupported. A frontend disconnect aborts that connection's active backend work.
+supports simple-query requests and PostgreSQL cancellation for active simple queries.
+Client transactions, prepared statements and extended-query cancellation, `SET`, binary
+results, and Unicode escaped identifiers (`U&"..."`) are unsupported. A frontend
+disconnect aborts that connection's active backend work.
 
 See [the project plan](PLAN.md) for phase boundaries and planned components.
 

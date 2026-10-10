@@ -54,6 +54,10 @@ significant tokens, and parser recursion limit 64. Unicode escaped identifiers
 setting-name argument `application_name`; its value may be an expression. Calls
 targeting serialization or resource settings are rejected. PostgreSQL-reported
 protected text parameter changes cause the backend connection to be discarded.
+The routed integration test sends PostgreSQL `CancelRequest` packets while two routes
+are active, checks SQLSTATE `57014`, verifies the other route is unaffected, and then
+reuses the frontend session. Idle, unknown, and late cancel keys cannot interrupt a
+subsequent client query; cancelled backend connections are discarded.
 
 `tests/routing.rs` covers two configured database routes, selector denial/failure and
 invalid-pair results, recovery on the same frontend session, per-route pool reuse,
@@ -71,8 +75,8 @@ The deferred scenarios below describe coverage beyond the current milestone.
 ## Deferred Phase 1 scenarios
 
 1. **Gateway and execution:** simple/parameterized queries, prepared statements,
-   metadata/type fidelity, session/transaction lifecycle, cancellation, errors,
-   and disconnect cleanup through the client/backend boundary.
+   metadata/type fidelity, session/transaction lifecycle, extended-query cancellation,
+   error recovery, and disconnect cleanup through the client/backend boundary.
    Exercise Describe before Bind, text/binary binds and results, portal suspension,
    failed-transaction/Sync recovery, and explicit rejection of multi-statement queries.
    Cover read-only enforcement against writable CTEs, SELECT INTO, function side
@@ -91,8 +95,7 @@ The deferred scenarios below describe coverage beyond the current milestone.
    work across role pools without leaking state. Optional masks preserve types.
    A bare BEGIN followed by a routed query pins that route; metadata-free rollback
    succeeds after a denied query. Prepared metadata cannot silently change when the
-   role/target changes. Verify reset after cancellation and late cancellation after
-   pool return cannot affect another query.
+   role/target changes. Transaction-state cleanup after cancellation remains deferred.
 4. **Extensions:** application-supplied context derivation and hooks execute through
    library contracts without changes to core modules; the selector consumes policy without receiving
    passwords; selection runs before cache hits; rewrites preserve binds, result

@@ -120,6 +120,12 @@ or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AS
 inspection. Results preserve PostgreSQL column metadata and stream text rows without
 driver value conversion.
 
+Clients can cancel an active simple query with PostgreSQL's dedicated `CancelRequest`.
+The gateway matches its per-session cancel key to the active request and forwards a
+cancel request to the selected backend connection. A cancelled backend lease is
+discarded so a delayed cancel cannot affect a later pool borrower. The client receives
+SQLSTATE `57014` and can continue using the same frontend session.
+
 SQL parsing defaults to a 1 MiB byte limit, with 4,096 significant tokens and a parser
 recursion limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported.
 Incoming frontend frames default to 8 MiB; backend frames have a fixed 8 MiB limit,
@@ -163,10 +169,10 @@ set to `postgres` for test database administration and the target secret named
 loads the SQL fixture, runs the proxy against that database, and drops only the
 database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
 The runtime creates no application database or persistent data fixture.
-Client transactions, PostgreSQL cancel requests, prepared statements, `SET`, binary
-results, organization-specific RBAC interpretation, query/result hooks, caching, TLS,
-and BI-client integration are not implemented. The routing milestone below implements
-selection contracts, configured target/login validation, and bounded PostgreSQL pools.
+Client transactions, prepared statements, `SET`, binary results, organization-specific
+RBAC interpretation, query/result hooks, caching, TLS, and BI-client integration are
+not implemented. The routing milestone below implements selection contracts,
+configured target/login validation, and bounded PostgreSQL pools.
 See [development setup](development.md) and [test guidance](../tests/README.md).
 
 ## Phase 0 — Project foundation
@@ -503,8 +509,8 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next implement the Python selector option, then PostgreSQL cancellation, context and
-client compatibility, result processing and caching, and TLS/operations. Add basic
+Next implement the Python selector option, then context and client compatibility,
+result processing and caching, and TLS/operations. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote
 an item when a concrete BI compatibility requirement needs it.
