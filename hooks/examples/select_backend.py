@@ -1,8 +1,8 @@
 """Select the configured target/login supplied by the consuming application."""
 
 
-def select_backend(request, options):
+def select_backend(request, params):
     return {
-        "target": options["target"],
-        "backend_login": options["backend_login"],
+        "target": params["target"],
+        "backend_login": params["backend_login"],
     }

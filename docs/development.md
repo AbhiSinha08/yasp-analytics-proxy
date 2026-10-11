@@ -35,7 +35,7 @@ are not present in the current dependency graph.
 | thiserror 2                                                | Added: typed library errors.                                                                                         | Keep recoverable error categories; add no generic error framework to the library.                                                                                                                                                                                                                                |
 | tracing 0.1 + tracing-subscriber 0.3                       | Added: structured events and host log filtering/output.                                                              | The library emits events; the host alone installs the subscriber. Redact query data and secrets.                                                                                                                                                                                                                 |
 | PyO3 0.29                                                  | Added behind the `python` feature: embed CPython for trusted callbacks.                                              | No extension-module, abi3, auto-initialize, or unused conversion features. Initialize explicitly after configuring imports. Rust-only applications do not link Python.                                                                                                                                           |
-| serde_json 1                                               | Added behind `python` and used by tests: plain callback input/output and application options.                        | The callback boundary is not a lossless database value codec.                                                                                                                                                                                                                                                    |
+| serde_json 1                                               | Added behind `python` and used by tests: plain callback input/output and application params.                         | The callback boundary is not a lossless database value codec.                                                                                                                                                                                                                                                    |
 | pgwire 0.41                                                | Added with `server-api-ring` and `client-api-ring`: frontend protocol handling and native PostgreSQL backend client. | Streams text rows and PostgreSQL metadata without converting values through a driver value model. The guarded frontend transport checks the configured frame bound before payload allocation.                                                                                                                    |
 | dotenvy 0.15                                               | Added: host-only `.env` parsing.                                                                                     | Iterator API avoids process environment mutation; parse before runtime startup and redact parser diagnostics.                                                                                                                                                                                                    |
 | futures 0.3 + async-trait 0.1 + tokio-util 0.7             | Added: asynchronous protocol handlers and framed transport.                                                          | Uses pgwire streaming APIs; no separate query framework.                                                                                                                                                                                                                                                         |
@@ -155,7 +155,7 @@ hooks:
     type: python
     path: ../hooks/examples/select_backend.py
     callback: select_backend
-    options:
+    params:
       target: primary
       backend_login: secondary
   python:
@@ -167,17 +167,14 @@ hooks:
 ```
 
 Choose a target/login that exists in your own config. The example selects that
-pair from options and does not use `routing.default_backend`. Options default to an
-empty mapping; omitted runtime limits retain the values above. To import application
-helpers, explicitly add their directory to `search_paths`. Add your environment's
+pair from params. Params default to an empty mapping; omitted runtime limits retain
+the values above. To import application helpers, explicitly add their directory to `search_paths`. Add your environment's
 site-packages there when packages are needed; no Python builtin hook is supplied.
 
 Build and run with the same CPython installation used for linking:
 
 ```sh
-YASP_PYTHON_LIB=$(python3.12 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')
-PYO3_PYTHON=$(command -v python3.12) \
-LD_LIBRARY_PATH="$YASP_PYTHON_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+LD_LIBRARY_PATH=$(python3.12 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))') \
 cargo run --locked --features python -- --config config/local.yml
 ```
 
@@ -201,12 +198,12 @@ secret template:
 cp .env.example .env
 ```
 
-`config/example.yml` is a full reference that includes planned fields; it is not
-directly loadable by this milestone's strict runtime loader.
-Runtime YAML supports `version: 1`, an optional `gateway` block,
-PostgreSQL targets and their logins, an optional `routing.default_backend`, optional
-`hooks.select_backend`, optional `hooks.python` worker settings, and an optional `backend` block. Unknown fields and sections
-are rejected.
+`config/example.yml` is loadable by the current runtime. Provision its databases,
+logins, and environment secrets before running it. Future settings remain in marked
+commented YAML blocks; uncommenting them does not enable an unimplemented feature.
+Runtime YAML supports `version: 1`, an optional `gateway` block, PostgreSQL targets
+and their logins, optional `hooks.select_backend`, shared `hooks.python` runtime
+settings, and an optional `backend` block. Unknown fields and sections are rejected.
 The loader also rejects duplicate keys, invalid types, and YAML files larger than
 64 KiB.
 
@@ -215,11 +212,12 @@ For an explicit built-in selector and default target/login, use:
 ```yaml
 version: 1
 hooks:
-  select_backend: builtin.select_backend.passthrough
-routing:
-  default_backend:
-    target: primary
-    backend_login: reader
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
+      target: primary
+      backend_login: reader
 targets:
   primary:
     engine: postgresql
@@ -233,10 +231,21 @@ targets:
         password_env: YASP_PRIMARY_READER_PASSWORD
 ```
 
-With one configured target/login pair, the built-in selector infers that pair and
-`routing.default_backend` can be omitted. Custom Rust selector code is compiled into
-the host application. Rebuild after changing that code and restart the process after
-changing its configuration.
+Both languages use `type`, `callback`, and an optional JSON-compatible `params`
+mapping. Python also requires `path`; Rust callback names refer to code compiled
+and registered by the host. The host parses Rust params into its callback's typed
+state before binding with `hooks::bind_select_backend`. Custom params, including
+RBAC data, remain application-owned; the engine does not interpret their keys.
+
+The built-in passthrough accepts exactly `target` and `backend_login` strings. Empty
+params infer the sole configured pair; multiple pairs require explicit params.
+An omitted selector or the Rust shorthand
+`select_backend: builtin.select_backend.passthrough` uses empty params. Selection errors never
+trigger a fallback. The strict loader rejects a separate `routing` block; put the
+passthrough choice in its params.
+
+Custom Rust selector code is compiled into the host application. Rebuild after
+changing that code and restart the process after changing its configuration.
 
 ```sh
 cargo run --locked -- --config config/local.yml
@@ -292,10 +301,11 @@ bounds, rather than target database credentials.
 Each target must use PostgreSQL and has a host, port, database, TLS mode, and one or
 more named logins. Each login has a username and `password_env` key naming the
 environment variable that holds its password. The router selects only configured
-target/login pairs. `routing.default_backend` names a target and login for the built-in
-passthrough selector when multiple pairs make the choice ambiguous. Custom Rust
-selectors are registered by the host application; their configured name is
-`hooks.select_backend`, which defaults to `builtin.select_backend.passthrough`.
+target/login pairs. The built-in passthrough uses `hooks.select_backend.params`
+to choose a target/login when multiple pairs make the choice ambiguous. Custom Rust
+selectors are registered by the host application; their name is the reference's
+`callback` or the Rust string shorthand. An omitted selector defaults to
+`builtin.select_backend.passthrough`.
 The repository host registers the built-in passthrough selector and loads Python
 file references when built with `python`. It rejects compiled selector names it
 does not register; a consuming host maps its own names to its compiled callbacks.
@@ -316,11 +326,10 @@ backend:
   max_connections_total: 8
 ```
 
-`routing.default_backend` identifies a configured target/login pair when the built-in
-passthrough selector needs to resolve multiple choices. A custom selector can choose
-among configured pairs using host-owned state. The name in `hooks.select_backend`
-defaults to `builtin.select_backend.passthrough`; the host maps names to compiled
-callbacks at startup. Python references name external files and functions.
+Selectors choose among these configured pairs using their application params or
+host-owned state. The host binds compiled callbacks or registers external Python
+files/functions before opening the listener. Callback decisions are validated before
+connection acquisition.
 
 Gateway credentials are supplied only through `YASP_GATEWAY_USERNAME`,
 `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` in the process environment or

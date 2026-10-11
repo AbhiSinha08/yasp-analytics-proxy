@@ -21,8 +21,6 @@ pub struct FileConfig {
     #[serde(default)]
     pub hooks: HooksSettings,
     #[serde(default)]
-    pub routing: RoutingSettings,
-    #[serde(default)]
     pub backend: BackendSettings,
     pub targets: BTreeMap<String, TargetSettings>,
 }
@@ -48,7 +46,35 @@ impl Default for HooksSettings {
 #[serde(untagged)]
 pub enum SelectorSettings {
     Rust(String),
+    RustReference(RustHookSettings),
     Python(PythonHookSettings),
+}
+
+impl SelectorSettings {
+    /// The host resolves this name to its own compiled callback at startup.
+    pub fn rust_callback(&self) -> Option<&str> {
+        match self {
+            Self::Rust(name) => Some(name),
+            Self::RustReference(hook) => Some(&hook.callback),
+            Self::Python(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RustHookSettings {
+    #[serde(rename = "type")]
+    pub kind: RustHookKind,
+    pub callback: String,
+    #[serde(default)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RustHookKind {
+    Rust,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -58,13 +84,8 @@ pub struct PythonHookSettings {
     pub kind: PythonHookKind,
     pub path: std::path::PathBuf,
     pub callback: String,
-    #[cfg(feature = "python")]
     #[serde(default)]
-    pub options: serde_json::Map<String, serde_json::Value>,
-    // A Rust-only host can read the reference and report the missing feature.
-    #[cfg(not(feature = "python"))]
-    #[serde(default, skip_serializing)]
-    pub options: serde::de::IgnoredAny,
+    pub params: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -113,12 +134,6 @@ impl PythonSettings {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct RoutingSettings {
-    pub default_backend: Option<crate::hooks::BackendSelection>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -267,6 +282,9 @@ impl FileConfig {
         self.hooks.python.validate()?;
         match &self.hooks.select_backend {
             SelectorSettings::Rust(name) => validate_value("hooks.select_backend", name)?,
+            SelectorSettings::RustReference(hook) => {
+                validate_value("hooks.select_backend.callback", &hook.callback)?;
+            }
             SelectorSettings::Python(hook) => {
                 validate_value("Python hook path", &hook.path.to_string_lossy())?;
                 validate_value("Python callback", &hook.callback)?;
@@ -324,21 +342,23 @@ impl FileConfig {
         if pool_capacity > self.backend.max_connections_total {
             return Err(ConfigError::InvalidPoolLimit);
         }
-        if let Some(default) = &self.routing.default_backend {
-            self.validate_selection(default)?;
-        } else if matches!(&self.hooks.select_backend, SelectorSettings::Rust(name) if name == "builtin.select_backend.passthrough")
-        {
+        if self.hooks.select_backend.rust_callback() == Some("builtin.select_backend.passthrough") {
             self.default_backend()?;
         }
         Ok(())
     }
 
-    /// Resolve an explicit default, or infer it when exactly one pair exists.
-    /// Custom selectors may omit a default when the host provides their routing state.
+    /// Resolve builtin passthrough params, or infer the sole configured pair.
+    /// Application selectors interpret their own params when the host binds them.
     pub fn default_backend(&self) -> Result<crate::hooks::BackendSelection, ConfigError> {
-        if let Some(default) = &self.routing.default_backend {
-            self.validate_selection(default)?;
-            return Ok(default.clone());
+        if let SelectorSettings::RustReference(hook) = &self.hooks.select_backend
+            && hook.callback == "builtin.select_backend.passthrough"
+            && !hook.params.is_empty()
+        {
+            let selection = serde_json::from_value(serde_json::Value::Object(hook.params.clone()))
+                .map_err(|_| ConfigError::InvalidSelectorParams)?;
+            self.validate_selection(&selection)?;
+            return Ok(selection);
         }
         let mut pairs = self.targets.iter().flat_map(|(target, settings)| {
             settings
@@ -360,9 +380,9 @@ impl FileConfig {
         &self,
         selection: &crate::hooks::BackendSelection,
     ) -> Result<(), ConfigError> {
-        validate_value("routing.default_backend.target", &selection.target)?;
+        validate_value("hooks.select_backend.params.target", &selection.target)?;
         validate_value(
-            "routing.default_backend.backend_login",
+            "hooks.select_backend.params.backend_login",
             &selection.backend_login,
         )?;
         if !self
@@ -398,9 +418,9 @@ impl FileConfig {
 mod tests {
     use super::*;
 
-    fn make_config(hooks: &str, targets: &str, routing: &str, backend: &str) -> FileConfig {
+    fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
         serde_saphyr::from_str(&format!(
-            "version: 1\nhooks:\n  select_backend: {hooks}\nrouting:\n{routing}\nbackend:\n{backend}\ntargets:\n{targets}"
+            "version: 1\nhooks:\n  select_backend: {hooks}\nbackend:\n{backend}\ntargets:\n{targets}"
         ))
         .unwrap()
     }
@@ -408,13 +428,123 @@ mod tests {
     const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
 
     #[test]
+    fn example_is_loadable_without_secrets_or_database_access() {
+        let config =
+            FileConfig::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"))
+                .unwrap();
+        let selected = config.default_backend().unwrap();
+        assert_eq!(selected.target, "primary");
+        assert_eq!(selected.backend_login, "restricted");
+        assert_eq!(
+            config
+                .targets
+                .values()
+                .map(|target| target.logins.len())
+                .sum::<usize>(),
+            4
+        );
+    }
+
+    #[test]
+    fn application_params_are_preserved_for_both_languages() {
+        let params = serde_json::json!({"rbac": {"group": [true, null, 4]}, "label": "custom"});
+        for reference in [
+            "{type: rust, callback: app.selector, params: {rbac: {group: [true, null, 4]}, label: custom}}",
+            "{type: python, path: ../app.py, callback: custom, params: {rbac: {group: [true, null, 4]}, label: custom}}",
+        ] {
+            let config = make_config(reference, ONE_TARGET, "  {}");
+            config.validate().unwrap();
+            let preserved = match config.hooks.select_backend {
+                SelectorSettings::RustReference(hook) => hook.params,
+                SelectorSettings::Python(hook) => hook.params,
+                _ => panic!("object reference expected"),
+            };
+            assert_eq!(serde_json::Value::Object(preserved), params);
+        }
+        for reference in [
+            "{type: rust, callback: builtin.select_backend.passthrough}",
+            "{type: rust, callback: builtin.select_backend.passthrough, params: {}}",
+        ] {
+            let config = make_config(reference, ONE_TARGET, "  {}");
+            config.validate().unwrap();
+            assert_eq!(config.default_backend().unwrap().backend_login, "reader");
+        }
+        let config: FileConfig =
+            serde_saphyr::from_str(&format!("version: 1\ntargets:\n{ONE_TARGET}")).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.default_backend().unwrap().target, "primary");
+    }
+
+    #[test]
+    fn rejects_malformed_references_and_unsupported_sections() {
+        for reference in [
+            "{type: rust, callback: builtin.select_backend.passthrough, path: app.py}",
+            "{type: rust, callback: app.selector, params: [1]}",
+            "{type: python, path: app.py, callback: custom, params: [1]}",
+            "{type: python, callback: custom}",
+        ] {
+            assert!(
+                serde_saphyr::from_str::<HooksSettings>(&format!("select_backend: {reference}"))
+                    .is_err()
+            );
+        }
+        for section in [
+            "routing: {default_backend: {target: primary, backend_login: reader}}",
+            "principals: {}",
+            "cache: {enabled: false}",
+            "policy: {result_masks: []}",
+            "hooks: {result_processing: {enabled: false}}",
+            "hooks: {python: {worker_count: 1}}",
+        ] {
+            assert!(
+                serde_saphyr::from_str::<FileConfig>(&format!(
+                    "version: 1\ntargets:\n{ONE_TARGET}\n{section}"
+                ))
+                .is_err()
+            );
+        }
+        for params in [
+            "{target: primary}",
+            "{target: 1, backend_login: reader}",
+            "{target: primary, backend_login: reader, extra: true}",
+        ] {
+            let config = make_config(
+                &format!(
+                    "{{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}"
+                ),
+                ONE_TARGET,
+                "  {}",
+            );
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::InvalidSelectorParams)
+            ));
+        }
+        for params in [
+            "{target: '', backend_login: reader}",
+            "{target: primary, backend_login: ' '}",
+        ] {
+            let config = make_config(
+                &format!(
+                    "{{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}"
+                ),
+                ONE_TARGET,
+                "  {}",
+            );
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::InvalidValue(_))
+            ));
+        }
+    }
+
+    #[test]
     fn python_reference_and_runtime_bounds() {
         let reference =
-            "{type: python, path: ../app.py, callback: custom, options: {nested: [true, null, 4]}}";
+            "{type: python, path: ../app.py, callback: custom, params: {nested: [true, null, 4]}}";
         let mut config = make_config(
             reference,
             ONE_TARGET,
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 8",
         );
         assert!(config.validate().is_ok());
@@ -444,7 +574,6 @@ mod tests {
         let config = make_config(
             "builtin.select_backend.passthrough",
             ONE_TARGET,
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 8",
         );
         assert_eq!(config.default_backend().unwrap().target, "primary");
@@ -453,7 +582,6 @@ mod tests {
         let config = make_config(
             "builtin.select_backend.passthrough",
             ONE_TARGET,
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 7",
         );
         assert!(matches!(
@@ -470,7 +598,6 @@ mod tests {
         let config = make_config(
             "builtin.select_backend.passthrough",
             &two_targets,
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 16",
         );
         assert!(matches!(
@@ -479,9 +606,8 @@ mod tests {
         ));
 
         let config = make_config(
-            "builtin.select_backend.passthrough",
+            "{type: rust, callback: builtin.select_backend.passthrough, params: {target: reporting, backend_login: reader}}",
             &two_targets,
-            "  default_backend:\n    target: reporting\n    backend_login: reader",
             "  max_connections_per_pool: 8\n  max_connections_total: 16",
         );
         assert!(config.validate().is_ok());
@@ -490,7 +616,6 @@ mod tests {
         let config = make_config(
             "custom.selector",
             &two_targets,
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 16",
         );
         assert!(config.validate().is_ok());
@@ -499,9 +624,8 @@ mod tests {
     #[test]
     fn rejects_invalid_default_and_non_postgresql_target() {
         let config = make_config(
-            "custom.selector",
+            "{type: rust, callback: builtin.select_backend.passthrough, params: {target: missing, backend_login: reader}}",
             ONE_TARGET,
-            "  default_backend:\n    target: missing\n    backend_login: reader",
             "  max_connections_per_pool: 8\n  max_connections_total: 8",
         );
         assert!(matches!(
@@ -512,7 +636,6 @@ mod tests {
         let config = make_config(
             "custom.selector",
             &ONE_TARGET.replace("engine: postgresql", "engine: mysql"),
-            "  default_backend: null",
             "  max_connections_per_pool: 8\n  max_connections_total: 8",
         );
         assert!(matches!(
@@ -559,9 +682,11 @@ pub enum ConfigError {
         "backend pool limits must be positive and max_connections_total must cover every configured target/login pool; adjust either setting"
     )]
     InvalidPoolLimit,
-    #[error("routing.default_backend must identify a configured target and backend login")]
+    #[error("passthrough params must contain exactly target and backend_login strings")]
+    InvalidSelectorParams,
+    #[error("passthrough params must identify a configured target and backend login")]
     InvalidDefaultBackend,
-    #[error("the built-in passthrough selector requires one unambiguous default backend")]
+    #[error("provide target and backend_login in passthrough params when multiple pairs exist")]
     MissingDefaultBackend,
     #[error("target engine must be postgresql and tls_mode must be disable")]
     UnsupportedTarget,

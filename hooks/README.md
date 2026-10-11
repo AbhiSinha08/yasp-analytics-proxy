@@ -35,10 +35,42 @@ is denied with `42501`.
 
 The built-in `builtin.select_backend.passthrough` selector selects the configured
 default target/login pair. If only one pair is configured, it is inferred; with
-multiple pairs, set `routing.default_backend`. The repository host registers
-this built-in selector and external Python references. A consuming host can map `hooks.select_backend` to its own
-compiled Rust callback. Add and test reusable repository selectors under
-`hooks/builtin/`; application-specific callbacks belong in the consuming application.
+multiple pairs, set `target` and `backend_login` in `hooks.select_backend.params`.
+The repository host registers this built-in selector and external Python references.
+A consuming host can map `hooks.select_backend.callback` to its own compiled Rust
+callback and parse its params into typed state before binding. Add and test reusable
+repository selectors under `hooks/builtin/`; application-specific callbacks belong in the consuming application.
+
+## Hook references
+
+Both execution languages use `type`, `callback`, and a JSON-compatible `params`
+mapping. Params default to empty and are interpreted by the application callback;
+core routing only validates the resulting configured pair. Python additionally
+requires an external file `path`. File and Python search paths are relative to the
+YAML file; library registrations receive resolved paths.
+
+```yaml
+hooks:
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
+      target: primary
+      backend_login: reader
+```
+
+For the runnable Python passthrough, use `type: python`, add
+`path: ../hooks/examples/select_backend.py`, and set `callback: select_backend`.
+The pair remains in `params`. Configure Python runtime bounds once under
+`hooks.python`, shared by all callbacks.
+
+Compiled callback strings remain shorthand with empty params. An omitted selector
+uses the builtin passthrough with empty params, which requires exactly one configured
+pair. The explicit builtin params accept exactly `target` and `backend_login`;
+application callbacks may define different params without core RBAC interpretation.
+Future result callback lists use the same reference conventions, but their stage
+contracts and configuration are not implemented yet. Future principal connection
+bounds and result masks will be enforced independently of application callbacks.
 
 Rust callbacks run synchronously on the query path. Keep them fast and nonblocking;
 Rust execution has no dedicated callback thread or enforceable timeout.
@@ -67,7 +99,7 @@ per-viewer identity remain separate integration work.
 Enable the `python` Cargo feature to use `hooks::python::PythonRuntime` and
 `PythonCallback`. Register trusted application files before opening the listener.
 The platform can invoke any named synchronous function with the signature
-`function(request, options)`; backend selection is its first engine integration.
+`function(request, params)`; backend selection is its first engine integration.
 UTF-8 Python files are deployment resources, not compiled into the binary. The runnable
 passthrough example is [examples/select_backend.py](examples/select_backend.py).
 
@@ -95,7 +127,7 @@ async fn example() -> Result<(), Box<dyn std::error::Error>> {
 
 Create one runtime per process and clone it to register more callbacks. Each
 registration owns a uniquely named module and retains its globals. Every invocation
-receives fresh request and options objects. Mutating options in Python does not alter
+receives fresh request and params objects. Mutating params in Python does not alter
 later calls. Callback registration and execution run on one dedicated worker outside
 Tokio. Coroutine functions, async generators, and unsupported return objects fail.
 
@@ -116,7 +148,7 @@ produces `57014`. The router validates the returned pair before acquiring a leas
 The default waiting deadline is 2 seconds, including queue time and registration.
 The queue admits 32 waiting jobs and charges queued plus executing inputs against
 a 4 MiB byte budget. Individual payloads are limited to 2 MiB; invocation input
-includes request and options. Registration reserves one maximum payload for bounded
+includes request and params. Registration reserves one maximum payload for bounded
 script loading. Bounds measure encoded JSON bytes (or script bytes), not total Python
 heap usage. Invalid settings fail before initialization; saturation fails immediately.
 

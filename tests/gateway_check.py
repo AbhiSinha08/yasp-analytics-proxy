@@ -23,7 +23,9 @@ CONFIG, GATEWAY = INPUT["config"], INPUT["gateway"]
 listen_host, listen_port = CONFIG.get("gateway", {}).get("listen", "127.0.0.1:6432").rsplit(":", 1)
 ADDRESS = (listen_host.strip("[]"), int(listen_port))
 default_route = INPUT["default_backend"]
-CONFIG["routing"]["default_backend"] = default_route
+CONFIG.setdefault("hooks", {})["select_backend"] = {
+    "type": "rust", "callback": "builtin.select_backend.passthrough", "params": default_route
+}
 TARGET_NAME = default_route["target"]
 TARGET = CONFIG["targets"][TARGET_NAME]
 LOGIN_NAME = default_route["backend_login"]
@@ -465,7 +467,7 @@ def startup_checks(directory):
     target_text = json.dumps(TARGET)
     target_key, login_key = json.dumps(TARGET_NAME), json.dumps(LOGIN_NAME)
     login_text = json.dumps(LOGIN)
-    config_prefix = '{"version": 1, "routing": ' + json.dumps(CONFIG["routing"]) + ', "targets": {'
+    config_prefix = '{"version": 1, "hooks": ' + json.dumps(CONFIG["hooks"]) + ', "targets": {'
     duplicate_targets = config_prefix + target_key + ': ' + target_text + ', ' + target_key + ': ' + target_text + '}}'
     duplicate_login = target_text.replace(json.dumps(TARGET["logins"]), '{' + login_key + ': ' + login_text + ', ' + login_key + ': ' + login_text + '}')
     duplicate_logins = config_prefix + target_key + ': ' + duplicate_login + '}}'
@@ -491,11 +493,16 @@ def startup_checks(directory):
         (variant(lambda config: config["targets"][TARGET_NAME].update(tls_mode="require")), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME].update(logins={})), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME]["logins"][LOGIN_NAME].pop("password_env")), secret_file),
-        (variant(lambda config: config["routing"].update(default_backend={"target": "missing", "backend_login": LOGIN_NAME})), secret_file),
+        (variant(lambda config: config["hooks"]["select_backend"].update(params={"target": "missing", "backend_login": LOGIN_NAME})), secret_file),
+        (variant(lambda config: config["hooks"]["select_backend"].update(params={"target": TARGET_NAME})), secret_file),
+        (variant(lambda config: config["hooks"]["select_backend"]["params"].update(extra="SECRET_MARKER")), secret_file),
+        (variant(lambda config: config.update(routing={"default_backend": default_route})), secret_file),
+        (variant(lambda config: config.update(cache={"enabled": False})), secret_file),
         (variant(lambda config: config["backend"].update(max_connections_per_pool=0)), secret_file),
         (variant(lambda config: config["backend"].update(max_connections_total=0)), secret_file),
         (variant(lambda config: config["backend"].update(max_connections_total=1)), secret_file),
         (variant(lambda config: config.update(hooks={"select_backend": "unknown.hook"})), secret_file),
+        (variant(lambda config: config["hooks"]["select_backend"].update(callback="unknown.hook")), secret_file),
         (python_reference("missing_script.py"), secret_file),
         (python_reference("bad_import.py"), secret_file),
         (python_reference("not_callable.py"), secret_file),
@@ -548,7 +555,7 @@ def custom_config_checks(directory):
     custom = json.loads(json.dumps(CONFIG))
     custom_target = custom["targets"].pop(TARGET_NAME)
     custom["targets"][TARGET_NAME + "_custom"] = custom_target
-    custom["routing"]["default_backend"]["target"] = TARGET_NAME + "_custom"
+    custom["hooks"]["select_backend"]["params"]["target"] = TARGET_NAME + "_custom"
     env_values = {**FRONTEND_ENV, **PASSWORDS}
     custom_login = custom_target["logins"][LOGIN_NAME]
     if custom_login["password_env"] == "YASP_GATEWAY_PASSWORD":
@@ -586,17 +593,40 @@ def routing_config_checks(directory):
     )
     # Only the explicit default is reachable; a first-entry fallback must fail.
     custom["targets"][TARGET_NAME]["database"] = "yasp_absent_" + uuid.uuid4().hex
-    custom["routing"]["default_backend"] = {
+    custom["hooks"]["select_backend"]["params"] = {
         "target": second_target_name,
         "backend_login": LOGIN_NAME,
     }
     custom["gateway"]["listen"] = f"{ADDRESS[0]}:{ADDRESS[1]}"
-    custom_path = Path(directory) / "routing-default.yml"
+    custom_path = Path(directory) / "config/selector-params.yml"
     custom_path.write_text(json.dumps(custom))
     try:
         with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
             wait_ready(process)
             assert psql("SELECT current_database()").stdout.strip() == TARGET["database"]
+            rust_user = psql("SELECT current_user").stdout.strip()
+            assert rust_user == LOGIN["username"]
+
+        hooks_path = Path(directory) / "callbacks"
+        hooks_path.mkdir()
+        (hooks_path / "select_backend.py").write_text(
+            (ROOT / "hooks/examples/select_backend.py").read_text()
+        )
+        custom["hooks"]["select_backend"] = {
+            "type": "python", "path": "../callbacks/select_backend.py",
+            "callback": "select_backend", "params": custom["hooks"]["select_backend"]["params"],
+        }
+        custom_path.write_text(json.dumps(custom))
+        if INPUT["python_enabled"]:
+            with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+                wait_ready(process)
+                assert psql("SELECT current_database()").stdout.strip() == TARGET["database"]
+                assert psql("SELECT current_user").stdout.strip() == rust_user
+        else:
+            result = subprocess.run([BINARY, "--config", str(custom_path)], cwd=directory,
+                                    env=ENV | FRONTEND_ENV | PASSWORDS, capture_output=True, timeout=3)
+            assert result.returncode != 0
+            assert b"requires the python Cargo feature" in result.stderr
 
     finally:
         ADDRESS = previous_address

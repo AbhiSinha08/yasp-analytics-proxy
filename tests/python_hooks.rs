@@ -69,10 +69,10 @@ from pathlib import Path
 calls = 0
 not_callable = 42
 
-async def asynchronous(request, options):
+async def asynchronous(request, params):
     return request
 
-def custom_behavior(request, options):
+def custom_behavior(request, params):
     global calls
     calls += 1
     operation = request.get('operation')
@@ -108,14 +108,14 @@ def custom_behavior(request, options):
     if operation == 'large_integer':
         return 2**64
     if operation == 'coroutine':
-        return asynchronous(request, options)
+        return asynchronous(request, params)
     if operation == 'echo':
         return request['value']
     if operation == 'inspect':
         return {'path': sys.path, 'isolated': sys.flags.isolated,
                 'site': 'site' in sys.modules}
-    previous = options['label']
-    options['label'] = 'mutated'
+    previous = params['label']
+    params['label'] = 'mutated'
     return {'calls': calls, 'label': previous, 'helper': application_helper.value,
             'request': request, 'decimal': str(decimal.Decimal('1.0001'))}
 "#,
@@ -133,9 +133,9 @@ def custom_behavior(request, options):
         PythonRuntime::new(PythonSettings::default()).await,
         Err(Error::AlreadyInitialized)
     ));
-    let options = json!({"label": "host data"}).as_object().unwrap().clone();
+    let params = json!({"label": "host data"}).as_object().unwrap().clone();
     let callback = runtime
-        .register(&script, "custom_behavior", options.clone())
+        .register(&script, "custom_behavior", params.clone())
         .await
         .unwrap();
     let request = json!({"nested": [true, null, 1.5], "sql": "unused by this arbitrary callback"});
@@ -150,7 +150,7 @@ def custom_behavior(request, options):
         "host data"
     );
     let second = runtime
-        .register(&script, "custom_behavior", options.clone())
+        .register(&script, "custom_behavior", params.clone())
         .await
         .unwrap();
     assert_eq!(
@@ -186,27 +186,27 @@ def custom_behavior(request, options):
     );
     for name in ["missing", "not_callable", "asynchronous"] {
         assert!(matches!(
-            runtime.register(&script, name, options.clone()).await,
+            runtime.register(&script, name, params.clone()).await,
             Err(Error::Registration)
         ));
     }
     let missing_import = scripts.write("missing_import.py", "import yasp_nonexistent_dependency\n");
     assert!(matches!(
         runtime
-            .register(&missing_import, "anything", options.clone())
+            .register(&missing_import, "anything", params.clone())
             .await,
         Err(Error::Registration)
     ));
     assert!(matches!(
         runtime
-            .register(&scripts.0.join("missing.py"), "anything", options.clone())
+            .register(&scripts.0.join("missing.py"), "anything", params.clone())
             .await,
         Err(Error::ReadScript)
     ));
     let oversized = scripts.write("too_large.py", &"#".repeat(4097));
     assert!(matches!(
         runtime
-            .register(&oversized, "anything", options.clone())
+            .register(&oversized, "anything", params.clone())
             .await,
         Err(Error::PayloadTooLarge)
     ));

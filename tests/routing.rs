@@ -690,9 +690,9 @@ fn python_routing_contract(
 import time
 from pathlib import Path
 
-def application_route(request, options):
+def application_route(request, params):
     assert set(request) == {'authenticated_user', 'client_id', 'query_id', 'sql'}
-    assert request['authenticated_user'] == options['username']
+    assert request['authenticated_user'] == params['username']
     assert isinstance(request['query_id'], int)
     sql = request['sql']
     if 'denied' in sql:
@@ -704,16 +704,16 @@ def application_route(request, options):
     if 'malformed' in sql:
         return {'target': 'absent'}
     if 'sequence' in sql:
-        return [options['one']['target'], options['one']['backend_login']]
+        return [params['one']['target'], params['one']['backend_login']]
     if 'slow' in sql:
-        Path(options['entered']).touch()
+        Path(params['entered']).touch()
         deadline = time.monotonic() + 5
-        while not Path(options['release']).exists():
+        while not Path(params['release']).exists():
             if time.monotonic() > deadline:
                 raise RuntimeError('test synchronization failed')
             time.sleep(0.005)
-        Path(options['finished']).touch()
-    return options['two'] if 'route_two' in sql else options['one']
+        Path(params['finished']).touch()
+    return params['two'] if 'route_two' in sql else params['one']
 "#,
     )
     .unwrap();
@@ -722,9 +722,9 @@ def application_route(request, options):
             queue_capacity: 1, execution_timeout_ms: 500,
             ..PythonSettings::default()
         }).await.unwrap();
-        let options = serde_json::json!({"one": route_one, "two": route_two, "username": username,
+        let params = serde_json::json!({"one": route_one, "two": route_two, "username": username,
                                          "entered": entered, "release": release, "finished": finished});
-        let selector = runtime.register(&path, "application_route", options.as_object().unwrap().clone()).await.unwrap();
+        let selector = runtime.register(&path, "application_route", params.as_object().unwrap().clone()).await.unwrap();
         let gateway = GatewayConfig::new(username.into(), password.into(), database.into()).unwrap()
             .with_settings(GatewaySettings { shutdown_timeout_ms: 50, ..GatewaySettings::default() }).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

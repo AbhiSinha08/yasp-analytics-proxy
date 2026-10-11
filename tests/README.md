@@ -8,7 +8,7 @@ unchanged; intended behavior changes can change contract expectations.
 
 The gateway integration harness reads `tests/config.yml` by default. The test YAML
 uses `version: 1`, configured PostgreSQL targets/logins, and the supported optional
-`gateway`, `routing`, `hooks`, and `backend` blocks; gateway credentials remain
+`gateway`, `hooks`, and `backend` blocks; gateway credentials remain
 environment-only. Set
 `YASP_TEST_CONFIG` only to override the config file path. The test target password is
 resolved from `YASP_TEST_TARGET_PASSWORD`. The YAML also configures the existing
@@ -42,8 +42,8 @@ YASP_TEST_CONFIG=/path/to/test-config.yml cargo test --locked --all-targets
 The optional gateway block can set PostgreSQL protocol, a loopback listener, frontend
 session/frame/SQL limits, query/read/startup/shutdown/write timeouts, and
 `tls.mode: local_development` (plaintext). Omitted values use defaults; backend frame
-size stays fixed at 8 MiB. Prepared-statement and portal limits from the full
-reference are not supported runtime settings.
+size stays fixed at 8 MiB. The loadable `config/example.yml` preserves future
+settings in commented blocks; prepared-statement and portal limits remain unsupported.
 
 The test scope exercises simple-query forwarding for supported SELECT/read-only
 WITH queries, subqueries, joins, aggregates, unions, catalog queries, and SHOW
@@ -62,7 +62,11 @@ subsequent client query; cancelled backend connections are discarded.
 `tests/routing.rs` covers two configured database routes, selector denial/failure and
 invalid-pair results, recovery on the same frontend session, per-route pool reuse,
 separate login pools on one target, and isolation during pool exhaustion.
-Configuration tests cover per-pool and total pool bounds. The routing integration
+Configuration tests load the active example without secrets or database access and
+cover per-pool/total pool bounds, Rust object/string references, empty-option inference,
+application params in both feature builds, malformed params, and rejected future
+settings. The host harness checks unknown callback names, rejects the removed routing
+block, and tests selection through explicit passthrough params. The routing integration
 test requires `logins.secondary` and its configured password environment variable.
 It verifies granted fixture reads, owner-only table denial, database connection
 restrictions, and recovery on the same frontend session. Missing credentials fail
@@ -83,7 +87,7 @@ Set `PYO3_PYTHON` for build-time selection and `LD_LIBRARY_PATH` if the matching
 shared library is outside the loader's search path; see the development setup.
 `tests/python_hooks.rs` is database-free and uses temporary application scripts with
 arbitrary function names. It checks isolated imports, persistent and distinct modules,
-fresh options, supported values, registration errors, invalid/oversized/deep output,
+fresh params, supported values, registration errors, invalid/oversized/deep output,
 queue count/byte limits, expired queue entries, and retained worker capacity after
 timeout or dropped invocation. File synchronization establishes when a callback
 is executing. Shutdown wakes waiters while that callback is still occupied.
@@ -95,7 +99,9 @@ exception text never reaches the client. No application hook is embedded or requ
 for the Rust-only tests.
 The compiled-host harness checks missing script/import and non-callable startup
 failures without exposing source or exception details; Rust-only hosts reject the
-same Python references before serving.
+same Python references before serving with a clear missing-feature error. The host
+harness compares Rust and external Python passthroughs using identical params and
+checks YAML-relative script paths independently of the working directory.
 
 The deferred scenarios below describe coverage beyond the current milestone.
 

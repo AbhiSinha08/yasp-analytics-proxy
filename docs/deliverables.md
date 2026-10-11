@@ -28,7 +28,7 @@
   - [x] **Test query routing** — Tests routing to two databases, separate connection pools, pool limits, selector errors, and recovery.
   - [x] **Test source-login access** — Checks that `local2` can read granted test data but is denied access to another database and a restricted table, then verifies the client can query again. Test usernames are in YAML; passwords are in environment variables or `.env`.
 - [x] **Python backend selector** — Execute application-supplied Python callbacks through the optional reusable runtime.
-  - [x] **External callback platform** — Registers file/function references with application options, isolated imports, persistent modules, and fresh invocation data.
+  - [x] **External callback platform** — Registers file/function references with application params, isolated imports, persistent modules, and fresh invocation data.
   - [x] **Bounded dedicated worker** — Bounds queue count, input bytes, payloads, nesting, and waiting time; retains executing work after timeout/cancellation and stops admission on shutdown.
   - [x] **Selector adapter and configuration** — Supports Python references alongside compiled Rust names, validates selected pairs, and preserves cancellation and session recovery.
   - [x] **External passthrough example** — Supplies a Python example under hooks/examples and configures ignored local.yml for manual use.

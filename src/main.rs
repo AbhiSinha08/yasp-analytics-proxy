@@ -26,7 +26,11 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
     let file = FileConfig::read(path)?;
     // The host maps names to compiled functions once, before accepting clients.
     match &file.hooks.select_backend {
-        SelectorSettings::Rust(name) if name != "builtin.select_backend.passthrough" => {
+        selector
+            if selector
+                .rust_callback()
+                .is_some_and(|name| name != "builtin.select_backend.passthrough") =>
+        {
             return Err(io::Error::other("unregistered hooks.select_backend name").into());
         }
         #[cfg(not(feature = "python"))]
@@ -111,7 +115,7 @@ async fn load_selector(
     _path: &Path,
 ) -> Result<RoutedSelector, Box<dyn std::error::Error>> {
     match &file.hooks.select_backend {
-        SelectorSettings::Rust(_) => Ok(bind_select_backend(
+        SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => Ok(bind_select_backend(
             file.default_backend()?,
             builtin::select_backend::passthrough,
         )
@@ -130,7 +134,7 @@ async fn load_selector(
                     .register(
                         &base.join(&_hook.path),
                         &_hook.callback,
-                        _hook.options.clone(),
+                        _hook.params.clone(),
                     )
                     .await?
                     .into())

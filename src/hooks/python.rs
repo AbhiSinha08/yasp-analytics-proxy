@@ -89,19 +89,19 @@ impl Drop for Inner {
     }
 }
 
-/// A registered function and its application-owned options.
+/// A registered function and its application-owned params.
 #[derive(Clone)]
 pub struct PythonCallback {
     runtime: PythonRuntime,
     id: usize,
-    options_bytes: usize,
+    params_bytes: usize,
 }
 
 enum Operation {
     Register {
         path: PathBuf,
         callback: String,
-        options: Value,
+        params: Value,
     },
     Call {
         id: usize,
@@ -124,7 +124,7 @@ struct Job {
 
 struct Registered {
     function: Py<PyAny>,
-    options: Value,
+    params: Value,
 }
 
 impl PythonRuntime {
@@ -175,17 +175,17 @@ impl PythonRuntime {
         &self,
         path: &Path,
         callback: &str,
-        options: Map<String, Value>,
+        params: Map<String, Value>,
     ) -> Result<PythonCallback, PythonHookError> {
         if !path.is_absolute() || callback.trim().is_empty() || callback.contains('\0') {
             return Err(PythonHookError::Registration);
         }
-        let options = Value::Object(options);
-        let options_bytes = payload_size(&options, self.0.settings.max_payload_bytes)?;
+        let params = Value::Object(params);
+        let params_bytes = payload_size(&params, self.0.settings.max_payload_bytes)?;
         let path_bytes = path.to_str().ok_or(PythonHookError::Registration)?.len();
         if path_bytes
             .saturating_add(callback.len())
-            .saturating_add(options_bytes)
+            .saturating_add(params_bytes)
             > self.0.settings.max_payload_bytes
         {
             return Err(PythonHookError::PayloadTooLarge);
@@ -193,7 +193,7 @@ impl PythonRuntime {
         let operation = Operation::Register {
             path: path.to_owned(),
             callback: callback.to_owned(),
-            options,
+            params,
         };
         // Reserve room for bounded script input before reading it on the worker.
         match self
@@ -203,7 +203,7 @@ impl PythonRuntime {
             Reply::Registered(id) => Ok(PythonCallback {
                 runtime: self.clone(),
                 id,
-                options_bytes,
+                params_bytes,
             }),
             Reply::Value(_) => unreachable!("registration returns a handle"),
         }
@@ -264,12 +264,12 @@ impl PythonCallback {
         &self.runtime
     }
 
-    /// Invoke function(request, options) with fresh plain Python values.
+    /// Invoke function(request, params) with fresh plain Python values.
     /// Dropping this future abandons the response, not an executing function.
     pub async fn call(&self, request: Value) -> Result<Value, PythonHookError> {
         let limit = self.runtime.0.settings.max_payload_bytes;
         let bytes = payload_size(&request, limit)?
-            .checked_add(self.options_bytes)
+            .checked_add(self.params_bytes)
             .filter(|bytes| *bytes <= limit)
             .ok_or(PythonHookError::PayloadTooLarge)?;
         match self
@@ -345,24 +345,24 @@ fn worker(mut receiver: mpsc::Receiver<Job>, stopped: watch::Receiver<bool>, lim
                 Operation::Register {
                     path,
                     callback,
-                    options,
+                    params,
                 } => {
                     let module_id = next_module;
                     next_module += 1;
-                    let function = load(py, &path, &callback, module_id, limit, &options)?;
+                    let function = load(py, &path, &callback, module_id, limit, &params)?;
                     let id = callbacks.len();
-                    callbacks.push(Registered { function, options });
+                    callbacks.push(Registered { function, params });
                     Ok(Reply::Registered(id))
                 }
                 Operation::Call { id, request } => {
                     let registered = &callbacks[id];
                     let request =
                         to_python(py, &request).map_err(|_| PythonHookError::Execution)?;
-                    let options = to_python(py, &registered.options)
+                    let params = to_python(py, &registered.params)
                         .map_err(|_| PythonHookError::Execution)?;
                     let result = registered
                         .function
-                        .call1(py, (request, options))
+                        .call1(py, (request, params))
                         .map_err(|_| PythonHookError::Execution)?;
                     let result = result.bind(py);
                     let inspect = py
@@ -395,7 +395,7 @@ fn load(
     callback: &str,
     id: usize,
     limit: usize,
-    options: &Value,
+    params: &Value,
 ) -> Result<Py<PyAny>, PythonHookError> {
     let mut source = String::new();
     File::open(path)
@@ -403,7 +403,7 @@ fn load(
         .map_err(|_| PythonHookError::ReadScript)?;
     if source
         .len()
-        .saturating_add(payload_size(options, limit)?)
+        .saturating_add(payload_size(params, limit)?)
         .saturating_add(path.as_os_str().len())
         .saturating_add(callback.len())
         > limit

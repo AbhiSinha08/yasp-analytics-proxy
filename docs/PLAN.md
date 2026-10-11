@@ -144,8 +144,8 @@ TLS is not available in this milestone.
 
 The host loads ignored `config/local.yml` by default; `--config PATH` selects another
 file. Runtime YAML uses `version: 1`, configured PostgreSQL targets/logins, optional
-`routing.default_backend` and `hooks.select_backend` entries, an optional `backend`
-capacity block, and an optional `gateway` block for the loopback listener,
+`hooks.select_backend` references with application params, shared `hooks.python`
+settings, an optional `backend` capacity block, and an optional `gateway` block for the loopback listener,
 session/frame/SQL bounds, query/read/write/startup/shutdown timeouts, and
 local-development transport mode.
 Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
@@ -327,9 +327,9 @@ an application-registered selector. `SelectionRequest` borrows the authenticated
 frontend user, client and query IDs, and `ParsedQuery`; it contains no credentials.
 `BackendSelection` names a target and backend login, while `SelectionError` distinguishes
 denial from selector failure. The built-in passthrough selector uses the sole configured
-pair automatically and requires `routing.default_backend` when multiple pairs make the
-choice ambiguous. Denials and invalid configured-pair selections map to PostgreSQL
-SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
+pair automatically with empty params; multiple pairs require explicit `target` and
+`backend_login` in `hooks.select_backend.params`. Denials and invalid configured-pair
+selections map to PostgreSQL SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
 total capacity to 16; startup rejects limits whose per-pool capacities cannot fit
 within the total.
 
@@ -338,6 +338,12 @@ to application state. Rust extensions compile into the consuming host. The repos
 `hooks/builtin/select_backend/passthrough.rs` contains its built-in selector. Reusable
 repository hooks live under `hooks/builtin` and are registered by the host. A consuming
 host maps configured names to its own compiled callbacks and loads policy data at startup.
+Rust and Python references use `type`, `callback`, and application-owned `params`;
+Python also requires a YAML-relative `path`. Rust string references are shorthand
+with empty params. Hosts parse Rust params into typed callback state before binding.
+The loadable configuration example preserves unimplemented settings in marked
+comments: future RBAC mappings belong to custom selector params, while principals
+and engine-applied result masks remain independent enforcement settings.
 Selectors choose only among configured pairs; the backend owns credentials and the
 router validates each result. Rust selection runs synchronously on the query path,
 so compiled callbacks must be fast and nonblocking and have no enforceable timeout.
@@ -424,7 +430,7 @@ RBAC policy.
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
 - Python backend selection receives a bounded dictionary of authenticated frontend
-  user, client/query IDs, and original SQL, with application-owned options. Return a
+  user, client/query IDs, and original SQL, with application-owned params. Return a
   configured target/login dictionary or None to deny. It receives no credentials or
   Rust AST. Typed binds and result batches require later contracts; keep driver
   objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
