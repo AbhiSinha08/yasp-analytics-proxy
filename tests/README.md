@@ -70,6 +70,33 @@ the test rather than skipping source-login isolation.
 The second login must be pre-provisioned and restricted; the fixture grants access
 only to disposable test data and never creates or alters PostgreSQL roles.
 
+## Python callback checks
+
+With CPython/libpython available, run both feature configurations:
+
+```sh
+cargo test --locked --all-targets --features python
+cargo test --locked --doc --features python
+```
+
+Set `PYO3_PYTHON` for build-time selection and `LD_LIBRARY_PATH` if the matching
+shared library is outside the loader's search path; see the development setup.
+`tests/python_hooks.rs` is database-free and uses temporary application scripts with
+arbitrary function names. It checks isolated imports, persistent and distinct modules,
+fresh options, supported values, registration errors, invalid/oversized/deep output,
+queue count/byte limits, expired queue entries, and retained worker capacity after
+timeout or dropped invocation. File synchronization establishes when a callback
+is executing. Shutdown wakes waiters while that callback is still occupied.
+
+The Python-feature routing scenario reuses disposable source databases. It selects
+both source logins and checks denial, failure, invalid pairs, malformed output, timeout,
+cancellation during selection, and recovery on the same frontend session. Python
+exception text never reaches the client. No application hook is embedded or required
+for the Rust-only tests.
+The compiled-host harness checks missing script/import and non-callable startup
+failures without exposing source or exception details; Rust-only hosts reject the
+same Python references before serving.
+
 The deferred scenarios below describe coverage beyond the current milestone.
 
 ## Deferred Phase 1 scenarios

@@ -185,7 +185,7 @@ See [development setup](development.md) and [test guidance](../tests/README.md).
 - Component-level test scenarios and database fixture requirements.
 - The foundation provides module boundaries; Phase 1 adds runtime capabilities.
 - An optional Python embedding example checks linking and imports without starting
-  the proxy. Python callback execution is not implemented.
+  the proxy. The Phase 1 hook runtime executes external Python callbacks.
 
 Keep modules flat until their implementations justify directories. Split workspace
 crates only when a component needs independent reuse or release.
@@ -207,7 +207,9 @@ yasp/
 │   ├── backend.rs
 │   ├── policy.rs
 │   ├── cache.rs
-│   └── hooks.rs
+│   ├── hooks.rs
+│   └── hooks/
+│       └── python.rs
 ├── config/
 │   └── example.yml
 ├── hooks/
@@ -220,7 +222,8 @@ yasp/
 │   │       └── passthrough.rs
 │   └── examples/
 │       ├── role_selector.py
-│       └── passthrough.py
+│       ├── passthrough.py
+│       └── select_backend.py
 ├── tests/
 │   ├── README.md
 │   └── fixtures/README.md
@@ -233,7 +236,7 @@ yasp/
 
 **Goal:** a read-only PostgreSQL proxy with one BI connection configuration.
 The current milestone selects configured target/login pairs with a typed Rust
-callback. Trusted BI context integration and application-owned RBAC policy remain
+callback or an external Python callback. Trusted BI context integration and application-owned RBAC policy remain
 planned work. PostgreSQL logins enforce source access; result callbacks are planned.
 
 One BI connection configuration may use multiple transport sessions through the BI
@@ -336,9 +339,9 @@ to application state. Rust extensions compile into the consuming host. The repos
 repository hooks live under `hooks/builtin` and are registered by the host. A consuming
 host maps configured names to its own compiled callbacks and loads policy data at startup.
 Selectors choose only among configured pairs; the backend owns credentials and the
-router validates each result. Selection runs synchronously on the query path, so
-callbacks must be fast and nonblocking; the engine has no dedicated callback worker
-or hard selector timeout.
+router validates each result. Rust selection runs synchronously on the query path,
+so compiled callbacks must be fast and nonblocking and have no enforceable timeout.
+Python selection uses the dedicated bounded runtime described below.
 
 - Invoke the configured selector for each executable query using its request context.
   Its decision
@@ -420,9 +423,11 @@ RBAC policy.
 - Future context integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
-- Python may receive a bounded context projection, SQL strings, typed bind metadata,
-  and bounded typed result batches in a later milestone. Keep driver objects internal;
-  Rust selectors can inspect the borrowed parsed query through `query.statement()`.
+- Python backend selection receives a bounded dictionary of authenticated frontend
+  user, client/query IDs, and original SQL, with application-owned options. Return a
+  configured target/login dictionary or None to deny. It receives no credentials or
+  Rust AST. Typed binds and result batches require later contracts; keep driver
+  objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
 - Optional before_query callbacks may propose SQL rewrites; revalidate them and
   preserve parameter positions/types. Application code owns policy interpretation.
 - Run selection before cache lookup, including on hits. It must not open connections
@@ -432,10 +437,21 @@ RBAC policy.
 - Apply optional transformations before mandatory classification/masking; no later
   extension may restore raw data. Validate types, row counts, and byte limits after
   each result callback. Hook logging must not expose raw query/result values.
-- Register application-provided Rust hooks at startup. Python callback execution is
-  a later milestone; trusted Python modules are not loaded by the current router.
-  Keep custom behavior outside engine modules. Use bounded workers outside Tokio's
-  async worker threads. Python 3.12 CPU work shares the global interpreter lock (GIL).
+- Register application-provided Rust hooks and external Python file/function references
+  at startup. The feature-gated `hooks::python` platform exposes reusable registration
+  and asynchronous invocation of trusted synchronous callbacks; backend selection is
+  its first engine integration. Query/result/lifecycle integration remains planned.
+  Python examples live under hooks/examples and are not embedded in the binary.
+  One dedicated worker runs registration and invocation outside Tokio. Python 3.12
+  CPU work shares the global interpreter lock (GIL).
+- Python imports use isolated initialization, standard-library paths, and explicitly
+  configured search paths. The default queue capacity is 32, queued-plus-active input
+  budget is 4 MiB, individual payload limit is 2 MiB, and nesting limit is 64. JSON
+  bytes are bounded; arbitrary Python heap use is not. The 2-second waiting deadline
+  includes queue time and registration. Saturation, invalid output, exceptions, and
+  timeout fail selection without fallback. Cancellation abandons the selection wait
+  with `57014`; queued expired/abandoned jobs never execute. Shutdown stops admission
+  and wakes waiters without joining running Python. See [hook contracts](../hooks/README.md).
 - Embedded Python is not a sandbox. A timeout cannot reliably terminate executing
   code; count a worker as occupied until it finishes. Enforced isolation/termination
   and parallel Python CPU execution require a separate process-worker design.
@@ -509,7 +525,7 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next implement the Python selector option, then context and client compatibility,
+Next implement context and client compatibility,
 result processing and caching, and TLS/operations. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote

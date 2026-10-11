@@ -57,6 +57,10 @@ implementation proceeds through requested subtasks
 - Routed PostgreSQL hosts construct `backend::PostgresBackends` with configured
   pairs and pool limits, then use `gateway::serve_routed`. The fixed-backend
   `gateway::serve` shares the same session and cleanup handling.
+- Reuse feature-gated `hooks::python::PythonRuntime` and `PythonCallback` for trusted
+  external Python functions. Create one runtime per process and clone it for further
+  registration. `RoutedSelector` adapts compiled Rust or Python selection; examples
+  remain under `hooks/examples`, and engine routing validates each returned pair.
 
 ## Tests
 

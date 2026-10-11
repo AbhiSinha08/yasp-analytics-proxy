@@ -185,43 +185,44 @@ fn routed_gateway_contract() {
         BackendConfig::new(source_host.clone(), port, username, password, database)
             .expect("test backend configuration is valid")
     };
-    let failure_user = source_user.clone();
-    let routes = BTreeMap::from([
-        (
-            route_one.clone(),
-            backend_config(
-                source_user.clone(),
-                source_password.clone(),
-                database_names[0].clone(),
-                source_port,
+    let make_routes = || {
+        BTreeMap::from([
+            (
+                route_one.clone(),
+                backend_config(
+                    source_user.clone(),
+                    source_password.clone(),
+                    database_names[0].clone(),
+                    source_port,
+                ),
             ),
-        ),
-        (
-            route_two.clone(),
-            backend_config(
-                second_user.clone(),
-                second_password.clone(),
-                database_names[1].clone(),
-                source_port,
+            (
+                route_two.clone(),
+                backend_config(
+                    second_user.clone(),
+                    second_password.clone(),
+                    database_names[1].clone(),
+                    source_port,
+                ),
             ),
-        ),
-        (
-            route_owner.clone(),
-            backend_config(
-                source_user.clone(),
-                source_password.clone(),
-                database_names[1].clone(),
-                source_port,
+            (
+                route_owner.clone(),
+                backend_config(
+                    source_user.clone(),
+                    source_password.clone(),
+                    database_names[1].clone(),
+                    source_port,
+                ),
             ),
-        ),
-        (
-            unreachable.clone(),
-            backend_config(failure_user, "unused".into(), "postgres".into(), 1),
-        ),
-    ]);
+            (
+                unreachable.clone(),
+                backend_config(source_user.clone(), "unused".into(), "postgres".into(), 1),
+            ),
+        ])
+    };
     let backends = Arc::new(
         PostgresBackends::new(
-            routes,
+            make_routes(),
             BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 4,
@@ -609,7 +610,201 @@ fn routed_gateway_contract() {
 
     let _ = shutdown.send(());
     server.join().expect("routed gateway task joins");
+    #[cfg(feature = "python")]
+    python_routing_contract(
+        Arc::new(
+            PostgresBackends::new(
+                make_routes(),
+                BackendSettings {
+                    max_connections_per_pool: 1,
+                    max_connections_total: 4,
+                },
+            )
+            .unwrap(),
+        ),
+        route_one,
+        route_two,
+        &gateway_user,
+        &gateway_password_for_client,
+        &gateway_database,
+        &route_one_marker,
+        &route_two_marker,
+    );
     drop(cleanup);
+}
+
+#[cfg(all(unix, feature = "python"))]
+#[allow(clippy::too_many_arguments)]
+fn python_routing_contract(
+    backends: std::sync::Arc<yasp::backend::PostgresBackends>,
+    route_one: yasp::hooks::BackendSelection,
+    route_two: yasp::hooks::BackendSelection,
+    username: &str,
+    password: &str,
+    database: &str,
+    marker_one: &str,
+    marker_two: &str,
+) {
+    use futures::SinkExt;
+    use pgwire::{
+        api::client::{
+            ClientInfo, Config, auth::DefaultStartupHandler, query::DefaultSimpleQueryHandler,
+        },
+        error::PgWireClientError,
+        messages::{PgWireFrontendMessage, cancel::CancelRequest},
+        tokio::client::{PgWireClient, PgWireMessageClientCodec},
+    };
+    use std::{
+        fs,
+        sync::Arc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        sync::oneshot,
+        time::{sleep, timeout},
+    };
+    use tokio_util::codec::Framed;
+    use yasp::{
+        config::{GatewayConfig, GatewaySettings, PythonSettings},
+        hooks::python::PythonRuntime,
+    };
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "yasp_python_route_{}_{}",
+        std::process::id(),
+        stamp
+    ));
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("application.py");
+    let entered = directory.join("entered");
+    let release = directory.join("release");
+    let finished = directory.join("finished");
+    fs::write(
+        &path,
+        r#"
+import time
+from pathlib import Path
+
+def application_route(request, options):
+    assert set(request) == {'authenticated_user', 'client_id', 'query_id', 'sql'}
+    assert request['authenticated_user'] == options['username']
+    assert isinstance(request['query_id'], int)
+    sql = request['sql']
+    if 'denied' in sql:
+        return None
+    if 'failed' in sql:
+        raise RuntimeError('private Python failure')
+    if 'unknown' in sql:
+        return {'target': 'absent', 'backend_login': 'reader'}
+    if 'malformed' in sql:
+        return {'target': 'absent'}
+    if 'sequence' in sql:
+        return [options['one']['target'], options['one']['backend_login']]
+    if 'slow' in sql:
+        Path(options['entered']).touch()
+        deadline = time.monotonic() + 5
+        while not Path(options['release']).exists():
+            if time.monotonic() > deadline:
+                raise RuntimeError('test synchronization failed')
+            time.sleep(0.005)
+        Path(options['finished']).touch()
+    return options['two'] if 'route_two' in sql else options['one']
+"#,
+    )
+    .unwrap();
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let runtime = PythonRuntime::new(PythonSettings {
+            queue_capacity: 1, execution_timeout_ms: 500,
+            ..PythonSettings::default()
+        }).await.unwrap();
+        let options = serde_json::json!({"one": route_one, "two": route_two, "username": username,
+                                         "entered": entered, "release": release, "finished": finished});
+        let selector = runtime.register(&path, "application_route", options.as_object().unwrap().clone()).await.unwrap();
+        let gateway = GatewayConfig::new(username.into(), password.into(), database.into()).unwrap()
+            .with_settings(GatewaySettings { shutdown_timeout_ms: 50, ..GatewaySettings::default() }).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown, stopped) = oneshot::channel();
+        let server = tokio::spawn(yasp::gateway::serve_routed(listener, gateway, backends, selector, async {
+            let _ = stopped.await;
+        }));
+        let mut config = Config::new();
+        config.host(address.ip().to_string()).port(address.port()).user(username).password(password).dbname(database);
+        let mut client = PgWireClient::connect(Arc::new(config), DefaultStartupHandler::new(), None).await.unwrap();
+
+        async fn marker(client: &mut PgWireClient, sql: &str) -> String {
+            let mut response = client.simple_query(DefaultSimpleQueryHandler::new(), sql).await.unwrap()
+                .remove(0).into_data_rows_reader();
+            response.next_row().unwrap().next_value::<String>().unwrap().unwrap()
+        }
+        fn code(error: PgWireClientError) -> String {
+            match error {
+                PgWireClientError::RemoteError(info) => {
+                    assert!(!info.message.contains("private Python"));
+                    info.code
+                }
+                other => panic!("unexpected frontend error: {other:?}"),
+            }
+        }
+        for (tag, expected) in [("route_one", marker_one), ("route_two", marker_two)] {
+            assert_eq!(marker(&mut client, &format!("SELECT current_database() || ':' || current_user /* {tag} */")).await, expected);
+        }
+        for (tag, expected) in [("denied", "42501"), ("failed", "XX000"), ("unknown", "42501"), ("malformed", "XX000"), ("sequence", "XX000")] {
+            let error = client.simple_query(DefaultSimpleQueryHandler::new(), &format!("SELECT 1 /* {tag} */")).await.unwrap_err();
+            assert_eq!(code(error), expected);
+            assert_eq!(marker(&mut client, "SELECT current_database() || ':' || current_user").await, marker_one);
+        }
+        for cancel in [true, false] {
+            let pid = client.process_id();
+            let secret = client.secret_key().clone();
+            let mut query = Box::pin(client.simple_query(DefaultSimpleQueryHandler::new(), "SELECT 1 /* slow */"));
+            timeout(Duration::from_secs(2), async {
+                while !entered.exists() {
+                    tokio::select! {
+                        result = &mut query => panic!("selector completed before synchronization: {result:?}"),
+                        _ = sleep(Duration::from_millis(5)) => {}
+                    }
+                }
+            }).await.unwrap();
+            if cancel {
+                let socket = TcpStream::connect(address).await.unwrap();
+                Framed::new(socket, PgWireMessageClientCodec::default())
+                    .send(PgWireFrontendMessage::CancelRequest(CancelRequest::new(pid, secret))).await.unwrap();
+            }
+            assert_eq!(code(query.await.unwrap_err()), if cancel { "57014" } else { "XX000" });
+            // Neither cancellation nor timeout releases the executing worker.
+            assert_eq!(code(client.simple_query(DefaultSimpleQueryHandler::new(), "SELECT 1").await.unwrap_err()), "XX000");
+            fs::write(&release, "").unwrap();
+            timeout(Duration::from_secs(2), async {
+                while !finished.exists() { sleep(Duration::from_millis(5)).await; }
+            }).await.unwrap();
+            timeout(Duration::from_secs(2), async {
+                loop {
+                    match client.simple_query(DefaultSimpleQueryHandler::new(), "SELECT current_database() || ':' || current_user").await {
+                        Ok(mut response) => {
+                            let mut rows = response.remove(0).into_data_rows_reader();
+                            assert_eq!(rows.next_row().unwrap().next_value::<String>().unwrap().unwrap(), marker_one);
+                            break;
+                        }
+                        Err(error) => {
+                            assert_eq!(code(error), "XX000");
+                            sleep(Duration::from_millis(5)).await;
+                        }
+                    }
+                }
+            }).await.unwrap();
+            for path in [&entered, &release, &finished] { fs::remove_file(path).unwrap(); }
+        }
+        drop(client);
+        shutdown.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    });
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[cfg(unix)]

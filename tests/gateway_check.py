@@ -471,6 +471,12 @@ def startup_checks(directory):
     duplicate_logins = config_prefix + target_key + ': ' + duplicate_login + '}}'
     secret_values = {**FRONTEND_ENV, **{key: "SECRET_MARKER_" + str(index) for index, key in enumerate(PASSWORDS)}}
     secret_file = env_file(secret_values)
+    (Path(directory) / "bad_import.py").write_text("import SECRET_MARKER_PACKAGE\n")
+    (Path(directory) / "not_callable.py").write_text("select_backend = 42\n")
+    def python_reference(script):
+        return variant(lambda config: config.update(hooks={"select_backend": {
+            "type": "python", "path": "../" + script, "callback": "select_backend"
+        }}))
     for content, secrets in [
         (None, secret_file),
         ('targets: {primary: {host: "SECRET_MARKER\n', secret_file),
@@ -490,6 +496,9 @@ def startup_checks(directory):
         (variant(lambda config: config["backend"].update(max_connections_total=0)), secret_file),
         (variant(lambda config: config["backend"].update(max_connections_total=1)), secret_file),
         (variant(lambda config: config.update(hooks={"select_backend": "unknown.hook"})), secret_file),
+        (python_reference("missing_script.py"), secret_file),
+        (python_reference("bad_import.py"), secret_file),
+        (python_reference("not_callable.py"), secret_file),
         (variant(lambda config: config.update(source={"password": "SECRET_MARKER"})), secret_file),
         (variant(lambda config: config["gateway"].update(protocol="SECRET_MARKER")), secret_file),
         (variant(lambda config: config["gateway"].update(listen="0.0.0.0:6432")), secret_file),

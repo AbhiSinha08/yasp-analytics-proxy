@@ -30,14 +30,88 @@ pub struct FileConfig {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {
-    pub select_backend: String,
+    pub select_backend: SelectorSettings,
+    pub python: PythonSettings,
 }
 
 impl Default for HooksSettings {
     fn default() -> Self {
         Self {
-            select_backend: "builtin.select_backend.passthrough".into(),
+            select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
+            python: PythonSettings::default(),
         }
+    }
+}
+
+/// Compiled callback names retain their string configuration syntax.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum SelectorSettings {
+    Rust(String),
+    Python(PythonHookSettings),
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonHookSettings {
+    #[serde(rename = "type")]
+    pub kind: PythonHookKind,
+    pub path: std::path::PathBuf,
+    pub callback: String,
+    #[cfg(feature = "python")]
+    #[serde(default)]
+    pub options: serde_json::Map<String, serde_json::Value>,
+    // A Rust-only host can read the reference and report the missing feature.
+    #[cfg(not(feature = "python"))]
+    #[serde(default, skip_serializing)]
+    pub options: serde::de::IgnoredAny,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PythonHookKind {
+    Python,
+}
+
+/// One trusted interpreter and one dedicated worker per host process.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PythonSettings {
+    pub search_paths: Vec<std::path::PathBuf>,
+    pub queue_capacity: usize,
+    pub queue_max_bytes: usize,
+    pub max_payload_bytes: usize,
+    pub execution_timeout_ms: u32,
+}
+
+impl Default for PythonSettings {
+    fn default() -> Self {
+        Self {
+            search_paths: Vec::new(),
+            queue_capacity: 32,
+            queue_max_bytes: 4 * 1024 * 1024,
+            max_payload_bytes: 2 * 1024 * 1024,
+            execution_timeout_ms: 2000,
+        }
+    }
+}
+
+impl PythonSettings {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.queue_capacity == 0
+            || self.queue_capacity > tokio::sync::Semaphore::MAX_PERMITS
+            || self.max_payload_bytes == 0
+            || self.max_payload_bytes > self.queue_max_bytes
+            || self.queue_max_bytes > u32::MAX as usize
+            || self.queue_max_bytes > tokio::sync::Semaphore::MAX_PERMITS
+            || self.execution_timeout_ms == 0
+        {
+            return Err(ConfigError::InvalidPythonLimit);
+        }
+        for path in &self.search_paths {
+            validate_value("hooks.python.search_paths", &path.to_string_lossy())?;
+        }
+        Ok(())
     }
 }
 
@@ -190,7 +264,14 @@ impl FileConfig {
             return Err(ConfigError::UnsupportedVersion);
         }
         self.gateway.validate()?;
-        validate_value("hooks.select_backend", &self.hooks.select_backend)?;
+        self.hooks.python.validate()?;
+        match &self.hooks.select_backend {
+            SelectorSettings::Rust(name) => validate_value("hooks.select_backend", name)?,
+            SelectorSettings::Python(hook) => {
+                validate_value("Python hook path", &hook.path.to_string_lossy())?;
+                validate_value("Python callback", &hook.callback)?;
+            }
+        }
         if self.backend.max_connections_per_pool == 0
             || self.backend.max_connections_total == 0
             || self.backend.max_connections_per_pool > self.backend.max_connections_total
@@ -245,7 +326,8 @@ impl FileConfig {
         }
         if let Some(default) = &self.routing.default_backend {
             self.validate_selection(default)?;
-        } else if self.hooks.select_backend == "builtin.select_backend.passthrough" {
+        } else if matches!(&self.hooks.select_backend, SelectorSettings::Rust(name) if name == "builtin.select_backend.passthrough")
+        {
             self.default_backend()?;
         }
         Ok(())
@@ -324,6 +406,38 @@ mod tests {
     }
 
     const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
+
+    #[test]
+    fn python_reference_and_runtime_bounds() {
+        let reference =
+            "{type: python, path: ../app.py, callback: custom, options: {nested: [true, null, 4]}}";
+        let mut config = make_config(
+            reference,
+            ONE_TARGET,
+            "  default_backend: null",
+            "  max_connections_per_pool: 8\n  max_connections_total: 8",
+        );
+        assert!(config.validate().is_ok());
+        let SelectorSettings::Python(hook) = &config.hooks.select_backend else {
+            panic!("Python reference expected")
+        };
+        assert_eq!(hook.path, Path::new("../app.py"));
+        assert_eq!(hook.callback, "custom");
+        config.hooks.python.queue_max_bytes = config.hooks.python.max_payload_bytes - 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidPythonLimit)
+        ));
+        for reference in [
+            "{type: python, path: app.py, callback: custom, unexpected: true}",
+            "{type: unknown, path: app.py, callback: custom}",
+        ] {
+            assert!(
+                serde_saphyr::from_str::<HooksSettings>(&format!("select_backend: {reference}"))
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn defaults_infer_one_pair_and_reject_pool_overcommit() {
@@ -425,6 +539,10 @@ pub struct GatewayConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error(
+        "Python limits must be positive, the payload must fit the byte budget, and queue bounds must fit their counters"
+    )]
+    InvalidPythonLimit,
     #[error("cannot read configuration file")]
     ReadFile(#[source] io::Error),
     #[error("configuration exceeds the 64 KiB limit")]
