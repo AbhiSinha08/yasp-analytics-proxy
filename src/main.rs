@@ -9,30 +9,38 @@ use std::{
 use tokio::{net::TcpListener, runtime::Runtime};
 use yasp::{
     backend::PostgresBackends,
-    config::{BackendConfig, BackendSettings, FileConfig, GatewayConfig},
+    config::{BackendConfig, FileConfig, GatewayConfig, SelectorSettings},
     gateway,
-    hooks::{BackendSelection, BackendSelector, bind_select_backend, builtin},
+    hooks::{BackendSelection, RoutedSelector, bind_select_backend, builtin},
     logger,
 };
 
 struct HostConfig {
     gateway: GatewayConfig,
     backends: BTreeMap<BackendSelection, BackendConfig>,
-    pool_settings: BackendSettings,
-    selector: BackendSelector,
+    file: FileConfig,
     log_level: String,
 }
 
 fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
     let file = FileConfig::read(path)?;
     // The host maps names to compiled functions once, before accepting clients.
-    if file.hooks.select_backend != "builtin.select_backend.passthrough" {
-        return Err(io::Error::other("unregistered hooks.select_backend name").into());
+    match &file.hooks.select_backend {
+        selector
+            if selector
+                .rust_callback()
+                .is_some_and(|name| name != "builtin.select_backend.passthrough") =>
+        {
+            return Err(io::Error::other("unregistered hooks.select_backend name").into());
+        }
+        #[cfg(not(feature = "python"))]
+        SelectorSettings::Python(_) => {
+            return Err(
+                io::Error::other("Python selector requires the python Cargo feature").into(),
+            );
+        }
+        _ => {}
     }
-    let selector = bind_select_backend(
-        file.default_backend()?,
-        builtin::select_backend::passthrough,
-    );
     // dotenv errors can contain source text, so expose a fixed diagnostic.
     let mut values = HashMap::new();
     match dotenvy::from_path_iter(".env") {
@@ -97,10 +105,44 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
     Ok(HostConfig {
         gateway,
         backends,
-        pool_settings: file.backend,
-        selector,
+        file,
         log_level,
     })
+}
+
+async fn load_selector(
+    file: &FileConfig,
+    _path: &Path,
+) -> Result<RoutedSelector, Box<dyn std::error::Error>> {
+    match &file.hooks.select_backend {
+        SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => Ok(bind_select_backend(
+            file.default_backend()?,
+            builtin::select_backend::passthrough,
+        )
+        .into()),
+        SelectorSettings::Python(_hook) => {
+            #[cfg(feature = "python")]
+            {
+                let config_path = _path.canonicalize()?;
+                let base = config_path.parent().expect("config file has a parent");
+                let mut settings = file.hooks.python.clone();
+                for path in &mut settings.search_paths {
+                    *path = base.join(&*path);
+                }
+                let runtime = yasp::hooks::python::PythonRuntime::new(settings).await?;
+                Ok(runtime
+                    .register(
+                        &base.join(&_hook.path),
+                        &_hook.callback,
+                        _hook.params.clone(),
+                    )
+                    .await?
+                    .into())
+            }
+            #[cfg(not(feature = "python"))]
+            Err(io::Error::other("Python selector requires the python Cargo feature").into())
+        }
+    }
 }
 
 fn main() {
@@ -124,10 +166,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let backends = Arc::new(PostgresBackends::new(host.backends, host.pool_settings)?);
+        let selector = load_selector(&host.file, &path).await?;
+        let backends = Arc::new(PostgresBackends::new(host.backends, host.file.backend)?);
         let listener = TcpListener::bind(host.gateway.settings().listen).await?;
         tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-        gateway::serve_routed(listener, host.gateway, backends, host.selector, async {
+        gateway::serve_routed(listener, host.gateway, backends, selector, async {
             #[cfg(unix)]
             {
                 let mut terminate =
@@ -141,7 +184,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(not(unix))]
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await
+        .await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
     })?;
     Ok(())
 }

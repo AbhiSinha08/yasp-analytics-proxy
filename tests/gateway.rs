@@ -87,6 +87,7 @@ fn gateway_contract() {
             serde_json::json!({
                 "config": config,
                 "default_backend": route,
+                "python_enabled": cfg!(feature = "python"),
                 "gateway": {
                     "username": gateway_username,
                     "database": gateway_database,

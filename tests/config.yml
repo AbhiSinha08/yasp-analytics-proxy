@@ -27,7 +27,10 @@ targets:
         username: local2
         password_env: YASP_TEST_SECOND_PASSWORD
 
-routing:
-  default_backend:
-    target: primary
-    backend_login: restricted
+hooks:
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
+      target: primary
+      backend_login: restricted

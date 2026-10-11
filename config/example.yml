@@ -1,4 +1,5 @@
-# Proposed full v1 configuration; the runtime currently supports only a subset.
+# Loadable local-development configuration; provision these databases and logins first.
+# Future settings are preserved in comments and are not accepted by the runtime yet.
 # *_env fields name environment variables, not literal secret values.
 # The selection callback chooses a target/login per query within configured bounds.
 version: 1
@@ -9,8 +10,9 @@ gateway:
   max_sessions: 32
   max_message_bytes: 8388608
   max_sql_bytes: 1048576
-  max_prepared_statements_per_session: 128
-  max_portals_per_session: 32
+  # Future prepared queries and portals:
+  # max_prepared_statements_per_session: 128
+  # max_portals_per_session: 32
   query_timeout_ms: 60000
   read_timeout_ms: 600000
   write_timeout_ms: 60000
@@ -47,59 +49,93 @@ targets:
         username: yasp_analyst
         password_env: YASP_SECONDARY_ANALYST_PASSWORD
 
-principals:
-  metabase:
-    scram_verifier_env: YASP_METABASE_SCRAM_VERIFIER
-    permitted_connections:
-      primary: [restricted, analyst]
-      secondary: [restricted, analyst]
+# Future frontend principals and engine-enforced connection bounds:
+# principals:
+#   metabase:
+#     scram_verifier_env: YASP_METABASE_SCRAM_VERIFIER
+#     permitted_connections:
+#       primary: [restricted, analyst]
+#       secondary: [restricted, analyst]
 
 backend:
   max_connections_per_pool: 8 # Pools are partitioned by target/login.
-  max_connections_total: 16 # Includes pinned and retiring connections.
-  connect_timeout_ms: 5000
-  acquire_timeout_ms: 5000
-  idle_transaction_timeout_ms: 30000
-  cleanup_timeout_ms: 5000
+  max_connections_total: 32 # Covers four pools of eight, including pinned/retiring connections.
+  # Future configurable backend lifecycle deadlines:
+  # connect_timeout_ms: 5000
+  # acquire_timeout_ms: 5000
+  # idle_transaction_timeout_ms: 30000
+  # cleanup_timeout_ms: 5000
 
-cache:
-  enabled: false # Enable with explicit deterministic-query approval.
-  allow_authorization_staleness: false # Enabling cache requires accepting stale source grants too.
-  url_env: YASP_REDIS_URL
-  namespace: "yasp:dev:v1"
-  ttl_seconds: 30
-  max_entry_bytes: 8388608
-  max_buffered_bytes_total: 33554432
-  operation_timeout_ms: 100
-  approved_queries: [] # Exact effective SQL strings; empty approves nothing.
+# Future authorized final-result cache:
+# cache:
+#   enabled: false # Enable with explicit deterministic-query approval.
+#   allow_authorization_staleness: false # Requires accepting stale source grants too.
+#   url_env: YASP_REDIS_URL
+#   namespace: "yasp:dev:v1"
+#   ttl_seconds: 30
+#   max_entry_bytes: 8388608
+#   max_buffered_bytes_total: 33554432
+#   operation_timeout_ms: 100
+#   approved_queries: [] # Exact effective SQL strings; empty approves nothing.
 
 hooks:
-  # The host registers its context provider before loading these trusted resources.
-  selection:
-    module: "hooks/examples/role_selector.py"
-    callback: select_backend
-  result_processing:
-    enabled: false
-    modules: ["hooks/examples/passthrough.py"]
-  worker_count: 1
-  queue_capacity: 32
-  queue_max_bytes: 4194304
-  execution_timeout_ms: 2000 # Stops waiting; an executing Python worker remains occupied.
-  result_batch_rows: 256
-  result_batch_max_bytes: 1048576
-
-policy:
-  rbac:
-    metadata_key: group # Application-defined; stock Metabase is not assumed to emit it.
-    mappings:
-      restricted:
-        target: primary
-        backend_login: restricted
-      analysts:
-        target: primary
-        backend_login: analyst
-    missing_or_unmapped: deny
-    discovery_connection: # For recognized metadata/setup operations only.
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
       target: primary
       backend_login: restricted
-  result_masks: [] # Optional presentation rules; source roles enforce RBAC.
+
+  # Python alternative: replace select_backend above and build with --features python.
+  # select_backend:
+  #   type: python
+  #   path: ../hooks/examples/select_backend.py
+  #   callback: select_backend
+  #   params:
+  #     target: primary
+  #     backend_login: restricted
+
+  python:
+    search_paths: []
+    queue_capacity: 32
+    queue_max_bytes: 4194304
+    max_payload_bytes: 2097152
+    execution_timeout_ms: 2000 # Stops waiting; executing Python retains its worker.
+
+
+  # Future custom selector: requires trusted context integration and an application hook.
+  # The host registers its context provider before loading these trusted resources.
+  # Replace select_backend above; role_selector.py is an unimplemented scaffold.
+  # select_backend:
+  #   type: python
+  #   path: ../hooks/examples/role_selector.py
+  #   callback: select_backend
+  #   params:
+  #     rbac:
+  #       metadata_key: group # Application-defined; stock Metabase is not assumed to emit it.
+  #       mappings:
+  #         restricted:
+  #           target: primary
+  #           backend_login: restricted
+  #         analysts:
+  #           target: primary
+  #           backend_login: analyst
+  #       missing_or_unmapped: deny
+  #       discovery_connection: # For recognized metadata/setup operations only.
+  #         target: primary
+  #         backend_login: restricted
+
+  # Future ordered result callbacks; stage contracts are not implemented yet.
+  # result_processing:
+  #   enabled: false
+  #   callbacks:
+  #     - type: python
+  #       path: ../hooks/examples/passthrough.py
+  #       callback: after_result
+  #       params: {}
+  #   result_batch_rows: 256
+  #   result_batch_max_bytes: 1048576
+
+# Future engine-applied masks, independent of optional result callbacks:
+# policy:
+#   result_masks: [] # Optional presentation rules; source roles enforce RBAC.

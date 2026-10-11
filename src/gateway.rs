@@ -3,7 +3,7 @@
 use crate::{
     backend::{PostgresBackend, PostgresBackends},
     config::{GatewayConfig, GatewaySettings},
-    hooks::{BackendSelector, SelectionError, SelectionRequest},
+    hooks::{RoutedSelector, SelectionError, SelectionRequest},
     logger,
     query::{ParsedQuery, QueryError},
     transport::FrameGuard,
@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use pgwire::{
     api::{
-        ClientInfo, DefaultClient, NoopHandler, PgWireConnectionState,
+        ClientInfo, ConnectionHandle, ConnectionManager, DefaultClient, NoopHandler,
+        PgWireConnectionState,
         auth::{
             AuthSource, DefaultServerParameterProvider, LoginInfo, Password,
             sasl::{
@@ -38,6 +39,9 @@ use tokio::{
 };
 use tokio_util::codec::Framed;
 
+const MAX_CANCEL_CONNECTIONS: usize = 8;
+const CANCEL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Serve on a host-owned loopback listener (port 0 is useful in tests).
 /// Stop accepting on shutdown, then close sessions after the configured drain timeout.
 pub async fn serve(
@@ -55,13 +59,16 @@ pub async fn serve_routed(
     listener: TcpListener,
     config: GatewayConfig,
     backends: Arc<PostgresBackends>,
-    selector: BackendSelector,
+    selector: impl Into<RoutedSelector>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
     serve_sessions(
         listener,
         config,
-        Execution::Routed { backends, selector },
+        Execution::Routed {
+            backends,
+            selector: selector.into(),
+        },
         shutdown,
     )
     .await
@@ -71,23 +78,26 @@ enum Execution {
     Fixed(Arc<PostgresBackend>),
     Routed {
         backends: Arc<PostgresBackends>,
-        selector: BackendSelector,
+        selector: RoutedSelector,
     },
 }
 
 impl Execution {
-    fn select(&self, request: &SelectionRequest<'_>) -> PgWireResult<&PostgresBackend> {
+    async fn select(&self, request: &SelectionRequest<'_>) -> PgWireResult<&PostgresBackend> {
         match self {
             Self::Fixed(backend) => Ok(backend),
             Self::Routed { backends, selector } => {
-                let route = selector(request).map_err(|error| match error {
-                    SelectionError::Denied => {
-                        protocol_error("ERROR", "42501", "backend selection denied")
-                    }
-                    SelectionError::Failed => {
-                        protocol_error("ERROR", "XX000", "backend selection failed")
-                    }
-                })?;
+                let route = selector
+                    .select(request)
+                    .await
+                    .map_err(|error| match error {
+                        SelectionError::Denied => {
+                            protocol_error("ERROR", "42501", "backend selection denied")
+                        }
+                        SelectionError::Failed => {
+                            protocol_error("ERROR", "XX000", "backend selection failed")
+                        }
+                    })?;
                 let backend = backends.get(&route).ok_or_else(|| {
                     protocol_error("ERROR", "42501", "backend selection is not configured")
                 })?;
@@ -106,7 +116,16 @@ impl Execution {
     fn close(&self) {
         match self {
             Self::Fixed(backend) => backend.close(),
-            Self::Routed { backends, .. } => backends.close(),
+            Self::Routed { backends, selector } => {
+                selector.shutdown();
+                backends.close();
+            }
+        }
+    }
+
+    fn stop_hooks(&self) {
+        if let Self::Routed { selector, .. } = self {
+            selector.shutdown();
         }
     }
 }
@@ -125,6 +144,7 @@ async fn serve_sessions(
     }
     let settings = Arc::new(config.settings);
     let execution = Arc::new(execution);
+    let cancel_manager = Arc::new(ConnectionManager::new());
     let salt = random_nonce().into_bytes();
     let password = Password::new(
         Some(salt.clone()),
@@ -152,7 +172,10 @@ async fn serve_sessions(
                     Ok(accepted) => accepted,
                     Err(error) => break Err(error),
                 };
-                if sessions.len() >= settings.max_sessions {
+                let session_limit = settings.max_sessions;
+                let cancel_only = sessions.len() >= session_limit;
+                // CancelRequest uses a new connection, even when all client slots are occupied.
+                if sessions.len() >= session_limit.saturating_add(MAX_CANCEL_CONNECTIONS) {
                     tracing::warn!(%peer, "gateway session limit reached");
                     continue;
                 }
@@ -160,9 +183,20 @@ async fn serve_sessions(
                 let source = source.clone();
                 let execution = execution.clone();
                 let settings = settings.clone();
+                let cancel_manager = cancel_manager.clone();
                 sessions.spawn(async move {
                     tracing::info!(client_id, %peer, "client connected");
-                    if let Err(error) = connection(socket, source, execution, settings, client_id).await {
+                    if let Err(error) = connection(
+                        socket,
+                        source,
+                        execution,
+                        settings,
+                        cancel_manager,
+                        cancel_only,
+                        client_id,
+                    )
+                    .await
+                    {
                         // Protocol errors can contain client data. Log only their category.
                         tracing::error!(client_id, %peer, kind = ?error.kind(), "client session failed");
                     }
@@ -173,6 +207,7 @@ async fn serve_sessions(
     };
     drop(listener);
     tracing::info!("gateway shutting down");
+    execution.stop_hooks();
     if timeout(
         Duration::from_millis(u64::from(settings.shutdown_timeout_ms)),
         async { while sessions.join_next().await.is_some() {} },
@@ -222,6 +257,8 @@ async fn connection(
     source: Arc<Credentials>,
     execution: Arc<Execution>,
     settings: Arc<GatewaySettings>,
+    cancel_manager: Arc<ConnectionManager>,
+    cancel_only: bool,
     client_id: u64,
 ) -> io::Result<()> {
     let write_timeout = settings.write_timeout();
@@ -243,10 +280,16 @@ async fn connection(
     // SASL state belongs to one session; only immutable salted credentials are shared.
     let auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
-            .with_scram(ScramAuth::new(source.clone())),
+            .with_scram(ScramAuth::new(source.clone()))
+            .with_connection_manager(cancel_manager.clone()),
     );
     let noop = Arc::new(NoopHandler);
-    let deadline = Instant::now() + Duration::from_millis(u64::from(settings.startup_timeout_ms));
+    let startup_timeout = if cancel_only {
+        CANCEL_CONNECTION_TIMEOUT
+    } else {
+        Duration::from_millis(u64::from(settings.startup_timeout_ms))
+    };
+    let deadline = Instant::now() + startup_timeout;
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
     loop {
@@ -264,10 +307,19 @@ async fn connection(
         };
         let message = message
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid frontend frame"))?;
-        if matches!(
-            message,
-            PgWireFrontendMessage::Terminate(_) | PgWireFrontendMessage::CancelRequest(_)
-        ) {
+        if matches!(&message, PgWireFrontendMessage::Terminate(_)) {
+            return Ok(());
+        }
+        if let PgWireFrontendMessage::CancelRequest(cancel) = &message {
+            cancel_manager.cancel(cancel.pid, &cancel.secret_key).await;
+            return Ok(());
+        }
+        if cancel_only
+            && !matches!(
+                &message,
+                PgWireFrontendMessage::SslNegotiation(SslNegotiationMetaMessage::None)
+            )
+        {
             return Ok(());
         }
         if authenticated
@@ -282,8 +334,14 @@ async fn connection(
                 sql = ?query.query,
                 "query received"
             );
+            let cancel = socket
+                .session_extensions()
+                .get::<Arc<ConnectionHandle>>()
+                .expect("authenticated session has a registered cancellation handle")
+                .start_query()
+                .await;
             let result = tokio::select! {
-                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username) => result,
+                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username, cancel) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
@@ -445,6 +503,7 @@ async fn disconnected(socket: &TcpStream) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_query(
     socket: &mut Framed<FrameGuard, PgWireMessageServerCodec<String>>,
     execution: &Execution,
@@ -453,6 +512,7 @@ async fn execute_query(
     query_id: u64,
     client_id: u64,
     authenticated_user: &str,
+    mut cancel: futures::channel::oneshot::Receiver<()>,
 ) -> PgWireResult<()> {
     let write_timeout = settings.write_timeout();
     let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
@@ -483,12 +543,17 @@ async fn execute_query(
     query
         .validate_read_only()
         .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
-    let backend = execution.select(&SelectionRequest {
+    let request = SelectionRequest {
         authenticated_user,
         client_id,
         query_id,
         query: &query,
-    })?;
+    };
+    let backend = tokio::select! {
+        biased;
+        _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+        result = execution.select(&request) => result?,
+    };
     tracing::debug!(
         query_id,
         client_id,
@@ -498,6 +563,12 @@ async fn execute_query(
         "query sent to backend"
     );
     backend
-        .execute(&query, socket, settings.query_timeout(), write_timeout)
+        .execute_with_cancel(
+            &query,
+            socket,
+            settings.query_timeout(),
+            write_timeout,
+            cancel,
+        )
         .await
 }

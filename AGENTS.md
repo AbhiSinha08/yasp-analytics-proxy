@@ -51,12 +51,20 @@ implementation proceeds through requested subtasks
   import organization code or interpret hard-coded organization metadata formats.
 - Reuse `hooks::bind_select_backend` for compiled routing callbacks and
   `hooks::builtin::select_backend::passthrough` for a configured default route.
-  The host maps names at startup. Add reusable repository hooks under
+  Configure Rust/Python references with `type`, `callback`, and application-owned
+  `params`; Python also requires a file `path`. The host parses Rust params into
+  typed state and maps names at startup. Passthrough selection belongs in its params,
+  and the loadable example preserves future settings in commented blocks.
+  Add reusable repository hooks under
   `hooks/builtin`; application-specific callbacks belong in the consuming host.
   Add lifecycle contracts only when their milestone is active.
 - Routed PostgreSQL hosts construct `backend::PostgresBackends` with configured
   pairs and pool limits, then use `gateway::serve_routed`. The fixed-backend
   `gateway::serve` shares the same session and cleanup handling.
+- Reuse feature-gated `hooks::python::PythonRuntime` and `PythonCallback` for trusted
+  external Python functions. Create one runtime per process and clone it for further
+  registration. `RoutedSelector` adapts compiled Rust or Python selection; examples
+  remain under `hooks/examples`, and engine routing validates each returned pair.
 
 ## Tests
 

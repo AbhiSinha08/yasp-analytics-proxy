@@ -19,14 +19,15 @@ use pgwire::{
     },
     error::{ErrorInfo, PgWireClientError, PgWireError, PgWireResult},
     messages::{
-        PgWireBackendMessage, PgWireFrontendMessage, ProtocolVersion, data::DataRow,
-        response::TransactionStatus, simplequery::Query, startup::SecretKey,
+        PgWireBackendMessage, PgWireFrontendMessage, ProtocolVersion, cancel::CancelRequest,
+        data::DataRow, response::TransactionStatus, simplequery::Query, startup::SecretKey,
     },
     tokio::client::PgWireMessageClientCodec,
 };
 use std::{
     collections::BTreeMap,
     fmt, io,
+    net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -34,7 +35,7 @@ use std::{
 };
 use tokio::{
     net::TcpStream,
-    time::{Instant, timeout},
+    time::{Instant, timeout, timeout_at},
 };
 use tokio_util::codec::Framed;
 
@@ -107,6 +108,40 @@ impl PostgresBackend {
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
+        self.execute_inner(query, output, query_timeout, write_timeout, None)
+            .await
+    }
+
+    pub(crate) async fn execute_with_cancel<S>(
+        &self,
+        query: &ParsedQuery,
+        output: &mut S,
+        query_timeout: Duration,
+        write_timeout: Duration,
+        cancel: futures::channel::oneshot::Receiver<()>,
+    ) -> PgWireResult<()>
+    where
+        S: Sink<PgWireBackendMessage> + Unpin + Send,
+        S::Error: fmt::Debug,
+        PgWireError: From<S::Error>,
+    {
+        self.execute_inner(query, output, query_timeout, write_timeout, Some(cancel))
+            .await
+    }
+
+    async fn execute_inner<S>(
+        &self,
+        query: &ParsedQuery,
+        output: &mut S,
+        query_timeout: Duration,
+        write_timeout: Duration,
+        cancel: Option<futures::channel::oneshot::Receiver<()>>,
+    ) -> PgWireResult<()>
+    where
+        S: Sink<PgWireBackendMessage> + Unpin + Send,
+        S::Error: fmt::Debug,
+        PgWireError: From<S::Error>,
+    {
         query
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
@@ -123,6 +158,7 @@ impl PostgresBackend {
         let connection = lease.0.as_mut().unwrap();
         connection.clean = false;
         connection.query_complete = false;
+        connection.cancel_requested = false;
         // The gateway owns execution policy; PostgreSQL also enforces that budget.
         // Local settings end at rollback and cannot leak to the next pool borrower.
         let transaction = format!(
@@ -140,8 +176,9 @@ impl PostgresBackend {
             ));
         }
         let completion = connection
-            .stream_query(query.sql(), output, query_timeout, write_timeout)
+            .stream_query(query.sql(), output, query_timeout, write_timeout, cancel)
             .await;
+        let cancel_requested = connection.cancel_requested;
         // A cancelled future may have unread protocol messages. Its lease is
         // discarded; it must never enter the pool's idle queue.
         if !connection.query_complete {
@@ -180,14 +217,18 @@ impl PostgresBackend {
         let message = match completion {
             Ok(message) => message,
             Err(error) => {
-                lease.release();
+                if !cancel_requested {
+                    lease.release();
+                }
                 return Err(error);
             }
         };
         timeout(write_timeout, output.send(message))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out"))??;
-        lease.release();
+        if !cancel_requested {
+            lease.release();
+        }
         Ok(())
     }
 
@@ -277,6 +318,7 @@ impl Manager for PgManager {
             ));
         }
         socket.set_nodelay(true)?;
+        let address = socket.peer_addr()?;
         let mut connection = PgConnection {
             socket: Framed::new(
                 FrameGuard::backend(socket),
@@ -285,9 +327,11 @@ impl Manager for PgManager {
             config: self.config.clone(),
             info: ServerInformation::default(),
             protocol: self.config.get_protocol_version(),
+            address,
             status: TransactionStatus::Idle,
             clean: false,
             query_complete: false,
+            cancel_requested: false,
         };
         let mut auth = DefaultStartupHandler::new();
         auth.startup(&mut connection).await.map_err(client_error)?;
@@ -356,9 +400,11 @@ struct PgConnection {
     config: Arc<Config>,
     info: ServerInformation,
     protocol: ProtocolVersion,
+    address: SocketAddr,
     status: TransactionStatus,
     clean: bool,
     query_complete: bool,
+    cancel_requested: bool,
 }
 
 impl PgConnection {
@@ -406,6 +452,7 @@ impl PgConnection {
         output: &mut S,
         query_timeout: Duration,
         write_timeout: Duration,
+        cancel: Option<futures::channel::oneshot::Receiver<()>>,
     ) -> PgWireResult<PgWireBackendMessage>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
@@ -423,13 +470,39 @@ impl PgConnection {
         let mut remaining = query_timeout.saturating_sub(started.elapsed());
         let mut completion = None;
         let mut error = None;
+        let cancel_signal = async move {
+            match cancel {
+                Some(receiver) => {
+                    if receiver.await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(cancel_signal);
+        let mut cancel_sent = false;
         loop {
             // Frontend backpressure has its own write deadline and does not
             // consume the backend wait budget. PostgreSQL also limits execution.
             let started = Instant::now();
-            let received = timeout(remaining, self.socket.next())
-                .await
-                .map_err(|_| error_response("57014", "PostgreSQL query timed out"))?;
+            let received = tokio::select! {
+                biased;
+                received = timeout(remaining, self.socket.next()) => received,
+                _ = &mut cancel_signal, if !cancel_sent => {
+                    cancel_sent = true;
+                    self.cancel_requested = true;
+                    send_cancel_request(
+                        self.address,
+                        self.info.process_id,
+                        self.info.secret_key.clone(),
+                        remaining.min(CONNECT_TIMEOUT),
+                    ).await?;
+                    remaining = remaining.saturating_sub(started.elapsed());
+                    continue;
+                }
+            }
+            .map_err(|_| error_response("57014", "PostgreSQL query timed out"))?;
             remaining = remaining.saturating_sub(started.elapsed());
             let message = match received {
                 Some(Ok(message)) => message,
@@ -498,6 +571,28 @@ impl PgConnection {
             }
         }
     }
+}
+
+async fn send_cancel_request(
+    address: SocketAddr,
+    process_id: i32,
+    secret_key: SecretKey,
+    budget: Duration,
+) -> PgWireResult<()> {
+    let deadline = Instant::now() + budget;
+    let socket = timeout_at(deadline, TcpStream::connect(address))
+        .await
+        .map_err(|_| error_response("08006", "PostgreSQL cancellation connection timed out"))??;
+    let mut socket = Framed::new(socket, PgWireMessageClientCodec::default());
+    timeout_at(
+        deadline,
+        socket.send(PgWireFrontendMessage::CancelRequest(CancelRequest::new(
+            process_id, secret_key,
+        ))),
+    )
+    .await
+    .map_err(|_| error_response("08006", "PostgreSQL cancellation send timed out"))??;
+    Ok(())
 }
 
 fn validate_text_row(row: &DataRow) -> PgWireResult<()> {

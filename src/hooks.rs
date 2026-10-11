@@ -7,6 +7,9 @@ use thiserror::Error;
 #[path = "../hooks/builtin/mod.rs"]
 pub mod builtin;
 
+#[cfg(feature = "python")]
+pub mod python;
+
 /// Query and authenticated identity supplied to a backend selector.
 pub struct SelectionRequest<'a> {
     pub authenticated_user: &'a str,
@@ -34,6 +37,71 @@ pub enum SelectionError {
 pub type BackendSelector = Arc<
     dyn for<'a> Fn(&SelectionRequest<'a>) -> Result<BackendSelection, SelectionError> + Send + Sync,
 >;
+
+/// Registered selection behavior; the router owns validation and acquisition.
+pub enum RoutedSelector {
+    Rust(BackendSelector),
+    #[cfg(feature = "python")]
+    Python(python::PythonCallback),
+}
+
+impl From<BackendSelector> for RoutedSelector {
+    fn from(selector: BackendSelector) -> Self {
+        Self::Rust(selector)
+    }
+}
+
+#[cfg(feature = "python")]
+impl From<python::PythonCallback> for RoutedSelector {
+    fn from(callback: python::PythonCallback) -> Self {
+        Self::Python(callback)
+    }
+}
+
+impl RoutedSelector {
+    pub async fn select(
+        &self,
+        request: &SelectionRequest<'_>,
+    ) -> Result<BackendSelection, SelectionError> {
+        match self {
+            Self::Rust(selector) => selector(request),
+            #[cfg(feature = "python")]
+            Self::Python(callback) => {
+                let value = callback.call(serde_json::json!({
+                    "authenticated_user": request.authenticated_user,
+                    "client_id": request.client_id,
+                    "query_id": request.query_id,
+                    "sql": request.query.sql(),
+                })).await.map_err(|error| {
+                    tracing::error!(query_id = request.query_id, client_id = request.client_id, category = %error, "Python selector failed");
+                    SelectionError::Failed
+                })?;
+                if value.is_null() {
+                    return Err(SelectionError::Denied);
+                }
+                if !value.is_object() {
+                    return Err(SelectionError::Failed);
+                }
+                let selected: BackendSelection =
+                    serde_json::from_value(value).map_err(|_| SelectionError::Failed)?;
+                if [&selected.target, &selected.backend_login]
+                    .iter()
+                    .any(|name| name.trim().is_empty() || name.contains('\0'))
+                {
+                    return Err(SelectionError::Failed);
+                }
+                Ok(selected)
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        #[cfg(feature = "python")]
+        if let Self::Python(callback) = self {
+            callback.runtime().shutdown();
+        }
+    }
+}
 
 /// Bind host-owned state to a callback while retaining the query's borrow.
 /// Callbacks execute in the query task and must be trusted, fast, and nonblocking.

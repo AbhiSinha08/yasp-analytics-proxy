@@ -120,6 +120,12 @@ or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AS
 inspection. Results preserve PostgreSQL column metadata and stream text rows without
 driver value conversion.
 
+Clients can cancel an active simple query with PostgreSQL's dedicated `CancelRequest`.
+The gateway matches its per-session cancel key to the active request and forwards a
+cancel request to the selected backend connection. A cancelled backend lease is
+discarded so a delayed cancel cannot affect a later pool borrower. The client receives
+SQLSTATE `57014` and can continue using the same frontend session.
+
 SQL parsing defaults to a 1 MiB byte limit, with 4,096 significant tokens and a parser
 recursion limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported.
 Incoming frontend frames default to 8 MiB; backend frames have a fixed 8 MiB limit,
@@ -138,8 +144,8 @@ TLS is not available in this milestone.
 
 The host loads ignored `config/local.yml` by default; `--config PATH` selects another
 file. Runtime YAML uses `version: 1`, configured PostgreSQL targets/logins, optional
-`routing.default_backend` and `hooks.select_backend` entries, an optional `backend`
-capacity block, and an optional `gateway` block for the loopback listener,
+`hooks.select_backend` references with application params, shared `hooks.python`
+settings, an optional `backend` capacity block, and an optional `gateway` block for the loopback listener,
 session/frame/SQL bounds, query/read/write/startup/shutdown timeouts, and
 local-development transport mode.
 Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
@@ -163,10 +169,10 @@ set to `postgres` for test database administration and the target secret named
 loads the SQL fixture, runs the proxy against that database, and drops only the
 database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
 The runtime creates no application database or persistent data fixture.
-Client transactions, PostgreSQL cancel requests, prepared statements, `SET`, binary
-results, organization-specific RBAC interpretation, query/result hooks, caching, TLS,
-and BI-client integration are not implemented. The routing milestone below implements
-selection contracts, configured target/login validation, and bounded PostgreSQL pools.
+Client transactions, prepared statements, `SET`, binary results, organization-specific
+RBAC interpretation, query/result hooks, caching, TLS, and BI-client integration are
+not implemented. The routing milestone below implements selection contracts,
+configured target/login validation, and bounded PostgreSQL pools.
 See [development setup](development.md) and [test guidance](../tests/README.md).
 
 ## Phase 0 — Project foundation
@@ -179,7 +185,7 @@ See [development setup](development.md) and [test guidance](../tests/README.md).
 - Component-level test scenarios and database fixture requirements.
 - The foundation provides module boundaries; Phase 1 adds runtime capabilities.
 - An optional Python embedding example checks linking and imports without starting
-  the proxy. Python callback execution is not implemented.
+  the proxy. The Phase 1 hook runtime executes external Python callbacks.
 
 Keep modules flat until their implementations justify directories. Split workspace
 crates only when a component needs independent reuse or release.
@@ -201,7 +207,9 @@ yasp/
 │   ├── backend.rs
 │   ├── policy.rs
 │   ├── cache.rs
-│   └── hooks.rs
+│   ├── hooks.rs
+│   └── hooks/
+│       └── python.rs
 ├── config/
 │   └── example.yml
 ├── hooks/
@@ -214,7 +222,8 @@ yasp/
 │   │       └── passthrough.rs
 │   └── examples/
 │       ├── role_selector.py
-│       └── passthrough.py
+│       ├── passthrough.py
+│       └── select_backend.py
 ├── tests/
 │   ├── README.md
 │   └── fixtures/README.md
@@ -227,7 +236,7 @@ yasp/
 
 **Goal:** a read-only PostgreSQL proxy with one BI connection configuration.
 The current milestone selects configured target/login pairs with a typed Rust
-callback. Trusted BI context integration and application-owned RBAC policy remain
+callback or an external Python callback. Trusted BI context integration and application-owned RBAC policy remain
 planned work. PostgreSQL logins enforce source access; result callbacks are planned.
 
 One BI connection configuration may use multiple transport sessions through the BI
@@ -318,9 +327,9 @@ an application-registered selector. `SelectionRequest` borrows the authenticated
 frontend user, client and query IDs, and `ParsedQuery`; it contains no credentials.
 `BackendSelection` names a target and backend login, while `SelectionError` distinguishes
 denial from selector failure. The built-in passthrough selector uses the sole configured
-pair automatically and requires `routing.default_backend` when multiple pairs make the
-choice ambiguous. Denials and invalid configured-pair selections map to PostgreSQL
-SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
+pair automatically with empty params; multiple pairs require explicit `target` and
+`backend_login` in `hooks.select_backend.params`. Denials and invalid configured-pair
+selections map to PostgreSQL SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
 total capacity to 16; startup rejects limits whose per-pool capacities cannot fit
 within the total.
 
@@ -329,10 +338,16 @@ to application state. Rust extensions compile into the consuming host. The repos
 `hooks/builtin/select_backend/passthrough.rs` contains its built-in selector. Reusable
 repository hooks live under `hooks/builtin` and are registered by the host. A consuming
 host maps configured names to its own compiled callbacks and loads policy data at startup.
+Rust and Python references use `type`, `callback`, and application-owned `params`;
+Python also requires a YAML-relative `path`. Rust string references are shorthand
+with empty params. Hosts parse Rust params into typed callback state before binding.
+The loadable configuration example preserves unimplemented settings in marked
+comments: future RBAC mappings belong to custom selector params, while principals
+and engine-applied result masks remain independent enforcement settings.
 Selectors choose only among configured pairs; the backend owns credentials and the
-router validates each result. Selection runs synchronously on the query path, so
-callbacks must be fast and nonblocking; the engine has no dedicated callback worker
-or hard selector timeout.
+router validates each result. Rust selection runs synchronously on the query path,
+so compiled callbacks must be fast and nonblocking and have no enforceable timeout.
+Python selection uses the dedicated bounded runtime described below.
 
 - Invoke the configured selector for each executable query using its request context.
   Its decision
@@ -414,9 +429,11 @@ RBAC policy.
 - Future context integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
-- Python may receive a bounded context projection, SQL strings, typed bind metadata,
-  and bounded typed result batches in a later milestone. Keep driver objects internal;
-  Rust selectors can inspect the borrowed parsed query through `query.statement()`.
+- Python backend selection receives a bounded dictionary of authenticated frontend
+  user, client/query IDs, and original SQL, with application-owned params. Return a
+  configured target/login dictionary or None to deny. It receives no credentials or
+  Rust AST. Typed binds and result batches require later contracts; keep driver
+  objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
 - Optional before_query callbacks may propose SQL rewrites; revalidate them and
   preserve parameter positions/types. Application code owns policy interpretation.
 - Run selection before cache lookup, including on hits. It must not open connections
@@ -426,10 +443,21 @@ RBAC policy.
 - Apply optional transformations before mandatory classification/masking; no later
   extension may restore raw data. Validate types, row counts, and byte limits after
   each result callback. Hook logging must not expose raw query/result values.
-- Register application-provided Rust hooks at startup. Python callback execution is
-  a later milestone; trusted Python modules are not loaded by the current router.
-  Keep custom behavior outside engine modules. Use bounded workers outside Tokio's
-  async worker threads. Python 3.12 CPU work shares the global interpreter lock (GIL).
+- Register application-provided Rust hooks and external Python file/function references
+  at startup. The feature-gated `hooks::python` platform exposes reusable registration
+  and asynchronous invocation of trusted synchronous callbacks; backend selection is
+  its first engine integration. Query/result/lifecycle integration remains planned.
+  Python examples live under hooks/examples and are not embedded in the binary.
+  One dedicated worker runs registration and invocation outside Tokio. Python 3.12
+  CPU work shares the global interpreter lock (GIL).
+- Python imports use isolated initialization, standard-library paths, and explicitly
+  configured search paths. The default queue capacity is 32, queued-plus-active input
+  budget is 4 MiB, individual payload limit is 2 MiB, and nesting limit is 64. JSON
+  bytes are bounded; arbitrary Python heap use is not. The 2-second waiting deadline
+  includes queue time and registration. Saturation, invalid output, exceptions, and
+  timeout fail selection without fallback. Cancellation abandons the selection wait
+  with `57014`; queued expired/abandoned jobs never execute. Shutdown stops admission
+  and wakes waiters without joining running Python. See [hook contracts](../hooks/README.md).
 - Embedded Python is not a sandbox. A timeout cannot reliably terminate executing
   code; count a worker as occupied until it finishes. Enforced isolation/termination
   and parallel Python CPU execution require a separate process-worker design.
@@ -503,8 +531,8 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next implement the Python selector option, then PostgreSQL cancellation, context and
-client compatibility, result processing and caching, and TLS/operations. Add basic
+Next implement context and client compatibility,
+result processing and caching, and TLS/operations. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote
 an item when a concrete BI compatibility requirement needs it.
