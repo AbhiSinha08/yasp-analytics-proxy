@@ -109,6 +109,14 @@ queue count/byte limits, expired queue entries, and retained worker capacity aft
 timeout or dropped invocation. File synchronization establishes when a callback
 is executing. Shutdown wakes waiters while that callback is still occupied.
 
+`tests/context.rs` checks asynchronous Rust derivation, per-request data, encoded
+context bounds, and default context after errors or timeout. `tests/context_gateway.rs`
+checks fixed-backend serving, cancellation and session recovery, disconnection, and
+shutdown while a context callback is pending. The Python callback scenario also
+checks context copies between hooks, extractor imports, and failure defaults. The
+cache scenario checks ordered context propagation and hits across different contexts
+within the existing replay scope.
+
 The Python-feature routing scenario reuses disposable source databases. It selects
 both source logins and checks denial, failure, invalid pairs, malformed output, timeout,
 cancellation during selection, and recovery on the same frontend session. Python
@@ -136,7 +144,8 @@ The deferred scenarios below describe coverage beyond the current milestone.
    endpoint in the integration environment. Capture actual context availability and
    test discovery, native/query-builder/prepared/background work with BI caching
    disabled. Verify shared discovery is safe for that deployment and untrusted request
-   data cannot elevate selection.
+   data cannot elevate selection. Exercise context derivation and default-empty
+   behavior with synthetic requests; this does not verify a real BI metadata format.
 3. **Source RBAC and extended routing:** queries on one frontend session with different
    trusted BI metadata select different source-role credentials and receive the data
    permitted by those roles. Exercise idle reuse, denied missing or unmapped metadata,
@@ -146,13 +155,15 @@ The deferred scenarios below describe coverage beyond the current milestone.
    A bare BEGIN followed by a routed query pins that route; metadata-free rollback
    succeeds after a denied query. Prepared metadata cannot silently change when the
    role/target changes. Transaction-state cleanup after cancellation remains deferred.
-4. **Extensions:** application-supplied context derivation and hooks execute through
-   library contracts without changes to core modules; the selector consumes policy without receiving
-   passwords; selection runs before cache hits; rewrites preserve binds, result
-   batches preserve schema, and errors/saturation follow documented limits.
-   A timed-out Python callback keeps its worker permit; queue bytes and transformed
-   output are bounded. Required imports fail at startup. Rust-only builds need no
-   interpreter. Optional transformations cannot run after mandatory masks.
+4. **Extensions:** application-supplied context and selection callbacks execute
+   through library contracts; selection receives context without backend passwords.
+   Context runs once after validation and before selection/cache eligibility, including
+   on hits. Verify empty context for callback errors, malformed/oversized output,
+   timeout, and saturation, and verify cancellation stops the query. A timed-out
+   Python callback keeps its worker reservation. Required imports fail at startup;
+   Rust-only builds need no interpreter. Real BI metadata extraction remains a
+   separate live-client verification. Rewrites, result batches, and masks remain
+   future scenarios until those hooks are implemented.
 5. **Operations:** backend loss, pool exhaustion, slow consumers, oversized results,
    and shutdown release resources. Compare performance with direct database access.
    Include one oversized row/frame, total pool capacity across targets, idle

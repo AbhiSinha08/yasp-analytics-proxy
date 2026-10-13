@@ -13,7 +13,7 @@ use yasp::{
     config::{BackendConfig, FileConfig, GatewayConfig, SelectorSettings},
     gateway,
     hooks::{
-        BackendSelection, CacheEligibility, RoutedSelector, bind_cache_eligibility,
+        BackendSelection, CacheEligibility, ContextHook, RoutedSelector, bind_cache_eligibility,
         bind_select_backend, builtin,
     },
     logger,
@@ -30,6 +30,21 @@ struct HostConfig {
 fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
     let file = FileConfig::read(path)?;
     // The host maps names to compiled functions once, before accepting clients.
+    if file
+        .hooks
+        .context
+        .as_ref()
+        .and_then(SelectorSettings::rust_callback)
+        .is_some()
+    {
+        return Err(io::Error::other("unregistered hooks.context name").into());
+    }
+    #[cfg(not(feature = "python"))]
+    if matches!(file.hooks.context, Some(SelectorSettings::Python(_))) {
+        return Err(
+            io::Error::other("Python context hook requires the python Cargo feature").into(),
+        );
+    }
     match &file.hooks.select_backend {
         selector
             if selector
@@ -137,7 +152,14 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
 async fn load_hooks(
     file: &FileConfig,
     _path: &Path,
-) -> Result<(RoutedSelector, Option<CacheEligibility>), Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        RoutedSelector,
+        Option<CacheEligibility>,
+        Option<ContextHook>,
+    ),
+    Box<dyn std::error::Error>,
+> {
     #[cfg(feature = "python")]
     let config_path = _path.canonicalize()?;
     #[cfg(feature = "python")]
@@ -145,6 +167,7 @@ async fn load_hooks(
     #[cfg(feature = "python")]
     let runtime = if matches!(file.hooks.select_backend, SelectorSettings::Python(_))
         || matches!(file.cache.eligibility, Some(SelectorSettings::Python(_)))
+        || matches!(file.hooks.context, Some(SelectorSettings::Python(_)))
     {
         let mut settings = file.hooks.python.clone();
         for path in &mut settings.search_paths {
@@ -153,6 +176,34 @@ async fn load_hooks(
         Some(yasp::hooks::python::PythonRuntime::new(settings).await?)
     } else {
         None
+    };
+    let context = match &file.hooks.context {
+        None => None,
+        Some(SelectorSettings::Python(_hook)) => {
+            #[cfg(feature = "python")]
+            {
+                Some(
+                    runtime
+                        .as_ref()
+                        .expect("Python context hook has a runtime")
+                        .register(
+                            &base.join(&_hook.path),
+                            &_hook.callback,
+                            _hook.params.clone(),
+                        )
+                        .await?
+                        .into(),
+                )
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                return Err(io::Error::other(
+                    "Python context hook requires the python Cargo feature",
+                )
+                .into());
+            }
+        }
+        Some(_) => return Err(io::Error::other("unregistered hooks.context name").into()),
     };
     let selector: Result<RoutedSelector, Box<dyn std::error::Error>> = match &file
         .hooks
@@ -239,7 +290,7 @@ async fn load_hooks(
             }
         }
     };
-    Ok((selector, eligibility))
+    Ok((selector, eligibility, context))
 }
 
 fn main() {
@@ -263,7 +314,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let (selector, eligibility) = load_hooks(&host.file, &path).await?;
+        let (selector, eligibility, context) = load_hooks(&host.file, &path).await?;
         let gateway = if let Some(url) = &host.cache_url {
             host.gateway.with_cache(Arc::new(RedisCache::new(
                 host.file.cache.clone(),
@@ -272,6 +323,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             )?))
         } else {
             host.gateway
+        };
+        let gateway = if let Some(context) = context {
+            gateway.with_context_hook(context)
+        } else {
+            gateway
         };
         let backends = Arc::new(PostgresBackends::new(host.backends, host.file.backend)?);
         let listener = TcpListener::bind(gateway.settings().listen).await?;

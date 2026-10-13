@@ -18,7 +18,7 @@ fn redis_cache_contract() {
         backend::PostgresBackends,
         cache::RedisCache,
         config::{BackendConfig, BackendSettings, FileConfig, GatewayConfig},
-        hooks::{BackendSelection, bind_cache_eligibility, bind_select_backend},
+        hooks::{BackendSelection, bind_cache_eligibility, bind_context, bind_select_backend},
         query::ParsedQuery,
     };
 
@@ -133,6 +133,117 @@ fn redis_cache_contract() {
     assert_success(&normalized_hit, "normalized timestamp query");
     assert_eq!(stdout(&first).trim(), stdout(&normalized_hit).trim());
     assert_eq!(selection_count.load(Ordering::SeqCst), 2);
+
+    let context_namespace = format!("{namespace}_context");
+    let context_observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let context_sequence = Arc::new(AtomicUsize::new(0));
+    let context_hook = bind_context((), {
+        let context_sequence = context_sequence.clone();
+        move |request, _state| {
+            let snapshot = context_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+            let authenticated_user = request.authenticated_user.to_owned();
+            Box::pin(async move {
+                let mut context = serde_json::Map::new();
+                context.insert("snapshot".into(), serde_json::json!(snapshot));
+                context.insert(
+                    "authenticated_user".into(),
+                    serde_json::json!("spoofed-user"),
+                );
+                context.insert("derived_for".into(), serde_json::json!(authenticated_user));
+                Ok(context)
+            })
+        }
+    });
+    let context_selector = bind_select_backend(
+        (route(&default.backend_login), context_observations.clone()),
+        |request, (selected, observations)| {
+            let context = request.context;
+            observations.lock().unwrap().push((
+                "selector",
+                context["snapshot"].as_u64().unwrap(),
+                request.authenticated_user.to_owned(),
+                context["authenticated_user"].as_str().unwrap().to_owned(),
+                context["derived_for"].as_str().unwrap().to_owned(),
+            ));
+            Ok(selected.clone())
+        },
+    );
+    let context_eligibility =
+        bind_cache_eligibility(context_observations.clone(), |request, observations| {
+            let context = request.context;
+            observations.lock().unwrap().push((
+                "eligibility",
+                context["snapshot"].as_u64().unwrap(),
+                request.authenticated_user.to_owned(),
+                context["authenticated_user"].as_str().unwrap().to_owned(),
+                context["derived_for"].as_str().unwrap().to_owned(),
+            ));
+            Ok(true)
+        });
+    let context_cache = Arc::new(
+        RedisCache::new(
+            settings(&context_namespace, 60, 5, 16384),
+            &redis_url,
+            Some(context_eligibility.into()),
+        )
+        .expect("context test cache initializes"),
+    );
+    let context_gateway = GatewayConfig::new(user.clone(), password.clone(), database.clone())
+        .expect("frontend identity is valid")
+        .with_cache(context_cache)
+        .with_context_hook(context_hook);
+    let (context_address, context_shutdown, context_server) =
+        start_server(context_gateway, make_backends(), context_selector);
+    let normalized_context_hit =
+        |query: &str| psql(query, &context_address, &user, &password, &database);
+    let context_first = normalized_context_hit("SELECT clock_timestamp()");
+    let context_second = normalized_context_hit("  select  clock_timestamp() ;  ");
+    assert_success(&context_first, "first context-aware query");
+    assert_success(&context_second, "normalized context-aware cache hit");
+    assert_eq!(
+        stdout(&context_first).trim(),
+        stdout(&context_second).trim()
+    );
+    assert_eq!(context_sequence.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *context_observations.lock().unwrap(),
+        vec![
+            (
+                "selector",
+                1,
+                user.clone(),
+                "spoofed-user".into(),
+                user.clone()
+            ),
+            (
+                "eligibility",
+                1,
+                user.clone(),
+                "spoofed-user".into(),
+                user.clone()
+            ),
+            (
+                "selector",
+                2,
+                user.clone(),
+                "spoofed-user".into(),
+                user.clone()
+            ),
+            (
+                "eligibility",
+                2,
+                user.clone(),
+                "spoofed-user".into(),
+                user.clone()
+            ),
+        ]
+    );
+    assert!(redis_exists(
+        &redis_url,
+        &cache_key(&context_namespace, "SELECT clock_timestamp()")
+    ));
+    let _ = context_shutdown.send(());
+    context_server.join().expect("context gateway joins");
     selector_denied.store(true, Ordering::SeqCst);
     let denied = client("SELECT clock_timestamp()");
     assert!(!denied.status.success());
@@ -735,6 +846,14 @@ def eligibility(request, params):
             .args(["-u", &redis_url, "DEL", &key])
             .output();
     }
+    let _ = Command::new("redis-cli")
+        .args([
+            "-u",
+            &redis_url,
+            "DEL",
+            &cache_key(&context_namespace, "SELECT clock_timestamp()"),
+        ])
+        .output();
 }
 
 #[cfg(unix)]

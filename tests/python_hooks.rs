@@ -10,7 +10,11 @@ use std::{
 use tokio::time::{sleep, timeout};
 use yasp::{
     config::PythonSettings,
-    hooks::python::{PythonHookError as Error, PythonRuntime},
+    hooks::{
+        CacheEligibility, ContextHook, ContextRequest, RoutedSelector, SelectionRequest,
+        python::{PythonHookError as Error, PythonRuntime},
+    },
+    query::ParsedQuery,
 };
 
 struct Scripts(PathBuf);
@@ -47,6 +51,16 @@ async fn wait_file(path: &Path) {
     })
     .await
     .expect("Python reaches synchronization point");
+}
+
+fn context_request(query: &ParsedQuery) -> ContextRequest<'_> {
+    ContextRequest {
+        authenticated_user: "bi-service",
+        frontend_database: "analytics",
+        client_id: 1,
+        query_id: query.query_id(),
+        query,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -237,6 +251,122 @@ def custom_behavior(request, params):
     assert_eq!(callback.call(deep).await, Err(Error::PayloadTooLarge));
 
     // Deadline and count bound: queued expiry never invokes application code.
+    let context_script = scripts.write("derive_context.py", r#"
+import time
+import yasp_extractors
+
+def context(request, params):
+    sql = request['sql']
+    if 'helpers' in sql:
+        for helper in (yasp_extractors.metabase, yasp_extractors.superset, yasp_extractors.redash):
+            try:
+                helper(sql)
+            except NotImplementedError:
+                pass
+            else:
+                raise RuntimeError('placeholder must not emit claims')
+        return None
+    if 'empty' in sql:
+        return None
+    if 'raise' in sql:
+        raise RuntimeError('private identity lookup detail')
+    if 'invalid' in sql:
+        return []
+    if 'large' in sql:
+        return {'data': 'x' * 8192}
+    if 'deep' in sql:
+        data = None
+        for _ in range(65):
+            data = [data]
+        return {'data': data}
+    if 'slow' in sql:
+        time.sleep(0.1)
+    return {'principal': {'email': params['email']}, 'frontend': request['authenticated_user'],
+            'database': request['frontend_database'], 'sql': sql, 'query_id': request['query_id']}
+
+def select(request, params):
+    request['context']['principal']['email'] = 'changed by selector'
+    return {'target': 'primary', 'backend_login': 'reader'}
+
+def eligible(request, params):
+    return request['context']['principal']['email'] == 'viewer@example.test' and request['authenticated_user'] == 'bi-service'
+"#);
+    let context: ContextHook = runtime
+        .register(
+            &context_script,
+            "context",
+            json!({"email": "viewer@example.test"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .await
+        .unwrap()
+        .into();
+    let query = ParsedQuery::parse("SELECT 1 /* original SQL */").unwrap();
+    let derived = context
+        .derive(context_request(&query), Duration::from_secs(1), 1024)
+        .await;
+    assert_eq!(derived["frontend"], "bi-service");
+    assert_eq!(derived["database"], "analytics");
+    assert_eq!(derived["sql"], query.sql());
+    assert_eq!(derived["query_id"], query.query_id());
+    let downstream = SelectionRequest {
+        authenticated_user: "bi-service",
+        client_id: 1,
+        query_id: query.query_id(),
+        query: &query,
+        context: &derived,
+    };
+    let selector: RoutedSelector = runtime
+        .register(&context_script, "select", Default::default())
+        .await
+        .unwrap()
+        .into();
+    let eligibility: CacheEligibility = runtime
+        .register(&context_script, "eligible", Default::default())
+        .await
+        .unwrap()
+        .into();
+    assert_eq!(
+        selector.select(&downstream).await.unwrap().backend_login,
+        "reader"
+    );
+    assert!(
+        eligibility.eligible(&downstream).await.unwrap(),
+        "Python stages receive independent context copies"
+    );
+    for mode in ["empty", "helpers", "raise", "invalid", "large", "deep"] {
+        let query = ParsedQuery::parse(&format!("SELECT 1 /* {mode} */")).unwrap();
+        assert!(
+            context
+                .derive(context_request(&query), Duration::from_secs(1), 1024)
+                .await
+                .is_empty(),
+            "{mode} uses the default context"
+        );
+    }
+    assert!(
+        context
+            .derive(context_request(&query), Duration::from_secs(1), 32)
+            .await
+            .is_empty()
+    );
+    let slow = ParsedQuery::parse("SELECT 1 /* slow */").unwrap();
+    assert!(
+        context
+            .derive(context_request(&slow), Duration::from_millis(5), 1024)
+            .await
+            .is_empty()
+    );
+    // The next invocation queues behind the late result, then returns its own snapshot.
+    assert_eq!(
+        context
+            .derive(context_request(&query), Duration::from_secs(1), 1024)
+            .await,
+        derived
+    );
+
     let entered = scripts.0.join("entered");
     let release = scripts.0.join("release");
     let finished = scripts.0.join("finished");
@@ -253,6 +383,13 @@ def custom_behavior(request, params):
         _ = sleep(Duration::from_millis(10)) => {}
     }
     assert_eq!(callback.call(json!({})).await, Err(Error::Saturated));
+    assert!(
+        context
+            .derive(context_request(&query), Duration::from_secs(1), 1024)
+            .await
+            .is_empty(),
+        "saturated context uses default permissions"
+    );
     assert_eq!(active.await.unwrap(), Err(Error::TimedOut));
     assert_eq!(queued.await, Err(Error::TimedOut));
     assert_eq!(

@@ -90,16 +90,88 @@ CancelRequest cancels selection waits or active backend queries. Transactions an
 prepared statements remain later gateway capabilities.
 
 The current selector request does not claim to authenticate each BI viewer or derive
-organization-specific metadata. Applications must supply trusted context and policy
-data appropriate to their deployment. BI client compatibility, RBAC policy, and
-per-viewer identity remain separate integration work.
+organization-specific metadata by itself. An optional context hook can derive
+application data before selection; it does not verify that client metadata is trusted.
+BI client compatibility, RBAC policy, and per-viewer identity remain separate
+integration work.
+
+## Context derivation
+
+The optional `hooks.context` provider runs once for each validated executable query,
+after SQL validation and before backend selection and cache eligibility. It also runs
+for cache hits. The Rust `ContextRequest` borrows the authenticated frontend user,
+frontend database, client ID, query ID, and `ParsedQuery`; it does not expose backend
+credentials. `bind_context(state, f)` accepts an async closure over the request and
+`Arc<State>`, returning a boxed future that produces an owned JSON object or
+`ContextError`.
+
+Python references use the same `type`, `callback`, and `params` fields plus `path`.
+The callback signature is `function(request, params)` and returns a dictionary or
+`None`. The Python request is a JSON projection of available frontend and query
+fields, including SQL; Python receives copied data. Downstream selection receives
+the derived context as nested plain data. Authenticated frontend identity remains
+separately available and cannot be replaced by the context provider.
+
+The default context timeout is 2 seconds, the encoded context limit is 65,536 bytes,
+and maximum nesting is 64. Runtime errors, invalid output, timeout, or saturation
+produce empty context and do not deny the query. Cancellation while waiting returns
+`57014` and stops the query. Invalid startup configuration, imports, or callback
+registration fail startup. The Python runtime keeps its existing single worker and
+retains capacity for timed-out code until it returns.
+
+A Rust host can bind an asynchronous provider and attach it to its gateway config:
+
+```rust
+use futures::future::BoxFuture;
+use serde_json::{Map, Value};
+use std::sync::Arc;
+use yasp::{
+    config::GatewayConfig,
+    hooks::{bind_context, ContextError, ContextRequest},
+};
+
+fn gateway(password: String) -> Result<GatewayConfig, Box<dyn std::error::Error>> {
+    let context = bind_context(
+        "analytics".to_owned(),
+        |request: ContextRequest<'_>, team: Arc<String>| {
+            Box::pin(async move {
+                let mut derived = Map::new();
+                derived.insert("team".into(), Value::String((*team).clone()));
+                derived.insert(
+                    "database".into(),
+                    Value::String(request.frontend_database.to_owned()),
+                );
+                Ok(derived)
+            }) as BoxFuture<'_, Result<Map<String, Value>, ContextError>>
+        },
+    );
+    Ok(GatewayConfig::new("gateway_user".into(), password, "analytics".into())?
+        .with_context_hook(context))
+}
+```
+
+The Python example accepts optional `source`, `identity_key`, and `identities` params.
+The latter two describe a host-owned mapping applied only when its chosen extractor
+returns the named metadata field; the placeholder extractors currently return no
+metadata.
+
+Context does not change cache keys or scope, partition cache entries, or bypass the
+cache. Source-role database permissions remain the active access-control boundary.
+RBAC interpretation and result processing remain application and future-phase work.
+
+`hooks::builtin::extractors` includes named Metabase, Superset, and Redash helpers
+that each accept SQL text and return `NotImplemented`. With the Python feature,
+`yasp_extractors` exposes the same helper names and raises `NotImplementedError`.
+They do not claim to parse live BI metadata. The optional
+[Python example](examples/context.py) shows where an application-specific provider
+can call an extractor and perform its own lookup; by default it returns `None`.
 
 ## External Python callbacks
 
 Enable the `python` Cargo feature to use `hooks::python::PythonRuntime` and
 `PythonCallback`. Register trusted application files before opening the listener.
 The platform can invoke any named synchronous function with the signature
-`function(request, params)`; backend selection is its first engine integration.
+`function(request, params)`; backend selection and context derivation use it.
 UTF-8 Python files are deployment resources, not compiled into the binary. The runnable
 passthrough example is [examples/select_backend.py](examples/select_backend.py).
 
@@ -118,7 +190,7 @@ async fn example() -> Result<(), Box<dyn std::error::Error>> {
     let _decision = callback.call(json!({
         "authenticated_user": "analytics", "client_id": 1,
         "query_id": "bdf5d5f3a17adf8be49df9e3b9540cef0ab907dff6635b3a020e38b90ed5bf74",
-        "sql": "SELECT 1",
+        "sql": "SELECT 1", "context": {},
     })).await?;
     // gateway::serve_routed adapts this callback and validates selected pairs.
     runtime.shutdown();
@@ -138,8 +210,9 @@ built-in types; no pickle, driver objects, or automatic native-value conversions
 used. The nesting limit is 64. Future result hooks need their own lossless value
 contract; this boundary is not a database result codec.
 
-The selector receives exactly `authenticated_user`, `client_id`, `query_id`, and
-original `sql`. It receives no backend credentials or Rust AST. Return exactly
+The selector receives `authenticated_user`, `client_id`, `query_id`, original `sql`,
+and the derived `context` mapping. It receives no backend credentials or Rust AST.
+Return exactly
 `{"target": "configured target", "backend_login": "configured login"}` with
 nonempty strings, or `None` to deny. Denial and unconfigured pairs produce `42501`.
 Invalid output, exceptions, saturation, or timeout produce a redacted `XX000`;
@@ -200,10 +273,11 @@ effective-SQL SHA-256 query ID for its key and logs.
 
 ## Later hook capabilities
 
-Query rewrites, result processing, lifecycle hooks, and BI metadata extraction remain
-planned capabilities. Rust selectors can inspect the borrowed PostgreSQL statement
-tree through `request.query.statement()`; driver objects remain internal. Python
-selection uses the bounded request projection described above.
+Query rewrites, result processing, and lifecycle hooks remain planned capabilities.
+The named BI extraction functions are placeholders pending observed client metadata.
+Rust selectors can inspect the borrowed PostgreSQL statement tree through
+`request.query.statement()`; driver objects remain internal. Python selection uses
+the bounded request projection described above.
 
 ## Python dependencies
 

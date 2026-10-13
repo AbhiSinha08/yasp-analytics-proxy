@@ -475,8 +475,8 @@ def startup_checks(directory):
     secret_file = env_file(secret_values)
     (Path(directory) / "bad_import.py").write_text("import SECRET_MARKER_PACKAGE\n")
     (Path(directory) / "not_callable.py").write_text("select_backend = 42\n")
-    def python_reference(script):
-        return variant(lambda config: config.update(hooks={"select_backend": {
+    def python_reference(script, slot="select_backend"):
+        return variant(lambda config: config["hooks"].update({slot: {
             "type": "python", "path": "../" + script, "callback": "select_backend"
         }}))
     for content, secrets in [
@@ -512,6 +512,10 @@ def startup_checks(directory):
         (variant(lambda config: config["backend"].update(max_connections_total=1)), secret_file),
         (variant(lambda config: config.update(hooks={"select_backend": "unknown.hook"})), secret_file),
         (variant(lambda config: config["hooks"]["select_backend"].update(callback="unknown.hook")), secret_file),
+        (variant(lambda config: config["hooks"].update(context="unknown.context")), secret_file),
+        (python_reference("missing_script.py", "context"), secret_file),
+        (python_reference("bad_import.py", "context"), secret_file),
+        (python_reference("not_callable.py", "context"), secret_file),
         (python_reference("missing_script.py"), secret_file),
         (python_reference("bad_import.py"), secret_file),
         (python_reference("not_callable.py"), secret_file),
@@ -523,6 +527,8 @@ def startup_checks(directory):
         (variant(lambda config: config["gateway"].update(max_message_bytes=7)), secret_file),
         (variant(lambda config: config["gateway"].update(max_message_bytes=2147483648)), secret_file),
         (variant(lambda config: config["gateway"].update(max_sql_bytes=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(max_context_bytes=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(context_timeout_ms=0)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=0)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=2147483648)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=4294967296)), secret_file),
@@ -637,6 +643,83 @@ def routing_config_checks(directory):
             assert result.returncode != 0
             assert b"requires the python Cargo feature" in result.stderr
 
+    finally:
+        ADDRESS = previous_address
+
+
+def context_config_checks(directory):
+    global ADDRESS
+    previous_address = ADDRESS
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        ADDRESS = available.getsockname()
+    custom = json.loads(json.dumps(CONFIG))
+    custom["gateway"].update(listen=f"{ADDRESS[0]}:{ADDRESS[1]}", context_timeout_ms=25, max_context_bytes=128)
+    custom["hooks"]["context"] = {
+        "type": "python", "path": "../context_hooks.py", "callback": "derive",
+        "params": {"username": GATEWAY["username"], "database": GATEWAY["database"]},
+    }
+    (Path(directory) / "context_hooks.py").write_text("""
+import time
+import yasp_extractors
+
+def derive(request, params):
+    assert request['authenticated_user'] == params['username']
+    assert request['frontend_database'] == params['database']
+    assert len(request['query_id']) == 64
+    sql = request['sql']
+    if 'context_raise' in sql:
+        raise RuntimeError('SECRET_MARKER_lookup_detail')
+    if 'context_invalid' in sql:
+        return []
+    if 'context_large' in sql:
+        return {'value': 'x' * 256}
+    if 'context_slow' in sql:
+        time.sleep(0.1)
+        return {'deny': True}
+    if 'context_helpers' in sql:
+        for helper in (yasp_extractors.metabase, yasp_extractors.superset, yasp_extractors.redash):
+            try:
+                helper(sql)
+            except NotImplementedError:
+                pass
+        return None
+    return {'deny': True} if 'context_deny' in sql else None
+
+def select(request, params):
+    return None if request['context'].get('deny') else params
+""")
+    custom_path = Path(directory) / "config/context.yml"
+    custom_path.write_text(json.dumps(custom))
+    try:
+        if not INPUT["python_enabled"]:
+            result = subprocess.run([BINARY, "--config", str(custom_path)], cwd=directory,
+                                    env=ENV | FRONTEND_ENV | PASSWORDS, capture_output=True, timeout=3)
+            assert result.returncode != 0
+            assert b"Python context hook requires the python Cargo feature" in result.stderr
+            return
+        # A context-only registration initializes the shared Python runtime.
+        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+            wait_ready(process)
+            assert psql("SELECT 1 /* context_helpers */").stdout.strip() == "1"
+        custom["hooks"]["select_backend"] = {
+            "type": "python", "path": "../context_hooks.py", "callback": "select", "params": default_route,
+        }
+        custom_path.write_text(json.dumps(custom))
+        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+            wait_ready(process)
+            with authenticated_socket() as stream:
+                stream.sendall(packet(b"Q", b"SELECT 1 /* context_deny */\0"))
+                denied = responses(stream)
+                assert [kind for kind, _ in denied] == [b"E", b"Z"]
+                assert b"C42501\0" in denied[0][1]
+                for tag in ["missing", "raise", "invalid", "large", "slow", "helpers"]:
+                    stream.sendall(packet(b"Q", f"SELECT 2 /* context_{tag} */".encode() + b"\0"))
+                    result = responses(stream)
+                    assert [kind for kind, _ in result] == [b"T", b"D", b"C", b"Z"], tag
+                    assert result[1][1] == b"\0\1\0\0\0\x012"
+                stream.sendall(packet(b"Q", b"SELECT 1 /* context_deny */\0"))
+                assert b"C42501\0" in responses(stream)[0][1], "late/default context cannot replace a later snapshot"
     finally:
         ADDRESS = previous_address
 
@@ -775,6 +858,7 @@ def main():
 
             custom_config_checks(directory)
             routing_config_checks(directory)
+            context_config_checks(directory)
             gateway_settings_checks(directory)
         with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as reusable:
             reusable.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

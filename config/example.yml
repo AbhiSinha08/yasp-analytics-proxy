@@ -18,6 +18,8 @@ gateway:
   write_timeout_ms: 60000
   startup_timeout_ms: 120000
   shutdown_timeout_ms: 10000
+  context_timeout_ms: 2000
+  max_context_bytes: 65536
   tls:
     mode: local_development # Non-local deployments require certificates.
 
@@ -112,10 +114,18 @@ hooks:
     max_payload_bytes: 2097152
     execution_timeout_ms: 2000 # Stops waiting; executing Python retains its worker.
 
+  # Optional context provider runs after validation, before selection/cache checks.
+  # Errors produce an empty context; they do not deny the query.
+  # context:
+  #   type: python
+  #   path: ../hooks/examples/context.py
+  #   callback: derive_context
+  #   params: {}
 
-  # Future custom selector: requires trusted context integration and an application hook.
-  # The host registers its context provider before loading these trusted resources.
-  # Replace select_backend above; role_selector.py is an unimplemented scaffold.
+
+  # Application-specific selector example: context and role policy remain host-owned.
+  # Replace select_backend above after validating metadata and implementing the policy.
+  # role_selector.py is an unimplemented scaffold.
   # select_backend:
   #   type: python
   #   path: ../hooks/examples/role_selector.py
