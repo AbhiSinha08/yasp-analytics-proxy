@@ -42,7 +42,7 @@ use tokio_util::codec::Framed;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
-const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET default_transaction_read_only = on; SET client_connection_check_interval = '1s'";
+pub(crate) const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET default_transaction_read_only = on; SET client_connection_check_interval = '1s'";
 
 /// One target/login pool. No organization routing or callback policy is embedded.
 pub struct PostgresBackend {
@@ -110,8 +110,10 @@ impl PostgresBackend {
     {
         self.execute_inner(query, output, query_timeout, write_timeout, None)
             .await
+            .map(|_| ())
     }
 
+    /// True permits caching: cleanup completed and no cancellation was delivered.
     pub(crate) async fn execute_with_cancel<S>(
         &self,
         query: &ParsedQuery,
@@ -119,7 +121,7 @@ impl PostgresBackend {
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: futures::channel::oneshot::Receiver<()>,
-    ) -> PgWireResult<()>
+    ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
@@ -136,7 +138,7 @@ impl PostgresBackend {
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: Option<futures::channel::oneshot::Receiver<()>>,
-    ) -> PgWireResult<()>
+    ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
@@ -182,7 +184,7 @@ impl PostgresBackend {
         // A cancelled future may have unread protocol messages. Its lease is
         // discarded; it must never enter the pool's idle queue.
         if !connection.query_complete {
-            return completion.map(|_| ());
+            return completion.map(|_| false);
         }
         if connection.status != TransactionStatus::Transaction
             && connection.status != TransactionStatus::Error
@@ -229,7 +231,7 @@ impl PostgresBackend {
         if !cancel_requested {
             lease.release();
         }
-        Ok(())
+        Ok(!cancel_requested)
     }
 
     pub(crate) fn close(&self) {
@@ -596,8 +598,11 @@ async fn send_cancel_request(
 }
 
 fn validate_text_row(row: &DataRow) -> PgWireResult<()> {
-    let mut data = row.data.as_ref();
-    for _ in 0..row.field_count {
+    validate_text_fields(row.field_count, row.data.as_ref())
+}
+
+pub(crate) fn validate_text_fields(field_count: i16, mut data: &[u8]) -> PgWireResult<()> {
+    for _ in 0..field_count {
         let length = data
             .get(..4)
             .ok_or_else(|| error_response("08006", "invalid PostgreSQL row"))?;
@@ -614,7 +619,7 @@ fn validate_text_row(row: &DataRow) -> PgWireResult<()> {
             .map_err(|_| error_response("0A000", "PostgreSQL text must remain UTF8"))?;
         data = rest;
     }
-    if row.field_count < 0 || !data.is_empty() {
+    if field_count < 0 || !data.is_empty() {
         return Err(error_response("08006", "invalid PostgreSQL row"));
     }
     Ok(())

@@ -1,6 +1,7 @@
 //! PostgreSQL query syntax and read-only inspection. The SQL and its parsed tree
 //! share one lifetime; consumers inspect the tree without reparsing the SQL.
 
+use sha2::{Digest, Sha256};
 use sqlparser::{
     ast::{
         Expr, FunctionArg, FunctionArgExpr, FunctionArguments, Query, Select, Value, Visit, Visitor,
@@ -9,7 +10,7 @@ use sqlparser::{
     parser::Parser,
     tokenizer::{Token, Tokenizer},
 };
-use std::ops::ControlFlow;
+use std::{collections::HashMap, ops::ControlFlow};
 use thiserror::Error;
 
 pub use sqlparser::ast::Statement;
@@ -23,6 +24,7 @@ const MAX_SQL_TOKENS: usize = 4096;
 pub struct ParsedQuery {
     sql: String,
     statement: Statement,
+    query_id: String,
 }
 
 #[derive(Debug, Error)]
@@ -74,6 +76,7 @@ impl ParsedQuery {
         }) {
             return Err(QueryError::Unsupported);
         }
+        let query_id = query_id(sql, &tokens);
         let mut statements = Parser::new(&dialect)
             .with_recursion_limit(64)
             .with_tokens_with_locations(tokens)
@@ -87,11 +90,17 @@ impl ParsedQuery {
         Ok(Self {
             sql: sql.to_owned(),
             statement: statements.remove(0),
+            query_id,
         })
     }
 
     pub fn sql(&self) -> &str {
         &self.sql
+    }
+
+    /// Stable lowercase SHA-256 identifier for this query's normalized tokens.
+    pub fn query_id(&self) -> &str {
+        &self.query_id
     }
 
     /// Rust extensions can borrow this same tree. A future SQL rewrite must
@@ -107,6 +116,104 @@ impl ParsedQuery {
             Ok(())
         }
     }
+}
+
+fn query_id(sql: &str, tokens: &[sqlparser::tokenizer::TokenWithSpan]) -> String {
+    let end = tokens
+        .iter()
+        .rposition(|token| !matches!(&token.token, Token::Whitespace(_) | Token::EOF))
+        .map(|index| {
+            let mut end = index + 1;
+            while end > 0 && matches!(tokens[end - 1].token, Token::SemiColon) {
+                end -= 1;
+                while end > 0 && matches!(tokens[end - 1].token, Token::Whitespace(_)) {
+                    end -= 1;
+                }
+            }
+            end
+        })
+        .unwrap_or(0);
+    let significant = tokens[..end]
+        .iter()
+        .filter(|token| !matches!(&token.token, Token::Whitespace(_) | Token::EOF))
+        .collect::<Vec<_>>();
+    let locations = significant
+        .iter()
+        .flat_map(|token| [token.span.start, token.span.end])
+        .collect::<std::collections::HashSet<_>>();
+    let mut offsets = HashMap::with_capacity(locations.len());
+    let mut line = 1;
+    let mut column = 1;
+    for (offset, ch) in sql.char_indices() {
+        if locations.contains(&sqlparser::tokenizer::Location::new(line, column)) {
+            offsets.insert(sqlparser::tokenizer::Location::new(line, column), offset);
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    if locations.contains(&sqlparser::tokenizer::Location::new(line, column)) {
+        offsets.insert(sqlparser::tokenizer::Location::new(line, column), sql.len());
+    }
+
+    let mut hash = Sha256::new();
+    let mut previous_is_string = false;
+    let mut previous_end = None;
+    for token in significant {
+        let start = offsets[&token.span.start];
+        if let Some(previous_end) = previous_end {
+            let newline = sql[previous_end..start].contains(['\n', '\r']);
+            hash.update([
+                if previous_is_string && is_string(&token.token) && newline {
+                    2
+                } else {
+                    1
+                },
+            ]);
+        }
+        let finish = offsets[&token.span.end];
+        let raw = &sql[start..finish];
+        let normalized;
+        let spelling = match &token.token {
+            Token::Word(word) if word.quote_style.is_none() => {
+                normalized = raw.to_ascii_lowercase();
+                normalized.as_bytes()
+            }
+            _ => raw.as_bytes(),
+        };
+        hash.update((spelling.len() as u64).to_be_bytes());
+        hash.update(spelling);
+        previous_is_string = is_string(&token.token);
+        previous_end = Some(finish);
+    }
+    let digest = hash.finalize();
+    let mut result = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        write!(result, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    result
+}
+
+fn is_string(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::SingleQuotedString(_)
+            | Token::TripleSingleQuotedString(_)
+            | Token::DollarQuotedString(_)
+            | Token::SingleQuotedByteStringLiteral(_)
+            | Token::SingleQuotedRawStringLiteral(_)
+            | Token::TripleSingleQuotedRawStringLiteral(_)
+            | Token::EscapedStringLiteral(_)
+            | Token::UnicodeStringLiteral(_)
+            | Token::NationalStringLiteral(_)
+            | Token::QuoteDelimitedStringLiteral(_)
+            | Token::NationalQuoteDelimitedStringLiteral(_)
+            | Token::HexStringLiteral(_)
+    )
 }
 
 struct ReadOnly;
@@ -209,6 +316,40 @@ mod tests {
             ParsedQuery::parse("SELECT 1; SELECT 2"),
             Err(QueryError::MultipleStatements)
         ));
+    }
+
+    #[test]
+    fn query_id_normalizes_only_safe_formatting() {
+        let id = |sql| ParsedQuery::parse(sql).unwrap().query_id().to_owned();
+        assert_eq!(
+            id("SELECT a FROM t;"),
+            id(" select  a\nfrom t ; -- comment\n")
+        );
+        assert_eq!(id("SELECT a FROM t"), id("SELECT a /* comment */ FROM t"));
+        assert_eq!(
+            id("SELECT '雪' /* note */ FROM t;"),
+            id(" select '雪'\r\n/* 雪 */ from t ;")
+        );
+        assert_ne!(id("SELECT 'A'"), id("SELECT 'a'"));
+        assert_ne!(id("SELECT 'é'"), id("SELECT 'É'"));
+        assert_ne!(id("SELECT \"Column\""), id("SELECT \"column\""));
+        assert_ne!(id(r"SELECT E'it\'s'"), id("SELECT E'it''s'"));
+        assert_ne!(id("SELECT ab"), id("SELECT a b"));
+        let hash = |sql| {
+            let dialect = PostgreSqlDialect {};
+            let tokens = Tokenizer::new(&dialect, sql)
+                .tokenize_with_location()
+                .unwrap();
+            query_id(sql, &tokens)
+        };
+        assert_ne!(hash("SELECT 'a'\n'b'"), hash("SELECT 'a' 'b'"));
+        assert_ne!(hash("SELECT 'a'\r\n'b'"), hash("SELECT 'a' 'b'"));
+        assert!(
+            id("SELECT 1")
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+        assert_eq!(id("SELECT 1").len(), 64);
     }
 
     #[test]

@@ -66,17 +66,27 @@ backend:
   # idle_transaction_timeout_ms: 30000
   # cleanup_timeout_ms: 5000
 
-# Future authorized final-result cache:
-# cache:
-#   enabled: false # Enable with explicit deterministic-query approval.
-#   allow_authorization_staleness: false # Requires accepting stale source grants too.
-#   url_env: YASP_REDIS_URL
-#   namespace: "yasp:dev:v1"
-#   ttl_seconds: 30
-#   max_entry_bytes: 8388608
-#   max_buffered_bytes_total: 33554432
-#   operation_timeout_ms: 100
-#   approved_queries: [] # Exact effective SQL strings; empty approves nothing.
+# Complete read-only results; source grants are not rechecked on cache hits.
+cache:
+  enabled: false
+  url_env: YASP_REDIS_URL
+  namespace: "yasp:dev:v1"
+  ttl_seconds: 3600 # Hits do not extend expiry.
+  max_rows_per_query: 10000
+  max_buffered_bytes_total: 33554432 # Aggregate in-process cache buffer budget.
+  # Optional bypass for live monitoring queries:
+  # eligibility:
+  #   type: rust
+  #   callback: builtin.cache_eligibility.exclude_sql_containing
+  #   params:
+  #     excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
+  # Python alternative (shares the selector's runtime):
+  # eligibility:
+  #   type: python
+  #   path: ../hooks/examples/cache_eligibility.py
+  #   callback: cache_eligibility
+  #   params:
+  #     excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
 
 hooks:
   select_backend:

@@ -2,6 +2,7 @@
 
 use crate::{
     backend::{PostgresBackend, PostgresBackends},
+    cache::{CacheBuffer, RedisCache},
     config::{GatewayConfig, GatewaySettings},
     hooks::{RoutedSelector, SelectionError, SelectionRequest},
     logger,
@@ -9,7 +10,7 @@ use crate::{
     transport::FrameGuard,
 };
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, SinkExt, StreamExt};
 use pgwire::{
     api::{
         ClientInfo, ConnectionHandle, ConnectionManager, DefaultClient, NoopHandler,
@@ -24,14 +25,24 @@ use pgwire::{
     },
     error::{ErrorInfo, PgWireError, PgWireResult},
     messages::{
-        PgWireBackendMessage, PgWireFrontendMessage, SslNegotiationMetaMessage,
+        DecodeContext, Message, PgWireBackendMessage, PgWireFrontendMessage,
+        SslNegotiationMetaMessage,
         response::{
             EmptyQueryResponse, GssEncResponse, ReadyForQuery, SslResponse, TransactionStatus,
         },
     },
     tokio::server::{PgWireMessageServerCodec, process_error, process_message},
 };
-use std::{fmt, future::Future, io, sync::Arc, time::Duration};
+use sha2::{Digest, Sha256};
+use std::{
+    fmt,
+    future::Future,
+    io,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
@@ -151,10 +162,12 @@ async fn serve_sessions(
         gen_salted_password(&config.password, &salt, SCRAM_ITERATIONS),
     );
     drop(config.password);
+    let cache = config.cache;
     let source = Arc::new(Credentials {
         username: config.username,
         database: config.database,
         password,
+        cache: cache.clone(),
     });
     let mut sessions = JoinSet::new();
     tokio::pin!(shutdown);
@@ -219,6 +232,9 @@ async fn serve_sessions(
         while sessions.join_next().await.is_some() {}
     }
     execution.close();
+    if let Some(cache) = cache {
+        cache.close().await;
+    }
     outcome
 }
 
@@ -226,6 +242,7 @@ struct Credentials {
     username: String,
     database: String,
     password: Password,
+    cache: Option<Arc<RedisCache>>,
 }
 
 impl fmt::Debug for Credentials {
@@ -327,13 +344,6 @@ async fn connection(
             && let PgWireFrontendMessage::Query(query) = &message
         {
             socket.set_state(PgWireConnectionState::QueryInProgress);
-            let query_id = logger::next_query_id();
-            tracing::debug!(
-                query_id,
-                client_id,
-                sql = ?query.query,
-                "query received"
-            );
             let cancel = socket
                 .session_extensions()
                 .get::<Arc<ConnectionHandle>>()
@@ -341,11 +351,10 @@ async fn connection(
                 .start_query()
                 .await;
             let result = tokio::select! {
-                result = execute_query(&mut socket, &execution, &query.query, &settings, query_id, client_id, &source.username, cancel) => result,
+                result = execute_query(&mut socket, &execution, &query.query, &settings, client_id, &source, cancel) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
-                tracing::error!(query_id, client_id, "query failed");
                 let mut info: ErrorInfo = error.into();
                 if info.is_fatal() {
                     return Err(io::Error::other("frontend response failed"));
@@ -509,11 +518,13 @@ async fn execute_query(
     execution: &Execution,
     sql: &str,
     settings: &GatewaySettings,
-    query_id: u64,
     client_id: u64,
-    authenticated_user: &str,
+    source: &Credentials,
     mut cancel: futures::channel::oneshot::Receiver<()>,
 ) -> PgWireResult<()> {
+    let authenticated_user = source.username.as_str();
+    let frontend_database = source.database.as_str();
+    let cache = source.cache.as_deref();
     let write_timeout = settings.write_timeout();
     let query = match ParsedQuery::parse_with_limit(sql, settings.max_sql_bytes) {
         Ok(query) => query,
@@ -529,6 +540,7 @@ async fn execute_query(
             return Ok(());
         }
         Err(error) => {
+            tracing::error!(client_id, "query parsing failed");
             return Err(protocol_error(
                 "ERROR",
                 match error {
@@ -540,35 +552,251 @@ async fn execute_query(
             ));
         }
     };
-    query
-        .validate_read_only()
-        .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
-    let request = SelectionRequest {
-        authenticated_user,
-        client_id,
-        query_id,
-        query: &query,
-    };
-    let backend = tokio::select! {
-        biased;
-        _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
-        result = execution.select(&request) => result?,
-    };
-    tracing::debug!(
-        query_id,
-        client_id,
-        database = ?backend.target(),
-        database_user = %backend.database_user(),
-        sql = ?query.sql(),
-        "query sent to backend"
-    );
-    backend
-        .execute_with_cancel(
-            &query,
-            socket,
-            settings.query_timeout(),
-            write_timeout,
-            cancel,
-        )
-        .await
+    let query_id = query.query_id();
+    tracing::debug!(query_id, client_id, sql = ?query.sql(), "query received");
+    let result = async {
+        query
+            .validate_read_only()
+            .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
+        let request = SelectionRequest {
+            authenticated_user,
+            client_id,
+            query_id,
+            query: &query,
+        };
+        let backend = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+            result = execution.select(&request) => result?,
+        };
+        let mut buffer = None;
+        if let Some(cache) = cache {
+            let eligible = tokio::select! {
+                biased;
+                _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+                eligible = cache.eligible(&request) => eligible,
+            };
+            if eligible {
+                let scope = cache_scope(backend, authenticated_user, frontend_database, settings);
+                buffer = cache.reserve(&scope);
+                if let Some(entry) = &mut buffer {
+                    let hit = tokio::select! {
+                        biased;
+                        _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+                        hit = cache.get(query_id, &scope, entry) => hit,
+                    };
+                    if hit && valid_cached_response(&entry.bytes, cache.max_rows_per_query()) {
+                        tracing::debug!(query_id, client_id, database = ?backend.target(), database_user = %backend.database_user(), sql = ?query.sql(), "query served from cache");
+                        while !entry.bytes.is_empty() {
+                            // Finish each frame before observing cancellation, so a
+                            // cancel cannot leave a partially written protocol frame.
+                            if cancel.try_recv().ok().flatten().is_some() {
+                                return Err(protocol_error("ERROR", "57014", "query cancelled"));
+                            }
+                            let message = PgWireBackendMessage::decode(&mut entry.bytes, &DecodeContext::default())?
+                                .expect("validated complete cache frame");
+                            timeout(write_timeout, socket.send(message)).await
+                                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out"))??;
+                        }
+                        return Ok(());
+                    }
+                    if hit {
+                        // A corrupt payload must not be extended with a fresh response.
+                        drop(buffer.take());
+                        buffer = cache.reserve(&scope);
+                    }
+                }
+                tracing::debug!(query_id, client_id, "cache miss or buffer limit reached");
+            }
+        }
+        tracing::debug!(
+            query_id,
+            client_id,
+            database = ?backend.target(),
+            database_user = %backend.database_user(),
+            sql = ?query.sql(),
+            "query sent to backend"
+        );
+        let mut output = CaptureSink { inner: socket, buffer, max_entry_bytes: cache.map_or(0, RedisCache::max_entry_bytes), max_rows_per_query: cache.map_or(0, RedisCache::max_rows_per_query), rows: 0 };
+        let cacheable_completion = backend
+            .execute_with_cancel(
+                &query,
+                &mut output,
+                settings.query_timeout(),
+                write_timeout,
+                cancel,
+            )
+            .await?;
+        if cacheable_completion && let (Some(cache), Some(buffer)) = (cache, &output.buffer) {
+            cache.put(query_id, buffer).await;
+        }
+        Ok(())
+    }.await;
+    if result.is_err() {
+        tracing::error!(query_id, client_id, "query failed");
+    }
+    result
+}
+
+fn cache_scope(
+    backend: &PostgresBackend,
+    user: &str,
+    database: &str,
+    settings: &GatewaySettings,
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    for value in [
+        "postgresql:text:v1",
+        user,
+        database,
+        backend.target(),
+        backend.database_user(),
+        crate::backend::SESSION_DEFAULTS,
+    ] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    hash.update(settings.query_timeout_ms.to_be_bytes());
+    hash.update(settings.write_timeout_ms.to_be_bytes());
+    hash.finalize().into()
+}
+
+struct CaptureSink<'a, S> {
+    inner: &'a mut S,
+    buffer: Option<CacheBuffer>,
+    max_entry_bytes: usize,
+    max_rows_per_query: usize,
+    rows: usize,
+}
+
+impl<S: Sink<PgWireBackendMessage> + Unpin> Sink<PgWireBackendMessage> for CaptureSink<'_, S> {
+    type Error = S::Error;
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut *self.get_mut().inner).poll_ready(cx)
+    }
+    fn start_send(self: Pin<&mut Self>, message: PgWireBackendMessage) -> Result<(), Self::Error> {
+        let this = self.get_mut();
+        if this.buffer.is_some() && matches!(&message, PgWireBackendMessage::DataRow(_)) {
+            this.rows += 1;
+            if this.rows > this.max_rows_per_query {
+                this.buffer = None;
+            }
+        }
+        if let Some(buffer) = &mut this.buffer {
+            let size = match &message {
+                PgWireBackendMessage::RowDescription(m) => Some(m.message_length() + 1),
+                PgWireBackendMessage::DataRow(m) => Some(m.message_length() + 1),
+                PgWireBackendMessage::NoticeResponse(m) => Some(m.message_length() + 1),
+                PgWireBackendMessage::CommandComplete(m) => Some(m.message_length() + 1),
+                _ => None,
+            };
+            if size
+                .is_none_or(|size| size > this.max_entry_bytes.saturating_sub(buffer.bytes.len()))
+                || message.encode(&mut buffer.bytes).is_err()
+            {
+                this.buffer = None;
+            }
+        }
+        Pin::new(&mut *this.inner).start_send(message)
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut *self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut *self.get_mut().inner).poll_close(cx)
+    }
+}
+
+// Validate raw frames before invoking pgwire's decoders, which assume their
+// field bodies are complete. A malformed cache entry is a miss, never a panic
+// or a partial response followed by a database fallback.
+fn valid_cached_response(mut bytes: &[u8], max_rows: usize) -> bool {
+    let mut columns = None;
+    let mut rows = 0usize;
+    while bytes.len() >= 5 {
+        let kind = bytes[0];
+        let length = i32::from_be_bytes(bytes[1..5].try_into().unwrap());
+        let native_limit = match kind {
+            b'T' => pgwire::messages::data::RowDescription::max_message_length(),
+            b'D' => pgwire::messages::data::DataRow::max_message_length(),
+            b'N' => pgwire::messages::response::NoticeResponse::max_message_length(),
+            b'C' => pgwire::messages::response::CommandComplete::max_message_length(),
+            _ => return false,
+        };
+        if length as usize > native_limit {
+            return false;
+        }
+        if length < 4 || length as usize > 8 * 1024 * 1024 || length as usize >= bytes.len() {
+            return false;
+        }
+        let (frame, rest) = bytes.split_at(length as usize + 1);
+        let mut body = &frame[5..];
+        match kind {
+            b'T' if columns.is_none() && body.len() >= 2 => {
+                let count = i16::from_be_bytes(body[..2].try_into().unwrap());
+                if count < 0 {
+                    return false;
+                }
+                body = &body[2..];
+                for _ in 0..count {
+                    if cstring(&mut body).is_none() || body.len() < 18 {
+                        return false;
+                    }
+                    if body[16..18] != [0, 0] {
+                        return false;
+                    }
+                    body = &body[18..];
+                }
+                if !body.is_empty() {
+                    return false;
+                }
+                columns = Some(count);
+            }
+            b'D' if body.len() >= 2 => {
+                let count = i16::from_be_bytes(body[..2].try_into().unwrap());
+                if columns != Some(count)
+                    || crate::backend::validate_text_fields(count, &body[2..]).is_err()
+                {
+                    return false;
+                }
+                rows += 1;
+                if rows > max_rows {
+                    return false;
+                }
+            }
+            b'N' => {
+                while body.first().is_some_and(|&byte| byte != 0) {
+                    body = &body[1..];
+                    if cstring(&mut body).is_none() {
+                        return false;
+                    }
+                }
+                if body != [0] {
+                    return false;
+                }
+            }
+            b'C' if columns.is_some() => {
+                let tag = cstring(&mut body);
+                return rest.is_empty()
+                    && body.is_empty()
+                    && tag.is_some_and(|tag| {
+                        tag == "SHOW"
+                            || tag
+                                .strip_prefix("SELECT ")
+                                .and_then(|count| count.parse::<usize>().ok())
+                                == Some(rows)
+                    });
+            }
+            _ => return false,
+        }
+        bytes = rest;
+    }
+    false
+}
+
+fn cstring<'a>(bytes: &mut &'a [u8]) -> Option<&'a str> {
+    let end = bytes.iter().position(|&byte| byte == 0)?;
+    let text = std::str::from_utf8(&bytes[..end]).ok()?;
+    *bytes = &bytes[end + 1..];
+    Some(text)
 }

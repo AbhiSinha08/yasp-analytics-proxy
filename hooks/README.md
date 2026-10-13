@@ -117,7 +117,8 @@ async fn example() -> Result<(), Box<dyn std::error::Error>> {
     ).await?;
     let _decision = callback.call(json!({
         "authenticated_user": "analytics", "client_id": 1,
-        "query_id": 2, "sql": "SELECT 1",
+        "query_id": "bdf5d5f3a17adf8be49df9e3b9540cef0ab907dff6635b3a020e38b90ed5bf74",
+        "sql": "SELECT 1",
     })).await?;
     // gateway::serve_routed adapts this callback and validates selected pairs.
     runtime.shutdown();
@@ -162,14 +163,47 @@ code remains responsible for its own logging and side effects.
 See [runtime configuration](../docs/development.md#python-selector-configuration)
 for file references, import paths, and local testing.
 
+## Cache eligibility
+
+The optional `cache.eligibility` Rust or Python callback returns a boolean to decide
+whether a supported read-only query may be cached. It can bypass a query but cannot
+expand supported SQL or configured row and buffer limits. Callback errors bypass the
+cache without failing the query.
+
+The built-in Rust callback bypasses queries whose effective SQL contains any
+configured literal fragment, case-insensitively:
+
+```yaml
+cache:
+  eligibility:
+    type: rust
+    callback: builtin.cache_eligibility.exclude_sql_containing
+    params:
+      excluded_sql_fragments:
+        - pg_stat_activity
+        - clock_timestamp
+```
+
+This is a conservative text check: it also matches comments and string literals,
+which can bypass extra queries. It does not use regular expressions or guarantee a
+match on a parsed table name. Use it for freshness-sensitive monitoring queries such
+as `pg_stat_activity` or `clock_timestamp()`.
+
+Use the [Python example](examples/cache_eligibility.py) with `type: python`, its file
+`path`, and `callback: cache_eligibility`. Python registrations share the same trusted
+`PythonRuntime` as backend selection. Custom Rust hosts bind callbacks with
+`hooks::bind_cache_eligibility` and the `CacheEligibility` contract.
+
+The request includes effective SQL as `request["sql"]`; the Python example applies the
+same case-insensitive literal substring rule. The cache still uses a normalized
+effective-SQL SHA-256 query ID for its key and logs.
+
 ## Later hook capabilities
 
-Query rewrites, result processing, and lifecycle hooks are
-not part of this routing milestone. Their contracts will be documented when those
-capabilities are implemented. Metadata extraction, load balancing, and caching are
-also later milestones. Rust selectors can inspect the borrowed PostgreSQL
-statement tree through `request.query.statement()`; driver objects remain internal.
-Python selection uses the bounded request projection described above.
+Query rewrites, result processing, lifecycle hooks, and BI metadata extraction remain
+planned capabilities. Rust selectors can inspect the borrowed PostgreSQL statement
+tree through `request.query.statement()`; driver objects remain internal. Python
+selection uses the bounded request projection described above.
 
 ## Python dependencies
 

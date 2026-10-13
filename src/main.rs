@@ -9,9 +9,13 @@ use std::{
 use tokio::{net::TcpListener, runtime::Runtime};
 use yasp::{
     backend::PostgresBackends,
+    cache::RedisCache,
     config::{BackendConfig, FileConfig, GatewayConfig, SelectorSettings},
     gateway,
-    hooks::{BackendSelection, RoutedSelector, bind_select_backend, builtin},
+    hooks::{
+        BackendSelection, CacheEligibility, RoutedSelector, bind_cache_eligibility,
+        bind_select_backend, builtin,
+    },
     logger,
 };
 
@@ -20,6 +24,7 @@ struct HostConfig {
     backends: BTreeMap<BackendSelection, BackendConfig>,
     file: FileConfig,
     log_level: String,
+    cache_url: Option<String>,
 }
 
 fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
@@ -40,6 +45,19 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
             );
         }
         _ => {}
+    }
+    if let Some(hook) = &file.cache.eligibility
+        && hook
+            .rust_callback()
+            .is_some_and(|name| name != "builtin.cache_eligibility.exclude_sql_containing")
+    {
+        return Err(io::Error::other("unregistered cache.eligibility name").into());
+    }
+    #[cfg(not(feature = "python"))]
+    if matches!(file.cache.eligibility, Some(SelectorSettings::Python(_))) {
+        return Err(
+            io::Error::other("Python cache eligibility requires the python Cargo feature").into(),
+        );
     }
     // dotenv errors can contain source text, so expose a fixed diagnostic.
     let mut values = HashMap::new();
@@ -82,6 +100,11 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
         required("YASP_GATEWAY_DATABASE", "YASP_GATEWAY_DATABASE")?,
     )?
     .with_settings(file.gateway.clone())?;
+    let cache_url = file
+        .cache
+        .enabled
+        .then(|| required(&file.cache.url_env, "cache URL environment variable"))
+        .transpose()?;
     let mut backends = BTreeMap::new();
     for (target_name, target) in &file.targets {
         for (login_name, login) in &target.logins {
@@ -107,14 +130,34 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
         backends,
         file,
         log_level,
+        cache_url,
     })
 }
 
-async fn load_selector(
+async fn load_hooks(
     file: &FileConfig,
     _path: &Path,
-) -> Result<RoutedSelector, Box<dyn std::error::Error>> {
-    match &file.hooks.select_backend {
+) -> Result<(RoutedSelector, Option<CacheEligibility>), Box<dyn std::error::Error>> {
+    #[cfg(feature = "python")]
+    let config_path = _path.canonicalize()?;
+    #[cfg(feature = "python")]
+    let base = config_path.parent().expect("config file has a parent");
+    #[cfg(feature = "python")]
+    let runtime = if matches!(file.hooks.select_backend, SelectorSettings::Python(_))
+        || matches!(file.cache.eligibility, Some(SelectorSettings::Python(_)))
+    {
+        let mut settings = file.hooks.python.clone();
+        for path in &mut settings.search_paths {
+            *path = base.join(&*path);
+        }
+        Some(yasp::hooks::python::PythonRuntime::new(settings).await?)
+    } else {
+        None
+    };
+    let selector: Result<RoutedSelector, Box<dyn std::error::Error>> = match &file
+        .hooks
+        .select_backend
+    {
         SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => Ok(bind_select_backend(
             file.default_backend()?,
             builtin::select_backend::passthrough,
@@ -123,14 +166,9 @@ async fn load_selector(
         SelectorSettings::Python(_hook) => {
             #[cfg(feature = "python")]
             {
-                let config_path = _path.canonicalize()?;
-                let base = config_path.parent().expect("config file has a parent");
-                let mut settings = file.hooks.python.clone();
-                for path in &mut settings.search_paths {
-                    *path = base.join(&*path);
-                }
-                let runtime = yasp::hooks::python::PythonRuntime::new(settings).await?;
                 Ok(runtime
+                    .as_ref()
+                    .expect("Python selector has a runtime")
                     .register(
                         &base.join(&_hook.path),
                         &_hook.callback,
@@ -142,7 +180,66 @@ async fn load_selector(
             #[cfg(not(feature = "python"))]
             Err(io::Error::other("Python selector requires the python Cargo feature").into())
         }
-    }
+    };
+    let selector = selector?;
+    let eligibility = match &file.cache.eligibility {
+        None => None,
+        Some(SelectorSettings::Rust(_) | SelectorSettings::RustReference(_)) => {
+            #[derive(serde::Deserialize, Default)]
+            #[serde(default, deny_unknown_fields)]
+            struct Params {
+                excluded_sql_fragments: Vec<String>,
+            }
+            let params = match &file.cache.eligibility {
+                Some(SelectorSettings::RustReference(hook)) => {
+                    serde_json::from_value::<Params>(serde_json::Value::Object(hook.params.clone()))
+                        .map_err(|_| io::Error::other("invalid cache eligibility params"))?
+                }
+                _ => Params::default(),
+            };
+            if params
+                .excluded_sql_fragments
+                .iter()
+                .any(|fragment| fragment.trim().is_empty())
+            {
+                return Err(io::Error::other(
+                    "excluded_sql_fragments must contain nonblank SQL fragments",
+                )
+                .into());
+            }
+            Some(
+                bind_cache_eligibility(params.excluded_sql_fragments, |request, fragments| {
+                    builtin::cache_eligibility::exclude_sql_containing(request, fragments)
+                })
+                .into(),
+            )
+        }
+        Some(SelectorSettings::Python(_hook)) => {
+            #[cfg(feature = "python")]
+            {
+                Some(
+                    runtime
+                        .as_ref()
+                        .expect("Python eligibility has a runtime")
+                        .register(
+                            &base.join(&_hook.path),
+                            &_hook.callback,
+                            _hook.params.clone(),
+                        )
+                        .await?
+                        .into(),
+                )
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                return Err(io::Error::other(
+                    "Python cache eligibility requires the python Cargo feature",
+                )
+                .into());
+            }
+        }
+    };
+    Ok((selector, eligibility))
 }
 
 fn main() {
@@ -166,11 +263,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let selector = load_selector(&host.file, &path).await?;
+        let (selector, eligibility) = load_hooks(&host.file, &path).await?;
+        let gateway = if let Some(url) = &host.cache_url {
+            host.gateway.with_cache(Arc::new(RedisCache::new(
+                host.file.cache.clone(),
+                url,
+                eligibility,
+            )?))
+        } else {
+            host.gateway
+        };
         let backends = Arc::new(PostgresBackends::new(host.backends, host.file.backend)?);
-        let listener = TcpListener::bind(host.gateway.settings().listen).await?;
+        let listener = TcpListener::bind(gateway.settings().listen).await?;
         tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-        gateway::serve_routed(listener, host.gateway, backends, selector, async {
+        gateway::serve_routed(listener, gateway, backends, selector, async {
             #[cfg(unix)]
             {
                 let mut terminate =

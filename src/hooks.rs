@@ -1,6 +1,8 @@
 //! Typed callbacks that let a host application select configured backends.
 
 use crate::query::ParsedQuery;
+#[cfg(feature = "python")]
+use serde_json::{Value, json};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -14,7 +16,7 @@ pub mod python;
 pub struct SelectionRequest<'a> {
     pub authenticated_user: &'a str,
     pub client_id: u64,
-    pub query_id: u64,
+    pub query_id: &'a str,
     pub query: &'a ParsedQuery,
 }
 
@@ -34,15 +36,71 @@ pub enum SelectionError {
     Failed,
 }
 
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[error("cache eligibility callback failed")]
+pub struct CacheEligibilityError;
+
 pub type BackendSelector = Arc<
     dyn for<'a> Fn(&SelectionRequest<'a>) -> Result<BackendSelection, SelectionError> + Send + Sync,
 >;
+
+pub type CacheEligibilityCallback =
+    Arc<dyn for<'a> Fn(&SelectionRequest<'a>) -> Result<bool, CacheEligibilityError> + Send + Sync>;
 
 /// Registered selection behavior; the router owns validation and acquisition.
 pub enum RoutedSelector {
     Rust(BackendSelector),
     #[cfg(feature = "python")]
     Python(python::PythonCallback),
+}
+
+/// Registered cache eligibility behavior supplied by the host application.
+pub enum CacheEligibility {
+    Rust(CacheEligibilityCallback),
+    #[cfg(feature = "python")]
+    Python(python::PythonCallback),
+}
+
+impl From<CacheEligibilityCallback> for CacheEligibility {
+    fn from(callback: CacheEligibilityCallback) -> Self {
+        Self::Rust(callback)
+    }
+}
+
+#[cfg(feature = "python")]
+impl From<python::PythonCallback> for CacheEligibility {
+    fn from(callback: python::PythonCallback) -> Self {
+        Self::Python(callback)
+    }
+}
+
+impl CacheEligibility {
+    pub async fn eligible(
+        &self,
+        request: &SelectionRequest<'_>,
+    ) -> Result<bool, CacheEligibilityError> {
+        match self {
+            Self::Rust(callback) => callback(request),
+            #[cfg(feature = "python")]
+            Self::Python(callback) => {
+                let value = callback
+                    .call(request_payload(request))
+                    .await
+                    .map_err(|error| {
+                        tracing::error!(query_id = request.query_id, client_id = request.client_id, category = %error, "Python cache eligibility callback failed");
+                        CacheEligibilityError
+                    })?;
+                value.as_bool().ok_or(CacheEligibilityError)
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        #[cfg(feature = "python")]
+        if let Self::Python(callback) = self {
+            callback.runtime().shutdown();
+        }
+    }
 }
 
 impl From<BackendSelector> for RoutedSelector {
@@ -67,12 +125,7 @@ impl RoutedSelector {
             Self::Rust(selector) => selector(request),
             #[cfg(feature = "python")]
             Self::Python(callback) => {
-                let value = callback.call(serde_json::json!({
-                    "authenticated_user": request.authenticated_user,
-                    "client_id": request.client_id,
-                    "query_id": request.query_id,
-                    "sql": request.query.sql(),
-                })).await.map_err(|error| {
+                let value = callback.call(request_payload(request)).await.map_err(|error| {
                     tracing::error!(query_id = request.query_id, client_id = request.client_id, category = %error, "Python selector failed");
                     SelectionError::Failed
                 })?;
@@ -103,6 +156,16 @@ impl RoutedSelector {
     }
 }
 
+#[cfg(feature = "python")]
+fn request_payload(request: &SelectionRequest<'_>) -> Value {
+    json!({
+        "authenticated_user": request.authenticated_user,
+        "client_id": request.client_id,
+        "query_id": request.query_id,
+        "sql": request.query.sql(),
+    })
+}
+
 /// Bind host-owned state to a callback while retaining the query's borrow.
 /// Callbacks execute in the query task and must be trusted, fast, and nonblocking.
 /// Rust code has no enforceable execution timeout; initialize policy data at startup.
@@ -115,7 +178,7 @@ impl RoutedSelector {
 /// );
 /// let query = ParsedQuery::parse("SELECT 1").unwrap();
 /// let selected = selector(&SelectionRequest {
-///     authenticated_user: "analytics", client_id: 1, query_id: 2, query: &query,
+///     authenticated_user: "analytics", client_id: 1, query_id: query.query_id(), query: &query,
 /// }).unwrap();
 /// assert_eq!(selected.backend_login, "reader");
 /// ```
@@ -145,6 +208,18 @@ pub fn bind_select_backend<State, F>(state: State, function: F) -> BackendSelect
 where
     State: Send + Sync + 'static,
     F: for<'a> Fn(&SelectionRequest<'a>, &State) -> Result<BackendSelection, SelectionError>
+        + Send
+        + Sync
+        + 'static,
+{
+    Arc::new(move |request| function(request, &state))
+}
+
+/// Bind host-owned state to a cache eligibility callback.
+pub fn bind_cache_eligibility<State, F>(state: State, function: F) -> CacheEligibilityCallback
+where
+    State: Send + Sync + 'static,
+    F: for<'a> Fn(&SelectionRequest<'a>, &State) -> Result<bool, CacheEligibilityError>
         + Send
         + Sync
         + 'static,

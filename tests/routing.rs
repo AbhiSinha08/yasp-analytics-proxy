@@ -693,7 +693,8 @@ from pathlib import Path
 def application_route(request, params):
     assert set(request) == {'authenticated_user', 'client_id', 'query_id', 'sql'}
     assert request['authenticated_user'] == params['username']
-    assert isinstance(request['query_id'], int)
+    assert len(request['query_id']) == 64
+    assert all(character in '0123456789abcdef' for character in request['query_id'])
     sql = request['sql']
     if 'denied' in sql:
         return None

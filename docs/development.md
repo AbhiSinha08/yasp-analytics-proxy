@@ -42,7 +42,7 @@ are not present in the current dependency graph.
 | deadpool 0.13 (`managed`, `rt_tokio_1`)                    | Added: bounded PostgreSQL backend pool.                                                                              | Uses the managed pool API; `deadpool-postgres` and `tokio-postgres` are not installed.                                                                                                                                                                                                                           |
 | rustls + tokio-rustls; compatible PostgreSQL TLS connector | Deferred to transport implementation.                                                                                | Frontend TLS does not secure backend connections. Validate CA roots and hostnames on both database and Redis transports. Select compatible versions and one crypto provider with pgwire; avoid duplicate providers.                                                                                              |
 | sqlparser 0.63 (`visitor`)                                 | Added: bounded PostgreSQL-dialect syntax inspection.                                                                 | The parser recursion budget is 64; this is not a limit of 64 SQL nesting levels. Parsing is syntax inspection, not semantic authorization.                                                                                                                                                                       |
-| redis 1.7                                                  | Deferred until cache eligibility and serialization exist.                                                            | Async Tokio support and a multiplexed connection are sufficient initially; no separate pool/cluster/cache framework. Enable verified TLS when deployed off-host.                                                                                                                                                 |
+| redis 1.7                                                  | Added for the opt-in result cache.                                                                                    | Async Tokio support and a multiplexed connection are sufficient; no separate pool/cluster/cache framework. Off-host use awaits verified TLS support.                                                                                                                                                              |
 | Axum 0.8                                                   | Deferred to Phase 2 management APIs.                                                                                 | Fits Tokio. Add authentication/authorization and request limits before exposing configuration or execution. No UI tooling is needed now.                                                                                                                                                                         |
 | Warehouse/model SDKs                                       | Deferred to the chosen Phase 2 adapters.                                                                             | Choose an actual backend/model first. Reuse an existing HTTP client when sufficient; keep vendor SDKs in the consuming application's model adapter or the database adapter.                                                                                                                                      |
 
@@ -57,7 +57,7 @@ codec; do not enable a decimal integration and infer full PostgreSQL type suppor
 | Rust                               | Supported compiler, rustfmt, and Clippy.                                                                                      |
 | Python, when enabled               | CPython 3.12 with a shared libpython and a compatible standard library; verify the selected installation's development files. |
 | PostgreSQL                         | Dedicated test databases and non-owner, non-superuser, least-privileged logins without BYPASSRLS.                             |
-| Redis, when caching is implemented | Dedicated namespace/ACL, memory cap, eviction policy, and bounded client timeouts.                                            |
+| Redis, when caching is enabled      | Dedicated namespace/ACL, memory cap, eviction policy, and bounded client timeouts.                                            |
 | Native build tools                 | C compiler and linker; additional tools only when selected crate features require them.                                       |
 | BI client                          | Validate its version, connection settings, and supported query behavior before claiming compatibility.                        |
 
@@ -199,11 +199,12 @@ cp .env.example .env
 ```
 
 `config/example.yml` is loadable by the current runtime. Provision its databases,
-logins, and environment secrets before running it. Future settings remain in marked
-commented YAML blocks; uncommenting them does not enable an unimplemented feature.
-Runtime YAML supports `version: 1`, an optional `gateway` block, PostgreSQL targets
-and their logins, optional `hooks.select_backend`, shared `hooks.python` runtime
-settings, and an optional `backend` block. Unknown fields and sections are rejected.
+logins, and environment secrets before running it. Planned settings remain in marked
+commented blocks. Caching is disabled by default; set `cache.enabled: true` to opt in.
+Runtime YAML supports `version: 1`, optional `gateway`, `backend`, and `cache` blocks,
+PostgreSQL targets and logins, optional `hooks.select_backend` and `cache.eligibility`
+references, and shared `hooks.python` runtime settings.
+Unknown fields and sections are rejected.
 The loader also rejects duplicate keys, invalid types, and YAML files larger than
 64 KiB.
 
@@ -361,6 +362,58 @@ the target database to the `postgres` maintenance database. The harness creates 
 fresh test database from `template0`, runs the proxy against it, and drops only that
 database during teardown. The test target password uses the named variable
 `YASP_TEST_TARGET_PASSWORD`.
+
+### Redis result cache
+
+Caching is disabled by default. Enable `cache.enabled` and provide the Redis URL
+through `YASP_REDIS_URL` (or the environment variable named by `url_env`). A hit does
+not contact PostgreSQL, so source grants and row-level security are not rechecked
+until expiry. The default TTL is one hour; hits do not extend it.
+
+```yaml
+cache:
+  enabled: false
+  url_env: YASP_REDIS_URL
+  namespace: yasp:dev:v1
+  ttl_seconds: 3600
+  max_rows_per_query: 10000
+  max_buffered_bytes_total: 33554432
+  eligibility: # Optional Rust or Python callback to bypass selected queries.
+    type: rust
+    callback: builtin.cache_eligibility.exclude_sql_containing
+    params:
+      excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
+```
+
+The row limit bounds rows captured and replayed; larger results bypass caching and
+continue streaming. The 32 MiB default is an aggregate in-process buffer budget. The
+internal serialized-entry guard is one third of that budget, reserving room for Redis,
+memory, and response copies. Redis storage and its eviction policy are separate.
+Frontend and selected-backend scope are checked on hits. Redis failures, timeouts,
+malformed entries, and scope mismatches are misses.
+The Redis operation deadline is fixed at 100 ms. The current connection supports
+loopback TCP only; verified remote TLS is deferred.
+
+The built-in Rust hook checks effective SQL for case-insensitive literal substrings.
+It includes comments and string literals, so it can bypass extra queries, and it does
+not guarantee a parsed table-name match. Python uses the same `excluded_sql_fragments`
+params through `request["sql"].lower()`. Use these fragments when monitoring results
+must stay fresh. See [cache hook examples](../hooks/README.md#cache-eligibility).
+
+For a local check, export `YASP_REDIS_URL`, enable caching and the example policy,
+then run both queries twice: `SELECT 1` should hit the cache; `clock_timestamp()`
+should stay fresh. Inspect only your namespace:
+
+```sh
+redis-cli -u "$YASP_REDIS_URL" PING
+redis-cli -u "$YASP_REDIS_URL" --scan --pattern 'your-unique-namespace:*'
+for run in 1 2; do
+  PGPASSWORD="$YASP_GATEWAY_PASSWORD" psql "host=127.0.0.1 port=6432 dbname=$YASP_GATEWAY_DATABASE user=$YASP_GATEWAY_USERNAME" -c 'SELECT 1' -c 'SELECT clock_timestamp()'
+done
+```
+
+Use a dedicated Redis deployment with a memory cap and eviction policy. Do not print
+cached payloads; they can contain query results.
 
 The library exposes `yasp::hooks::SelectionRequest`, `BackendSelection`,
 `SelectionError`, and `bind_select_backend` for host-supplied Rust selectors.

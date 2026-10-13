@@ -7,7 +7,6 @@ use std::{
 use tracing_subscriber::filter::LevelFilter;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_QUERY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Initialize stdout logging using `LOG_LEVEL` (`INFO` by default).
 ///
@@ -51,8 +50,4 @@ pub fn init_with_level(setting: &str) -> io::Result<()> {
 
 pub(crate) fn next_client_id() -> u64 {
     NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-pub(crate) fn next_query_id() -> u64 {
-    NEXT_QUERY_ID.fetch_add(1, Ordering::Relaxed)
 }

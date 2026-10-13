@@ -34,9 +34,12 @@
   - [x] **External passthrough example** — Supplies a Python example under hooks/examples and configures ignored local.yml for manual use.
   - [x] **Runtime and routing verification** — Exercises arbitrary callbacks without a database, routed source logins, error recovery, and manual current_user selection.
 - [x] **PostgreSQL cancellation** — Handle client cancel requests and Forward backend cancellation safely.
+- [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only PostgreSQL results.
+  - [x] **Cache settings and bounds** — Keeps caching disabled by default and limits cached rows and aggregate in-process buffers.
+  - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes remain cache keys.
 - [ ] **BI client context and compatibility** — Check what identity information the BI client provides and test its connection and queries.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
-- [ ] **Result processing, hooks, and Redis cache** — Requires result-hook integration and authorized result/cache contracts.
+- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
 - [ ] **Remaining BI client compatibility** — Do these last in Phase 1; move an item earlier if client testing requires it.
   - [ ] **Prepared queries and basic portals** — Let clients prepare a query once and run it later.

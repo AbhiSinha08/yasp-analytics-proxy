@@ -22,6 +22,8 @@ pub struct FileConfig {
     pub hooks: HooksSettings,
     #[serde(default)]
     pub backend: BackendSettings,
+    #[serde(default)]
+    pub cache: CacheSettings,
     pub targets: BTreeMap<String, TargetSettings>,
 }
 
@@ -149,6 +151,62 @@ impl Default for BackendSettings {
             max_connections_per_pool: 8,
             max_connections_total: 16,
         }
+    }
+}
+
+/// Opt-in result reuse; the host resolves the Redis URL without exposing secrets.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CacheSettings {
+    pub enabled: bool,
+    pub url_env: String,
+    pub namespace: String,
+    pub ttl_seconds: u32,
+    pub max_rows_per_query: usize,
+    pub max_buffered_bytes_total: usize,
+    pub eligibility: Option<SelectorSettings>,
+}
+
+impl Default for CacheSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url_env: "YASP_REDIS_URL".into(),
+            namespace: "yasp:dev:v1".into(),
+            ttl_seconds: 3600,
+            max_rows_per_query: 10_000,
+            max_buffered_bytes_total: 32 * 1024 * 1024,
+            eligibility: None,
+        }
+    }
+}
+
+impl CacheSettings {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        validate_value("cache.namespace", &self.namespace)?;
+        validate_value("cache.url_env", &self.url_env)?;
+        if self.url_env.contains('=')
+            || self.ttl_seconds == 0
+            || self.max_rows_per_query == 0
+            || self.max_buffered_bytes_total == 0
+            || self.max_buffered_bytes_total > u32::MAX as usize
+            || self.max_buffered_bytes_total > tokio::sync::Semaphore::MAX_PERMITS
+        {
+            return Err(ConfigError::InvalidCache);
+        }
+        if let Some(hook) = &self.eligibility {
+            match hook {
+                SelectorSettings::Rust(name) => validate_value("cache.eligibility", name)?,
+                SelectorSettings::RustReference(hook) => {
+                    validate_value("cache.eligibility.callback", &hook.callback)?;
+                }
+                SelectorSettings::Python(hook) => {
+                    validate_value("cache eligibility path", &hook.path.to_string_lossy())?;
+                    validate_value("cache eligibility callback", &hook.callback)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -280,6 +338,7 @@ impl FileConfig {
         }
         self.gateway.validate()?;
         self.hooks.python.validate()?;
+        self.cache.validate()?;
         match &self.hooks.select_backend {
             SelectorSettings::Rust(name) => validate_value("hooks.select_backend", name)?,
             SelectorSettings::RustReference(hook) => {
@@ -428,6 +487,37 @@ mod tests {
     const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
 
     #[test]
+    fn cache_settings_and_bounds_are_validated() {
+        let mut cache = CacheSettings::default();
+        cache.validate().unwrap();
+        assert_eq!(cache.ttl_seconds, 3600);
+        cache.enabled = true;
+        cache.validate().unwrap();
+        for bad in [
+            CacheSettings {
+                ttl_seconds: 0,
+                ..cache.clone()
+            },
+            CacheSettings {
+                max_rows_per_query: 0,
+                ..cache.clone()
+            },
+            CacheSettings {
+                max_buffered_bytes_total: 0,
+                ..cache.clone()
+            },
+            CacheSettings {
+                namespace: String::new(),
+                ..cache.clone()
+            },
+        ] {
+            assert!(bad.validate().is_err());
+        }
+        cache.max_buffered_bytes_total = 1;
+        cache.validate().unwrap(); // A small budget bypasses caching rather than execution.
+    }
+
+    #[test]
     fn example_is_loadable_without_secrets_or_database_access() {
         let config =
             FileConfig::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"))
@@ -491,7 +581,6 @@ mod tests {
         for section in [
             "routing: {default_backend: {target: primary, backend_login: reader}}",
             "principals: {}",
-            "cache: {enabled: false}",
             "policy: {result_masks: []}",
             "hooks: {result_processing: {enabled: false}}",
             "hooks: {python: {worker_count: 1}}",
@@ -658,10 +747,13 @@ pub struct GatewayConfig {
     pub(crate) password: String,
     pub(crate) database: String,
     pub(crate) settings: GatewaySettings,
+    pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
 }
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("cache requires positive row, byte-budget, and TTL limits")]
+    InvalidCache,
     #[error(
         "Python limits must be positive, the payload must fit the byte budget, and queue bounds must fit their counters"
     )]
@@ -724,6 +816,7 @@ impl GatewayConfig {
             password,
             database,
             settings: GatewaySettings::default(),
+            cache: None,
         })
     }
 
@@ -735,6 +828,12 @@ impl GatewayConfig {
 
     pub fn settings(&self) -> &GatewaySettings {
         &self.settings
+    }
+
+    /// Attach one process-wide cache, shared by all frontend sessions.
+    pub fn with_cache(mut self, cache: std::sync::Arc<crate::cache::RedisCache>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 }
 
