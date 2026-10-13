@@ -65,6 +65,25 @@ implementation proceeds through requested subtasks
   external Python functions. Create one runtime per process and clone it for further
   registration. `RoutedSelector` adapts compiled Rust or Python selection; examples
   remain under `hooks/examples`, and engine routing validates each returned pair.
+- Keep the Redis result cache disabled by default; `cache.enabled` is its only opt-in.
+  Hits do not reach PostgreSQL, so source grants and RLS are not rechecked and cached
+  results can remain available until expiry. Use the shared multiplexed Redis
+  connection, bounded `GETRANGE` reads, opaque versioned PostgreSQL payloads, and
+  miss-on-error behavior. `cache.max_rows_per_query` bounds rows captured and replayed;
+  exceeding it bypasses caching while the full result streams. Reserve three times
+  the serialized-entry budget per active cached query across Redis, buffered, and
+  response-wire copies. `cache.max_buffered_bytes_total` is an aggregate in-process
+  budget, not Redis storage; the internal per-entry guard is derived as one third of
+  it, and the Redis server has a separate memory/eviction policy.
+  Bind optional eligibility with `hooks::bind_cache_eligibility`, configured under
+  `cache.eligibility`; it may bypass queries but cannot expand supported SQL or
+  configured limits. Cache keys use normalized effective-SQL SHA-256 query IDs.
+  Validate frontend identity, database, selected backend endpoint/database and source
+  user, fixed text settings, query/write timers, and codec version before replay.
+  Source-role authorization still applies when a query reaches PostgreSQL. Future
+  engine RBAC and masking must also apply to cached data. Initial Redis transport is
+  loopback TCP; verified remote TLS remains deferred. Redis operation deadlines are
+  fixed internally at 100 ms.
 
 ## Tests
 

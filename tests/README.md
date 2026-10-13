@@ -25,8 +25,9 @@ create a fresh `yasp_test_<UUID>` database from `template0`. The test login must
 new database and drops only that database with `FORCE` during teardown. It does not
 modify PostgreSQL roles or populate a shared development database.
 
-Run on WSL/Linux with Rust 1.89, Python 3, `psql`/libpq, and a local PostgreSQL
-server. The configured loopback address and `127.0.0.1:6432` must be available.
+Run on WSL/Linux with Rust 1.89, Python 3, `psql`/libpq, a local PostgreSQL server,
+and Redis for the cache integration scenario. The configured loopback address and
+`127.0.0.1:6432` must be available.
 
 ```sh
 cargo test --locked --all-targets
@@ -73,6 +74,22 @@ restrictions, and recovery on the same frontend session. Missing credentials fai
 the test rather than skipping source-login isolation.
 The second login must be pre-provisioned and restricted; the fixture grants access
 only to disposable test data and never creates or alters PostgreSQL roles.
+
+The cache integration scenario accepts `YASP_TEST_REDIS_URL` and defaults to
+`redis://127.0.0.1:6379/`; it generates a unique namespace for each run. The gateway
+cache remains disabled unless runtime configuration sets `cache.enabled`. A cache hit
+does not recheck source authorization until the entry expires.
+
+`tests/cache.rs` exercises normalized-query hits, TTL expiry, selected source-login
+scope changes, malformed and oversized entries, response validation before replay,
+eligibility callback bypass and failure, row limits after configuration changes,
+insufficient buffer budget, and Redis outages. It also checks selector denial on a
+filled key, full forwarding of oversized
+results, lossless typed values, and cancellation without a cache fill. With the
+`python` feature it also checks Python callback exceptions and
+invalid return values. This scenario requires the isolated test database credentials
+described above and a loopback Redis endpoint; setting `YASP_TEST_REDIS_URL` changes
+the endpoint without changing the unique test namespace.
 
 ## Python callback checks
 
@@ -136,13 +153,7 @@ The deferred scenarios below describe coverage beyond the current milestone.
    A timed-out Python callback keeps its worker permit; queue bytes and transformed
    output are bounded. Required imports fail at startup. Rust-only builds need no
    interpreter. Optional transformations cannot run after mandatory masks.
-5. **Cache:** approved repeats avoid backend execution, security/session/target
-   context and selected source role isolate results despite shared frontend credentials;
-   expiry, size caps, corruption, outages, and
-   interrupted execution preserve correctness.
-   Exercise grant/RLS changes under the declared authorization-staleness policy,
-   oversized cache reads, result-format differences, and bounded Redis timeouts.
-6. **Operations:** backend loss, pool exhaustion, slow consumers, oversized results,
+5. **Operations:** backend loss, pool exhaustion, slow consumers, oversized results,
    and shutdown release resources. Compare performance with direct database access.
    Include one oversized row/frame, total pool capacity across targets, idle
    transactions/portals, and cache/hook buffers under concurrent slow consumers.

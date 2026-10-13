@@ -21,8 +21,8 @@ or translate all PostgreSQL SQL into that warehouse's dialect.
 The design is feasible for a documented SQL, type, and client compatibility subset.
 Full PostgreSQL transparency, arbitrary cross-engine SQL translation, and guaranteed
 sensitive-data detection by a probabilistic model are outside that promise. Resolve
-the BI metadata contract and prove protocol/type handling before building caching
-or a management UI.
+the BI metadata contract and prove protocol/type handling before enabling caching or
+building a management UI.
 
 ## Components and boundaries
 
@@ -38,7 +38,7 @@ introduce only the contracts needed by the current phase.
 | Routing | Invoke the registered selector with available request context, validate its configured target/login pair, and acquire that connection. | Application-specific context and policy remain outside the engine. |
 | Policy | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks. | Database access controls remain authoritative; masking preserves the result schema. |
 | Extensions | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks. | Contracts belong to the library; organization implementations live outside core engine code. |
-| Result cache | Decide eligibility and store complete authorized results for a limited time. | Keys include backend/dialect identity, security context, parameters, and relevant session state. |
+| Result cache | Store source results for a limited time, then apply current engine processing. | The Redis key uses the namespace and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
 | Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance. | Shared configuration names the client protocol and each target's engine explicitly. |
 
 The gateway passes execution requests to the backend boundary rather than opening
@@ -84,6 +84,7 @@ as application resources and registered before serving queries. Engine invocatio
 uses those registrations; it does not search for organization code inside src/.
 
 ```text
+Planned result pipeline; post-cache processing is not implemented yet
 Organization application
   -> supply configuration and policy data
   -> register context derivation and Rust/Python hooks
@@ -91,17 +92,20 @@ Organization application
   -> authenticate request and expose available metadata
   -> derive organization context
   -> run query rewrite and role-selection hooks
-  -> look up the final-result cache after authorization
-  -> on hit: return the already processed result
-  -> on miss: execute, apply result hooks, then mandatory masks and validation
-  -> cache/return only the final authorized response
+  -> look up the source-result cache
+  -> on hit: load the cached source result
+  -> on miss: execute the source query and cache its result
+  -> apply engine RBAC, result hooks, mandatory masks, and validation
+  -> return the processed result
 ```
 
 Keep authenticated service identity and engine-owned session/security fields
 separate from derived organization context. A context provider may enrich request
 metadata but cannot replace authenticated identity or bypass configured connection
-bounds. Shared cache logic consumes the selected role and declared decision scope;
-it does not interpret organization-specific groups itself.
+bounds. The cache validates the selected backend endpoint and source user together
+with authenticated frontend identity and fixed session context; it does not interpret
+organization-specific groups itself. Future engine policy and masking run on loaded
+source results before any data reaches the client.
 
 Define only extension contracts required by the active phase. Phase 1 needs context
 derivation and backend selection, with optional rewrite/result/lifecycle hooks.
@@ -170,9 +174,10 @@ loads the SQL fixture, runs the proxy against that database, and drops only the
 database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
 The runtime creates no application database or persistent data fixture.
 Client transactions, prepared statements, `SET`, binary results, organization-specific
-RBAC interpretation, query/result hooks, caching, TLS, and BI-client integration are
-not implemented. The routing milestone below implements selection contracts,
-configured target/login validation, and bounded PostgreSQL pools.
+RBAC interpretation, query/result hooks, TLS, and BI-client integration are not yet
+available in the completed runtime. The Redis cache is implemented for supported
+read-only PostgreSQL queries; see its settings and limits below. Routing implements
+selection contracts, configured target/login validation, and bounded PostgreSQL pools.
 See [development setup](development.md) and [test guidance](../tests/README.md).
 
 ## Phase 0 — Project foundation
@@ -253,7 +258,7 @@ BI query through shared proxy credentials
 ```
 
 Deliver a local protocol/type compatibility spike first, then backend selection and
-bounded routing. Validate the intended BI client with caching disabled before adding
+bounded routing. Validate the intended BI client with caching disabled before enabling
 the result cache.
 An incomplete connectivity spike is not an access-controlled deployment.
 
@@ -471,36 +476,45 @@ RBAC policy.
 
 ### Redis result cache
 
-- Approve deterministic reads explicitly; cache only in autocommit sessions with
-  known relevant settings. Read-only SQL is not automatically deterministic.
-- Keys include exact effective SQL, typed bound values, backend engine/dialect,
-  target/database, BI service identity, selected source role, callback cache scope,
-  relevant settings, and configuration/policy/hook generations. The cache scope
-  identifies additional policy inputs that affect returned data or result processing.
-  If that scope cannot be established, bypass caching. A shared frontend credential
-  never makes results from different selected roles interchangeable.
-- Cache final authorized results with column metadata and completion information.
-  Hits still require current proxy policy authorization and do not repeat result
-  transformations; source authorization freshness is limited as described below.
-- Default TTL: 30 seconds. Maximum entry: 8 MiB. This explicitly permits TTL-bounded
-  staleness; it does not guarantee immediate invalidation after backend updates.
-  Hits do not extend expiry. In-flight queries and their snapshots can also delay
-  visibility of source changes; TTL alone is not an immediate-revocation mechanism.
-- Cache hits do not recheck PostgreSQL grants, RLS changes, or disabled backend
-  logins. Source authorization is authoritative when executing at the database;
-  replaying a cached result requires an explicit acceptance of bounded authorization
-  staleness too. Keep caching disabled when immediate revocation is required, unless
-  a coordinated invalidation/generation mechanism covers those source changes.
-- Bypass transactions, catalog discovery, unknown settings, unapproved queries,
-  volatile results, and nondeterministic hooks unless changing inputs are keyed.
-- Stream using bounded buffers. Stop cache accumulation at the size cap while
-  continuing streaming. Never cache partial, failed, or cancelled results.
-- Redis outages and malformed entries are misses. Use versioned serialization,
-  a dedicated namespace, and an explicit Redis memory policy.
-- Bound Redis connect/command time and reads before deserialization; enforce entry
-  size on hits as well as writes. Use ACLs and TLS off-host because cached results
-  remain sensitive. Include requested result formats in keys when storing wire
-  bytes. Do not use untrusted Python pickle for cache entries.
+- Caching is disabled by default. A hit does not contact PostgreSQL, so source grants,
+  row-level security, and disabled source logins are not rechecked until expiry.
+  Configure `url_env` as `YASP_REDIS_URL`, a namespace, and a TTL (default one hour).
+- Every supported read-only query is eligible by default. Optional Rust or Python
+  `cache.eligibility` callbacks return a boolean to bypass queries; they cannot
+  expand supported SQL or resource limits. The built-in Rust callback
+  `builtin.cache_eligibility.exclude_sql_containing` bypasses effective SQL containing
+  configured case-insensitive literal fragments. It also matches comments and string
+  literals, so it may bypass extra queries; it does not parse SQL or guarantee a
+  table-name match. Use it for freshness-sensitive monitoring such as
+  `pg_stat_activity` or `clock_timestamp()`. Normalized effective-SQL SHA-256 query
+  IDs remain cache keys under `namespace:query_id`, not an exclusion policy.
+- Entries preserve PostgreSQL metadata and values in an opaque versioned payload.
+  Before replay, the envelope validates frontend identity/database, selected backend
+  endpoint/database and source user, fixed text settings, query/write timers, and codec
+  version. Partial, failed, cancelled, malformed, or mismatched entries are not
+  replayed. Redis failures and fixed 100 ms operation timeouts are cache misses.
+- `max_rows_per_query` defaults to 10,000 and bounds rows captured and replayed;
+  larger results bypass caching and continue streaming. `max_buffered_bytes_total`
+  defaults to 32 MiB and bounds aggregate in-process cache buffers, not Redis storage.
+  The internal serialized-entry guard is one third of this budget. Each active query
+  reserves up to three times its entry budget for Redis, buffered, and response-wire
+  copies. Redis server memory and eviction are configured separately. Hits do not
+  extend TTL.
+- The library exposes `config::CacheSettings`, `cache::RedisCache`, and
+  `GatewayConfig::with_cache`; eligibility uses `hooks::bind_cache_eligibility`.
+  Python registrations share the process's existing `PythonRuntime`. The initial
+  Redis transport supports loopback TCP only; verified remote TLS remains deferred.
+- Future application RBAC and Phase 2 masking must also apply to cached results.
+  Current hits validate frontend and selected-backend scope; source authorization is
+  checked when PostgreSQL executes a query.
+
+#### Redis deployment recommendation
+
+Redis is sufficient for this shared TTL cache. Use a dedicated deployment with
+[a memory cap and eviction policy](https://redis.io/docs/latest/develop/reference/eviction/).
+[Valkey](https://valkey.io/) is an alternative to evaluate; an in-process cache is
+simpler when only one proxy instance needs the data. Restrict cache access and do not
+log payloads. The current transport supports loopback TCP only.
 
 ### Configuration and operations
 
@@ -525,14 +539,15 @@ The intended BI client connects, discovers authorized metadata, runs supported
 parameterized questions, and cancels work. psql exercises simple queries. Component scenarios
 cover role changes on the same frontend session, source access restrictions,
 connection reuse/creation, transaction pinning, prepared statements across role
-pools, type fidelity, callback failures, role-scoped cache separation, outages,
+pools, type fidelity, callback failures, selected-source cache isolation, outages,
 oversized results, and cleanup. Compare throughput, latency, memory, and hook overhead with direct PostgreSQL before making performance
 claims. Production readiness requires separate operational and security validation.
 
 ### Remaining Phase 1 order
 
-Next implement context and client compatibility,
-result processing and caching, and TLS/operations. Add basic
+Next implement context and client compatibility, result processing, and
+TLS/operations. Validate the result cache with the intended BI client before enabling
+it in that deployment. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote
 an item when a concrete BI compatibility requirement needs it.
@@ -610,10 +625,9 @@ capability, not a prerequisite for every new backend.
 - Classifiers necessarily see pre-mask samples. Decide local inference versus an
   approved external endpoint, data minimization, retention, and logging policy before
   sending those samples. Enforce request limits and disable raw sample logging.
-- Cache only final masked results together with required classification tags and
-  model/policy versions. Include model version and decision context in cache keys;
-  incompatible versions miss. Never reuse a less-restricted output for a context
-  requiring stronger masking.
+- Keep source results separate from processed output. On cache hits and misses, apply
+  current engine RBAC, result hooks, and mandatory masks before returning data. These
+  processing stages are planned; they are not implemented in the current runtime.
 - Choose the model/provider and confidence policy when this component is designed.
   No specific model SDK or implementation is required in Phase 1.
 
