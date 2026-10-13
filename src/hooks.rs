@@ -1,10 +1,14 @@
-//! Typed callbacks that let a host application select configured backends.
+//! Host-owned context, backend selection, and cache eligibility callbacks.
 
 use crate::query::ParsedQuery;
+use futures::future::BoxFuture;
 #[cfg(feature = "python")]
-use serde_json::{Value, json};
-use std::sync::Arc;
+use serde_json::json;
+use serde_json::{Map, Value};
+use std::{sync::Arc, time::Duration};
 use thiserror::Error;
+
+mod payload;
 
 #[path = "../hooks/builtin/mod.rs"]
 pub mod builtin;
@@ -18,6 +22,132 @@ pub struct SelectionRequest<'a> {
     pub client_id: u64,
     pub query_id: &'a str,
     pub query: &'a ParsedQuery,
+    pub context: &'a Map<String, Value>,
+}
+
+/// Available query metadata before the application derives context.
+#[derive(Clone, Copy)]
+pub struct ContextRequest<'a> {
+    pub authenticated_user: &'a str,
+    pub frontend_database: &'a str,
+    pub client_id: u64,
+    pub query_id: &'a str,
+    pub query: &'a ParsedQuery,
+}
+
+/// Context diagnostics contain no application data or lookup error text.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum ContextError {
+    #[error("context callback failed")]
+    Failed,
+    #[error("context callback timed out")]
+    TimedOut,
+    #[error("context callback returned unsupported data")]
+    InvalidOutput,
+    #[error("context exceeds size or nesting limits")]
+    PayloadTooLarge,
+    #[cfg(feature = "python")]
+    #[error("Python context callback failed: {0}")]
+    Python(#[from] python::PythonHookError),
+}
+
+pub type ContextCallback = Arc<
+    dyn for<'a> Fn(ContextRequest<'a>) -> BoxFuture<'a, Result<Map<String, Value>, ContextError>>
+        + Send
+        + Sync,
+>;
+
+/// One optional context stage; identity mappings and authorization belong to the host.
+pub enum ContextHook {
+    Rust(ContextCallback),
+    #[cfg(feature = "python")]
+    Python(python::PythonCallback),
+}
+
+impl From<ContextCallback> for ContextHook {
+    fn from(callback: ContextCallback) -> Self {
+        Self::Rust(callback)
+    }
+}
+
+#[cfg(feature = "python")]
+impl From<python::PythonCallback> for ContextHook {
+    fn from(callback: python::PythonCallback) -> Self {
+        Self::Python(callback)
+    }
+}
+
+impl ContextHook {
+    /// Derive one bounded context snapshot; failures use the application's default policy.
+    pub async fn derive(
+        &self,
+        request: ContextRequest<'_>,
+        deadline: Duration,
+        max_bytes: usize,
+    ) -> Map<String, Value> {
+        let result = async {
+            let value = match self {
+                Self::Rust(callback) => Value::Object(callback(request).await?),
+                #[cfg(feature = "python")]
+                Self::Python(callback) => {
+                    callback
+                        .call(json!({
+                            "authenticated_user": request.authenticated_user,
+                            "frontend_database": request.frontend_database,
+                            "client_id": request.client_id,
+                            "query_id": request.query_id,
+                            "sql": request.query.sql(),
+                        }))
+                        .await?
+                }
+            };
+            if value.is_null() {
+                return Ok(Map::new());
+            }
+            if !value.is_object() {
+                return Err(ContextError::InvalidOutput);
+            }
+            payload::payload_size(&value, max_bytes).map_err(|_| ContextError::PayloadTooLarge)?;
+            let Value::Object(context) = value else {
+                unreachable!()
+            };
+            Ok(context)
+        };
+        match tokio::time::timeout(deadline, result)
+            .await
+            .unwrap_or(Err(ContextError::TimedOut))
+        {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::error!(query_id = request.query_id, client_id = request.client_id, category = %error, "context unavailable; using default context");
+                Map::new()
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        #[cfg(feature = "python")]
+        if let Self::Python(callback) = self {
+            callback.runtime().shutdown();
+        }
+    }
+}
+
+/// Bind host state to asynchronous context derivation. Callbacks must use
+/// cooperative async I/O; a deadline cannot interrupt blocking Rust code.
+pub fn bind_context<State, F>(state: State, function: F) -> ContextCallback
+where
+    State: Send + Sync + 'static,
+    F: for<'a> Fn(
+            ContextRequest<'a>,
+            Arc<State>,
+        ) -> BoxFuture<'a, Result<Map<String, Value>, ContextError>>
+        + Send
+        + Sync
+        + 'static,
+{
+    let state = Arc::new(state);
+    Arc::new(move |request| function(request, state.clone()))
 }
 
 /// A target and login pair selected from the host's configured connections.
@@ -163,6 +293,7 @@ fn request_payload(request: &SelectionRequest<'_>) -> Value {
         "client_id": request.client_id,
         "query_id": request.query_id,
         "sql": request.query.sql(),
+        "context": request.context,
     })
 }
 
@@ -179,6 +310,7 @@ fn request_payload(request: &SelectionRequest<'_>) -> Value {
 /// let query = ParsedQuery::parse("SELECT 1").unwrap();
 /// let selected = selector(&SelectionRequest {
 ///     authenticated_user: "analytics", client_id: 1, query_id: query.query_id(), query: &query,
+///     context: &serde_json::Map::new(),
 /// }).unwrap();
 /// assert_eq!(selected.backend_login, "reader");
 /// ```

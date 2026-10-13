@@ -4,7 +4,7 @@ use crate::{
     backend::{PostgresBackend, PostgresBackends},
     cache::{CacheBuffer, RedisCache},
     config::{GatewayConfig, GatewaySettings},
-    hooks::{RoutedSelector, SelectionError, SelectionRequest},
+    hooks::{ContextHook, ContextRequest, RoutedSelector, SelectionError, SelectionRequest},
     logger,
     query::{ParsedQuery, QueryError},
     transport::FrameGuard,
@@ -45,6 +45,7 @@ use std::{
 };
 use tokio::{
     net::{TcpListener, TcpStream},
+    sync::watch,
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
 };
@@ -163,11 +164,15 @@ async fn serve_sessions(
     );
     drop(config.password);
     let cache = config.cache;
+    let context_hook = config.context_hook;
+    let (stopping, stopped) = watch::channel(false);
     let source = Arc::new(Credentials {
         username: config.username,
         database: config.database,
         password,
         cache: cache.clone(),
+        context_hook: context_hook.clone(),
+        stopped,
     });
     let mut sessions = JoinSet::new();
     tokio::pin!(shutdown);
@@ -220,6 +225,10 @@ async fn serve_sessions(
     };
     drop(listener);
     tracing::info!("gateway shutting down");
+    stopping.send_replace(true);
+    if let Some(hook) = &context_hook {
+        hook.shutdown();
+    }
     execution.stop_hooks();
     if timeout(
         Duration::from_millis(u64::from(settings.shutdown_timeout_ms)),
@@ -243,6 +252,8 @@ struct Credentials {
     database: String,
     password: Password,
     cache: Option<Arc<RedisCache>>,
+    context_hook: Option<Arc<ContextHook>>,
+    stopped: watch::Receiver<bool>,
 }
 
 impl fmt::Debug for Credentials {
@@ -558,11 +569,30 @@ async fn execute_query(
         query
             .validate_read_only()
             .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
+        let context = if let Some(hook) = &source.context_hook {
+            let mut stopped = source.stopped.clone();
+            let context_request = ContextRequest {
+                authenticated_user,
+                frontend_database,
+                client_id,
+                query_id,
+                query: &query,
+            };
+            tokio::select! {
+                biased;
+                _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+                _ = stopped.wait_for(|stopped| *stopped) => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+                context = hook.derive(context_request, Duration::from_millis(u64::from(settings.context_timeout_ms)), settings.max_context_bytes) => context,
+            }
+        } else {
+            serde_json::Map::new()
+        };
         let request = SelectionRequest {
             authenticated_user,
             client_id,
             query_id,
             query: &query,
+            context: &context,
         };
         let backend = tokio::select! {
             biased;

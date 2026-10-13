@@ -240,9 +240,10 @@ yasp/
 ## Phase 1 — PostgreSQL analytics proxy
 
 **Goal:** a read-only PostgreSQL proxy with one BI connection configuration.
-The current milestone selects configured target/login pairs with a typed Rust
-callback or an external Python callback. Trusted BI context integration and application-owned RBAC policy remain
-planned work. PostgreSQL logins enforce source access; result callbacks are planned.
+The current milestone derives optional application context and selects configured
+target/login pairs with typed Rust or external Python callbacks. Verification of
+trusted BI metadata and application-owned RBAC policy remain planned work.
+PostgreSQL logins enforce source access; result callbacks are planned.
 
 One BI connection configuration may use multiple transport sessions through the BI
 client's pool. Neither a separate BI connection nor separate proxy credentials are
@@ -262,15 +263,21 @@ bounded routing. Validate the intended BI client with caching disabled before en
 the result cache.
 An incomplete connectivity spike is not an access-controlled deployment.
 
-### BI context and client validation (planned)
+### BI context and client validation
 
-Define how the consuming application obtains trusted routing context from the BI
-client and any application-owned context provider. Validate the actual client version,
-authentication mode, setup/discovery requests, query forms, background work, and
-missing-context behavior before claiming compatibility. Keep authenticated frontend
-identity distinct from derived application context; client-supplied SQL comments do
-not establish identity by themselves. Review BI-side caching and shared metadata
-access against the deployment's own authorization model.
+The library exposes an optional context provider configured at `hooks.context`.
+It receives authenticated frontend identity, frontend database, client/query IDs,
+and the immutable parsed query. The provider derives bounded plain JSON context;
+the engine invokes it once after SQL validation and before backend selection and
+cache eligibility, including on cache hits. That context is passed to downstream
+hooks and cannot replace authenticated frontend identity. Provider errors, invalid
+output, timeouts, and runtime saturation produce empty context; cancellation still
+stops the query. This contract does not establish that any BI client's metadata is
+trusted or present. Verify actual client version, authentication mode, discovery,
+query forms, background work, and missing-context behavior before claiming
+compatibility. Client-supplied SQL comments do not prove end-user identity.
+Metabase, Superset, and Redash extractor names are placeholders that report
+`NotImplemented`; no real client extractor is enabled.
 
 ### Gateway and query processing
 
@@ -283,9 +290,9 @@ access against the deployment's own authorization model.
   and cancellation behavior. Document the tested client/version/feature matrix.
 - Use sqlparser's PostgreSQL dialect for supported inspection. Parsing describes
   syntax; it is not semantic validation or a security boundary.
-- Preserve execution SQL unless an explicit hook rewrites it. Expose available
-  query/comment/session metadata to the application-supplied context provider;
-  pass its derived context to role selection together with configured RBAC data.
+- Preserve execution SQL unless an explicit hook rewrites it. The optional context
+  provider receives the validated parsed query and derives application context for
+  later hooks; it does not authenticate BI metadata or interpret RBAC.
 - Phase 1 assumes the connected BI service supplies the metadata used for role
   selection. Service authentication authenticates that integration, not each viewer;
   query comments alone do not prove an end-user identity. Verified end-user context
@@ -403,9 +410,10 @@ Python selection uses the dedicated bounded runtime described below.
 
 ### Source RBAC and result processing
 
-The capabilities in this section are planned. The current engine validates configured
-target/login selections; it does not derive BI viewer context or interpret organization
-RBAC policy.
+RBAC interpretation and result processing in this section are planned. The current
+engine validates configured target/login selections and can pass optional derived
+context to callbacks; it does not authenticate BI viewer identity or interpret
+organization RBAC policy.
 
 - Source database roles define privileges, row-level security (RLS), and restricted
   views. YASP selects the appropriate role-specific login rather than implementing
@@ -415,8 +423,8 @@ RBAC policy.
   actual logins; a successful test as the table owner proves nothing about isolation.
 - Application policy data and RBAC interpretation remain owned by the consuming
   application; the engine validates the selected configured target/login pair.
-- Once application policy is integrated, missing required metadata, unmapped policy
-  entries, invalid selections, and callback errors must deny the query. Any distinct
+- Application policy defines default permissions for missing or unmapped context.
+  Invalid selections and required policy failures deny the query. Any distinct
   discovery selection must be supplied by the host's policy.
 - The same BI connection can therefore receive different source-authorized results
   for queries carrying different role-selection metadata.
@@ -431,11 +439,30 @@ RBAC policy.
 
 ### Hooks
 
-- Future context integration may keep BI service identity, application-derived context, selected backend role,
+- The optional context hook receives a borrowed `ContextRequest` with authenticated
+  user, frontend database, client/query IDs, and `ParsedQuery`. `bind_context(state, f)`
+  binds an async Rust closure and returns owned JSON object data or `ContextError`.
+  Context configuration uses `type`, `callback`, and `params`; Python references also
+  name a file `path` and call `function(request, params)`, returning a dictionary or
+  `None`. `hooks::builtin::extractors` exposes named Metabase, Superset, and Redash
+  placeholders that return `NotImplemented`; the Python `yasp_extractors` module
+  exposes the same names and raises `NotImplementedError`.
+- Derive context once after SQL validation and before backend selection and cache
+  eligibility, also on cache hits. Downstream selection sees context as nested plain
+  immutable data; Python receives a copy. Context cannot replace frontend identity.
+  The defaults are a 2-second context wait, 65,536 encoded bytes, and nesting 64.
+  Runtime errors, invalid output, timeout, and saturation supply empty context and
+  do not deny the query. Cancellation returns `57014` and stops the query. Startup
+  configuration, import, and registration errors fail startup. Python retains its
+  existing single-worker reservations after a timed-out invocation.
+- Context does not partition cache keys, change cache scope, or add a cache bypass.
+  Source-role permissions remain the active database authorization boundary; host
+  policy and result processing remain future work.
+- Future session lifecycle integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
 - Python backend selection receives a bounded dictionary of authenticated frontend
-  user, client/query IDs, and original SQL, with application-owned params. Return a
+  user, client/query IDs, original SQL, and derived context, with application-owned params. Return a
   configured target/login dictionary or None to deny. It receives no credentials or
   Rust AST. Typed binds and result batches require later contracts; keep driver
   objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
@@ -450,8 +477,8 @@ RBAC policy.
   each result callback. Hook logging must not expose raw query/result values.
 - Register application-provided Rust hooks and external Python file/function references
   at startup. The feature-gated `hooks::python` platform exposes reusable registration
-  and asynchronous invocation of trusted synchronous callbacks; backend selection is
-  its first engine integration. Query/result/lifecycle integration remains planned.
+  and asynchronous invocation of trusted synchronous callbacks; backend selection
+  and context derivation use the runtime. Query/result/lifecycle integration remains planned.
   Python examples live under hooks/examples and are not embedded in the binary.
   One dedicated worker runs registration and invocation outside Tokio. Python 3.12
   CPU work shares the global interpreter lock (GIL).
@@ -545,7 +572,7 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next implement context and client compatibility, result processing, and
+Next validate client context and compatibility, then implement result processing and
 TLS/operations. Validate the result cache with the intended BI client before enabling
 it in that deployment. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,

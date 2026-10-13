@@ -30,6 +30,7 @@ pub struct FileConfig {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {
+    pub context: Option<SelectorSettings>,
     pub select_backend: SelectorSettings,
     pub python: PythonSettings,
 }
@@ -37,6 +38,7 @@ pub struct HooksSettings {
 impl Default for HooksSettings {
     fn default() -> Self {
         Self {
+            context: None,
             select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
             python: PythonSettings::default(),
         }
@@ -219,6 +221,8 @@ pub struct GatewaySettings {
     pub max_sessions: usize,
     pub max_message_bytes: usize,
     pub max_sql_bytes: usize,
+    pub max_context_bytes: usize,
+    pub context_timeout_ms: u32,
     pub query_timeout_ms: u32,
     pub read_timeout_ms: u32,
     pub write_timeout_ms: u32,
@@ -249,6 +253,8 @@ impl Default for GatewaySettings {
             max_sessions: 32,
             max_message_bytes: 8 * 1024 * 1024,
             max_sql_bytes: 1024 * 1024,
+            max_context_bytes: 65536,
+            context_timeout_ms: 2000,
             query_timeout_ms: 60_000,
             read_timeout_ms: 600_000,
             write_timeout_ms: 60_000,
@@ -269,7 +275,9 @@ impl GatewaySettings {
         }
         if self.max_sessions == 0
             || self.max_sql_bytes == 0
+            || self.max_context_bytes == 0
             || [
+                self.context_timeout_ms,
                 self.query_timeout_ms,
                 self.read_timeout_ms,
                 self.write_timeout_ms,
@@ -339,6 +347,18 @@ impl FileConfig {
         self.gateway.validate()?;
         self.hooks.python.validate()?;
         self.cache.validate()?;
+        if let Some(hook) = &self.hooks.context {
+            match hook {
+                SelectorSettings::Rust(name) => validate_value("hooks.context", name)?,
+                SelectorSettings::RustReference(hook) => {
+                    validate_value("hooks.context.callback", &hook.callback)?
+                }
+                SelectorSettings::Python(hook) => {
+                    validate_value("context hook path", &hook.path.to_string_lossy())?;
+                    validate_value("context callback", &hook.callback)?;
+                }
+            }
+        }
         match &self.hooks.select_backend {
             SelectorSettings::Rust(name) => validate_value("hooks.select_backend", name)?,
             SelectorSettings::RustReference(hook) => {
@@ -748,6 +768,7 @@ pub struct GatewayConfig {
     pub(crate) database: String,
     pub(crate) settings: GatewaySettings,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
+    pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
 }
 
 #[derive(Debug, Error)]
@@ -786,7 +807,7 @@ pub enum ConfigError {
     UnsupportedGateway,
     #[error("gateway.listen must be a loopback IP address with a nonzero port")]
     InvalidListener,
-    #[error("gateway session, SQL, and timeout limits must be positive")]
+    #[error("gateway session, SQL, context, and timeout limits must be positive")]
     InvalidGatewayLimit,
     #[error("gateway query/write timeouts must not exceed 2147483647 milliseconds")]
     InvalidExecutionTimeout,
@@ -817,6 +838,7 @@ impl GatewayConfig {
             database,
             settings: GatewaySettings::default(),
             cache: None,
+            context_hook: None,
         })
     }
 
@@ -833,6 +855,12 @@ impl GatewayConfig {
     /// Attach one process-wide cache, shared by all frontend sessions.
     pub fn with_cache(mut self, cache: std::sync::Arc<crate::cache::RedisCache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Derive application-owned context once per query before downstream hooks.
+    pub fn with_context_hook(mut self, hook: impl Into<crate::hooks::ContextHook>) -> Self {
+        self.context_hook = Some(std::sync::Arc::new(hook.into()));
         self
     }
 }

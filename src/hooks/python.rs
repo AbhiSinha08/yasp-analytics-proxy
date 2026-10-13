@@ -3,17 +3,20 @@
 //! One runtime may be created per process. Clone it to register more callbacks.
 //! Python owns module state; each call receives fresh JSON-compatible objects.
 
-use crate::config::PythonSettings;
+use crate::{
+    config::PythonSettings,
+    hooks::payload::{Counter, MAX_DEPTH, PayloadError, payload_size},
+};
 use pyo3::{
     IntoPyObjectExt, ffi,
     prelude::*,
-    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyModule, PyString},
+    types::{PyBool, PyCFunction, PyDict, PyFloat, PyInt, PyList, PyModule, PyString},
 };
 use serde_json::{Map, Number, Value};
 use std::{
     ffi::CString,
     fs::File,
-    io::{self, Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -27,7 +30,6 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
-const MAX_DEPTH: usize = 64;
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Diagnostics intentionally exclude Python exception messages and source text.
@@ -55,6 +57,12 @@ pub enum PythonHookError {
     TimedOut,
     #[error("Python runtime is closed")]
     Closed,
+}
+
+impl From<PayloadError> for PythonHookError {
+    fn from(_: PayloadError) -> Self {
+        Self::PayloadTooLarge
+    }
 }
 
 /// A process-wide interpreter with bounded asynchronous admission.
@@ -322,6 +330,42 @@ fn initialize(paths: &[PathBuf]) -> Result<(), PythonHookError> {
         }
         // Load helpers before accepting registrations or invoking application code.
         py.import("inspect")?;
+        let extractors = PyModule::new(py, "yasp_extractors")?;
+        use crate::hooks::builtin::extractors as builtin;
+        type Extractor = fn(&str) -> Result<Option<Map<String, Value>>, builtin::ExtractionError>;
+        for (name, function) in [
+            ("metabase", builtin::metabase as Extractor),
+            ("superset", builtin::superset as Extractor),
+            ("redash", builtin::redash as Extractor),
+        ] {
+            let callback = PyCFunction::new_closure(
+                py,
+                None,
+                None,
+                move |args, kwargs| -> PyResult<Py<PyAny>> {
+                    if kwargs.is_some_and(|kwargs| !kwargs.is_empty()) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(
+                            "extractor expects one SQL string",
+                        ));
+                    }
+                    let (sql,): (String,) = args.extract()?;
+                    match function(&sql) {
+                        Ok(metadata) => to_python(
+                            args.py(),
+                            &metadata.map(Value::Object).unwrap_or(Value::Null),
+                        ),
+                        Err(builtin::ExtractionError::NotImplemented) => {
+                            Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                                "BI metadata extraction is not implemented",
+                            ))
+                        }
+                    }
+                },
+            )?;
+            extractors.add(name, callback)?;
+        }
+        sys.getattr("modules")?
+            .set_item("yasp_extractors", extractors)?;
         Ok(())
     })
     .map_err(|_| PythonHookError::Initialization)
@@ -546,62 +590,4 @@ fn from_python(
     };
     count.json(&scalar)?;
     Ok(scalar)
-}
-
-fn payload_size(value: &Value, limit: usize) -> Result<usize, PythonHookError> {
-    fn check_depth(value: &Value, depth: usize) -> Result<(), PythonHookError> {
-        if depth > MAX_DEPTH {
-            return Err(PythonHookError::PayloadTooLarge);
-        }
-        match value {
-            Value::Array(values) => {
-                for value in values {
-                    check_depth(value, depth + 1)?;
-                }
-            }
-            Value::Object(values) => {
-                for value in values.values() {
-                    check_depth(value, depth + 1)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    check_depth(value, 0)?;
-    let mut count = Counter { bytes: 0, limit };
-    count.json(value)?;
-    Ok(count.bytes)
-}
-
-struct Counter {
-    bytes: usize,
-    limit: usize,
-}
-
-impl Counter {
-    fn remaining(&self) -> usize {
-        self.limit - self.bytes
-    }
-    fn charge(&mut self, bytes: usize) -> Result<(), PythonHookError> {
-        if bytes > self.remaining() {
-            return Err(PythonHookError::PayloadTooLarge);
-        }
-        self.bytes += bytes;
-        Ok(())
-    }
-    fn json(&mut self, value: &(impl serde::Serialize + ?Sized)) -> Result<(), PythonHookError> {
-        serde_json::to_writer(self, value).map_err(|_| PythonHookError::PayloadTooLarge)
-    }
-}
-
-impl Write for Counter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.charge(bytes.len())
-            .map_err(|_| io::Error::other("payload limit"))?;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }

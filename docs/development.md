@@ -35,7 +35,7 @@ are not present in the current dependency graph.
 | thiserror 2                                                | Added: typed library errors.                                                                                         | Keep recoverable error categories; add no generic error framework to the library.                                                                                                                                                                                                                                |
 | tracing 0.1 + tracing-subscriber 0.3                       | Added: structured events and host log filtering/output.                                                              | The library emits events; the host alone installs the subscriber. Redact query data and secrets.                                                                                                                                                                                                                 |
 | PyO3 0.29                                                  | Added behind the `python` feature: embed CPython for trusted callbacks.                                              | No extension-module, abi3, auto-initialize, or unused conversion features. Initialize explicitly after configuring imports. Rust-only applications do not link Python.                                                                                                                                           |
-| serde_json 1                                               | Added behind `python` and used by tests: plain callback input/output and application params.                         | The callback boundary is not a lossless database value codec.                                                                                                                                                                                                                                                    |
+| serde_json 1                                               | Added: shared JSON values for bounded context, hook params, and Python callback input/output.                          | The callback boundary is not a lossless database value codec.                                                                                                                                                                                                                                                    |
 | pgwire 0.41                                                | Added with `server-api-ring` and `client-api-ring`: frontend protocol handling and native PostgreSQL backend client. | Streams text rows and PostgreSQL metadata without converting values through a driver value model. The guarded frontend transport checks the configured frame bound before payload allocation.                                                                                                                    |
 | dotenvy 0.15                                               | Added: host-only `.env` parsing.                                                                                     | Iterator API avoids process environment mutation; parse before runtime startup and redact parser diagnostics.                                                                                                                                                                                                    |
 | futures 0.3 + async-trait 0.1 + tokio-util 0.7             | Added: asynchronous protocol handlers and framed transport.                                                          | Uses pgwire streaming APIs; no separate query framework.                                                                                                                                                                                                                                                         |
@@ -188,6 +188,42 @@ not executing Python; cancelled/timed-out jobs retain worker capacity until they
 return. See [the callback contract](../hooks/README.md#external-python-callbacks)
 for data types, resource bounds, errors, and the reusable library API.
 
+### Context hook configuration
+
+The optional `hooks.context` callback derives application context once after query
+validation and before backend selection and cache eligibility, including for cache
+hits. Its result is available to later hooks as nested JSON data. Authenticated
+frontend identity remains separate. Provider errors, invalid results, timeouts, or
+Python saturation yield empty context; cancellation stops the query. No BI identity
+extractor is enabled by default.
+
+The repository binary can load Python context callbacks when built with the `python`
+feature. A consuming Rust host registers its own compiled callback name and binds it
+with `hooks::bind_context`. The reference form is:
+
+```yaml
+gateway:
+  context_timeout_ms: 2000
+  max_context_bytes: 65536
+hooks:
+  context:
+    type: python
+    path: ../hooks/examples/context.py
+    callback: derive_context
+    params: {}
+```
+
+Timeout defaults to 2000 ms, encoded context defaults to 65,536 bytes, and maximum
+nested values are limited to 64 levels. Python receives `function(request, params)`
+with JSON data and returns a dictionary or `None`. The example may call
+`yasp_extractors`; the named Metabase, Superset, and Redash functions currently
+raise `NotImplementedError`. An application should add extraction only after
+validating the actual metadata provided by its BI client.
+
+Context does not partition cache entries or alter their validation scope. Source-role
+permissions remain the database access boundary; application RBAC and result
+processing are separate work.
+
 ## Runtime configuration
 
 The host loads ignored `config/local.yml` by default. Use `--config PATH` to select
@@ -202,8 +238,9 @@ cp .env.example .env
 logins, and environment secrets before running it. Planned settings remain in marked
 commented blocks. Caching is disabled by default; set `cache.enabled: true` to opt in.
 Runtime YAML supports `version: 1`, optional `gateway`, `backend`, and `cache` blocks,
-PostgreSQL targets and logins, optional `hooks.select_backend` and `cache.eligibility`
-references, and shared `hooks.python` runtime settings.
+PostgreSQL targets and logins, optional `hooks.context`, `hooks.select_backend`, and
+`cache.eligibility` references, context bounds in `gateway`, and shared
+`hooks.python` runtime settings.
 Unknown fields and sections are rejected.
 The loader also rejects duplicate keys, invalid types, and YAML files larger than
 64 KiB.

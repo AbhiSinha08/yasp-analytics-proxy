@@ -37,7 +37,12 @@
 - [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only PostgreSQL results.
   - [x] **Cache settings and bounds** — Keeps caching disabled by default and limits cached rows and aggregate in-process buffers.
   - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes remain cache keys.
-- [ ] **BI client context and compatibility** — Check what identity information the BI client provides and test its connection and queries.
+- [ ] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
+  - [x] **Context hook platform** — Derives bounded application context once per validated query with async Rust or external Python callbacks.
+  - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
+  - [x] **Placeholder extractors** — Provides named Metabase, Superset, and Redash helper functions that report they are not implemented.
+  - [ ] **Real BI metadata extractors** — Implement and validate extraction against observed client metadata; no extractor is enabled by default.
+- [ ] **DataBase Schema Discovery** - Let clients discover Database Schema
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
@@ -56,6 +61,7 @@
 - [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.
+- [ ] **Backend Database Schema Caching**
 
 ## Phase 3 — Advanced analytics and integrations
 
