@@ -196,6 +196,59 @@ fn redis_cache_contract() {
         start_server(context_gateway, make_backends(), context_selector);
     let normalized_context_hit =
         |query: &str| psql(query, &context_address, &user, &password, &database);
+    let discovery = normalized_context_hit(
+        "SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname",
+    );
+    assert_success(&discovery, "discovery with context and cache enabled");
+    assert_eq!(stdout(&discovery).trim(), target.database);
+    assert_eq!(
+        context_sequence.load(Ordering::SeqCst),
+        0,
+        "discovery bypasses context"
+    );
+    assert!(
+        context_observations.lock().unwrap().is_empty(),
+        "discovery bypasses selection and cache eligibility"
+    );
+    let captured: Vec<String> =
+        serde_json::from_str(include_str!("fixtures/psql_discovery.json")).unwrap();
+    // Describe a native relation that also exists in the maintenance database.
+    for query in &captured {
+        let query = query.replace("'25009'", "'pg_catalog.pg_class'::pg_catalog.regclass");
+        let result = normalized_context_hit(&query);
+        assert_success(&result, "psql discovery with cache enabled");
+        assert!(
+            redis_get(&redis_url, &cache_key(&context_namespace, &query)).is_empty(),
+            "psql metadata must not populate Redis"
+        );
+    }
+    assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
+    assert!(
+        context_observations.lock().unwrap().is_empty(),
+        "psql discovery bypasses context, selection, and cache eligibility"
+    );
+    let dbeaver: Vec<String> =
+        serde_json::from_str(include_str!("fixtures/dbeaver_discovery.json")).unwrap();
+    for query in &dbeaver {
+        let result = normalized_context_hit(query);
+        assert_success(&result, "DBeaver discovery with cache enabled");
+        assert!(redis_get(&redis_url, &cache_key(&context_namespace, query)).is_empty());
+    }
+    assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
+    assert!(context_observations.lock().unwrap().is_empty());
+    let information_schema_sql =
+        "SELECT feature_id FROM information_schema.sql_features ORDER BY feature_id LIMIT 1";
+    let result = normalized_context_hit(information_schema_sql);
+    assert_success(&result, "information_schema namespace discovery");
+    assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
+    assert!(context_observations.lock().unwrap().is_empty());
+    assert!(
+        redis_get(
+            &redis_url,
+            &cache_key(&context_namespace, information_schema_sql)
+        )
+        .is_empty()
+    );
     let context_first = normalized_context_hit("SELECT clock_timestamp()");
     let context_second = normalized_context_hit("  select  clock_timestamp() ;  ");
     assert_success(&context_first, "first context-aware query");
@@ -504,7 +557,8 @@ fn redis_cache_contract() {
     let _ = shutdown.send(());
     server.join().expect("lowered row-cap gateway joins");
 
-    let monitored_sql = "SELECT ClOcK_TiMeStAmP() /* Pg_StAt_AcTiViTy */";
+    let monitored_sql =
+        "SELECT ClOcK_TiMeStAmP() + interval '0 microseconds' /* Pg_StAt_AcTiViTy */";
     let seed_cache = Arc::new(
         RedisCache::new(settings(&namespace, 60, 5, 16384), &redis_url, None)
             .expect("cache seed initializes"),
@@ -833,7 +887,7 @@ def eligibility(request, params):
         "SELECT pg_sleep(8)",
         "SELECT clock_timestamp() /* ineligible */",
         "SELECT clock_timestamp() /* eligibility error */",
-        "SELECT ClOcK_TiMeStAmP() /* Pg_StAt_AcTiViTy */",
+        "SELECT ClOcK_TiMeStAmP() + interval '0 microseconds' /* Pg_StAt_AcTiViTy */",
         "SELECT statement_timestamp() /* cache eligible */",
         "SELECT statement_timestamp() /* Python cache eligible */",
         "SELECT clock_timestamp() + interval '0 seconds' /* budget */",

@@ -24,7 +24,84 @@ pub struct FileConfig {
     pub backend: BackendSettings,
     #[serde(default)]
     pub cache: CacheSettings,
+    #[serde(default)]
+    pub schema_discovery: SchemaDiscoverySettings,
     pub targets: BTreeMap<String, TargetSettings>,
+}
+
+/// A source for metadata, independent of application query routing.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SchemaDiscoverySettings {
+    pub target: Option<String>,
+    pub backend_login: Option<String>,
+}
+
+/// Named logins retain their declaration order for the discovery default.
+pub struct Logins {
+    entries: BTreeMap<String, LoginSettings>,
+    first: Option<String>,
+}
+
+impl std::ops::Deref for Logins {
+    type Target = BTreeMap<String, LoginSettings>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl<'a> IntoIterator for &'a Logins {
+    type Item = (&'a String, &'a LoginSettings);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, LoginSettings>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl Serialize for Logins {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Serialize the default first so a configuration round trip preserves it.
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+        if let Some(first) = &self.first {
+            map.serialize_entry(first, &self.entries[first])?;
+        }
+        for (name, login) in &self.entries {
+            if Some(name) != self.first.as_ref() {
+                map.serialize_entry(name, login)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Logins {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct LoginMap;
+        impl<'de> serde::de::Visitor<'de> for LoginMap {
+            type Value = Logins;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map of named logins")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Logins, M::Error> {
+                let mut entries = BTreeMap::new();
+                let mut first = None;
+                while let Some((name, login)) = map.next_entry::<String, LoginSettings>()? {
+                    if first.is_none() {
+                        first = Some(name.clone());
+                    }
+                    if entries.insert(name, login).is_some() {
+                        return Err(serde::de::Error::custom("duplicate login"));
+                    }
+                }
+                Ok(Logins { entries, first })
+            }
+        }
+        deserializer.deserialize_map(LoginMap)
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -322,7 +399,7 @@ pub struct TargetSettings {
     pub port: u16,
     pub database: String,
     pub tls_mode: String,
-    pub logins: BTreeMap<String, LoginSettings>,
+    pub logins: Logins,
 }
 
 impl FileConfig {
@@ -424,7 +501,33 @@ impl FileConfig {
         if self.hooks.select_backend.rust_callback() == Some("builtin.select_backend.passthrough") {
             self.default_backend()?;
         }
+        self.discovery_backend()?;
         Ok(())
+    }
+
+    pub fn discovery_backend(&self) -> Result<crate::hooks::BackendSelection, ConfigError> {
+        let target = match &self.schema_discovery.target {
+            Some(target) => target,
+            None if self.targets.len() == 1 => self.targets.keys().next().unwrap(),
+            None => return Err(ConfigError::MissingDiscoveryTarget),
+        };
+        let settings = self
+            .targets
+            .get(target)
+            .ok_or(ConfigError::InvalidDiscoveryBackend)?;
+        let login = self
+            .schema_discovery
+            .backend_login
+            .as_ref()
+            .or(settings.logins.first.as_ref())
+            .ok_or(ConfigError::InvalidDiscoveryBackend)?;
+        if !settings.logins.contains_key(login) {
+            return Err(ConfigError::InvalidDiscoveryBackend);
+        }
+        Ok(crate::hooks::BackendSelection {
+            target: target.clone(),
+            backend_login: login.clone(),
+        })
     }
 
     /// Resolve builtin passthrough params, or infer the sole configured pair.
@@ -499,12 +602,49 @@ mod tests {
 
     fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
         serde_saphyr::from_str(&format!(
-            "version: 1\nhooks:\n  select_backend: {hooks}\nbackend:\n{backend}\ntargets:\n{targets}"
+            "version: 1\nschema_discovery: {{target: primary}}\nhooks:\n  select_backend: {hooks}\nbackend:\n{backend}\ntargets:\n{targets}"
         ))
         .unwrap()
     }
 
     const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
+
+    #[test]
+    fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
+        let yaml = format!(
+            "version: 1\nhooks: {{select_backend: app.selector}}\ntargets:\n{}",
+            ONE_TARGET.replace("reader:\n", "z_first:\n")
+        ) + "\n      a_second:\n        username: second\n        password_env: SECOND_PASSWORD";
+        let mut config: FileConfig = serde_saphyr::from_str(&yaml).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.discovery_backend().unwrap().backend_login, "z_first");
+        let round_trip: FileConfig =
+            serde_saphyr::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            round_trip.discovery_backend().unwrap().backend_login,
+            "z_first"
+        );
+        config.schema_discovery.backend_login = Some("a_second".into());
+        assert_eq!(
+            config.discovery_backend().unwrap().backend_login,
+            "a_second"
+        );
+        config.schema_discovery.backend_login = Some("absent".into());
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidDiscoveryBackend)
+        ));
+        config.schema_discovery.backend_login = None;
+        let target: TargetSettings = serde_saphyr::from_str("engine: postgresql\nhost: localhost\nport: 5432\ndatabase: other\ntls_mode: disable\nlogins:\n  reader: {username: reader, password_env: OTHER_PASSWORD}").unwrap();
+        config.targets.insert("other".into(), target);
+        config.backend.max_connections_total = 24;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::MissingDiscoveryTarget)
+        ));
+        config.schema_discovery.target = Some("primary".into());
+        config.validate().unwrap();
+    }
 
     #[test]
     fn cache_settings_and_bounds_are_validated() {
@@ -769,10 +909,15 @@ pub struct GatewayConfig {
     pub(crate) settings: GatewaySettings,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
+    pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
 }
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("schema_discovery.target is required when multiple targets are configured")]
+    MissingDiscoveryTarget,
+    #[error("schema_discovery must identify a configured target and login")]
+    InvalidDiscoveryBackend,
     #[error("cache requires positive row, byte-budget, and TTL limits")]
     InvalidCache,
     #[error(
@@ -839,6 +984,7 @@ impl GatewayConfig {
             settings: GatewaySettings::default(),
             cache: None,
             context_hook: None,
+            schema_discovery: None,
         })
     }
 
@@ -852,13 +998,19 @@ impl GatewayConfig {
         &self.settings
     }
 
+    /// Use a configured pair for discovery without invoking application hooks.
+    pub fn with_schema_discovery(mut self, route: crate::hooks::BackendSelection) -> Self {
+        self.schema_discovery = Some(route);
+        self
+    }
+
     /// Attach one process-wide cache, shared by all frontend sessions.
     pub fn with_cache(mut self, cache: std::sync::Arc<crate::cache::RedisCache>) -> Self {
         self.cache = Some(cache);
         self
     }
 
-    /// Derive application-owned context once per query before downstream hooks.
+    /// Derive application-owned context once per ordinary query before downstream hooks.
     pub fn with_context_hook(mut self, hook: impl Into<crate::hooks::ContextHook>) -> Self {
         self.context_hook = Some(std::sync::Arc::new(hook.into()));
         self

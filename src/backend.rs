@@ -1,5 +1,5 @@
-//! Concrete PostgreSQL execution: bounded pooled connections and native text
-//! responses. Query syntax lives in `query`; organization policy lives outside it.
+//! Backend discovery dispatch and concrete PostgreSQL execution through bounded
+//! pools. Query syntax lives in `query`; organization policy lives outside it.
 
 use crate::{
     config::{BackendConfig, BackendSettings},
@@ -7,6 +7,9 @@ use crate::{
     query::ParsedQuery,
     transport::FrameGuard,
 };
+
+pub(crate) mod discovery;
+mod postgres;
 use deadpool::{
     Runtime,
     managed::{Manager, Metrics, Object, Pool, RecycleError, RecycleResult, Timeouts},
@@ -42,7 +45,7 @@ use tokio_util::codec::Framed;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET default_transaction_read_only = on; SET client_connection_check_interval = '1s'";
+pub(crate) const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET extra_float_digits = 3; SET default_transaction_read_only = on; SET default_transaction_isolation = 'read committed'; SET client_connection_check_interval = '1s'";
 
 /// One target/login pool. No organization routing or callback policy is embedded.
 pub struct PostgresBackend {
@@ -52,6 +55,28 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
+    pub(crate) async fn server_version(&self) -> PgWireResult<String> {
+        let connection = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| error_response("08006", "discovery source is unavailable"))?;
+        connection
+            .info
+            .parameters
+            .get("server_version")
+            .cloned()
+            .ok_or_else(|| {
+                error_response(
+                    "08006",
+                    "discovery source did not supply its PostgreSQL version",
+                )
+            })
+    }
+
+    pub(crate) fn discovery(&self) -> discovery::DiscoverySource<'_> {
+        discovery::DiscoverySource::Postgres(self)
+    }
     pub fn new(config: BackendConfig) -> io::Result<Self> {
         Self::with_capacity(config, 8)
     }
@@ -108,7 +133,7 @@ impl PostgresBackend {
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_inner(query, output, query_timeout, write_timeout, None)
+        self.execute_inner(query, output, query_timeout, write_timeout, None, None)
             .await
             .map(|_| ())
     }
@@ -127,8 +152,15 @@ impl PostgresBackend {
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_inner(query, output, query_timeout, write_timeout, Some(cancel))
-            .await
+        self.execute_inner(
+            query,
+            output,
+            query_timeout,
+            write_timeout,
+            Some(cancel),
+            None,
+        )
+        .await
     }
 
     async fn execute_inner<S>(
@@ -138,6 +170,7 @@ impl PostgresBackend {
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: Option<futures::channel::oneshot::Receiver<()>>,
+        discovery_setup: Option<&str>,
     ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
@@ -176,6 +209,11 @@ impl PostgresBackend {
                 "08006",
                 "unexpected PostgreSQL transaction state",
             ));
+        }
+        if let Some(setup) = discovery_setup {
+            timeout(CONNECT_TIMEOUT, connection.control(setup))
+                .await
+                .map_err(|_| error_response("08006", "PostgreSQL metadata setup timed out"))??;
         }
         let completion = connection
             .stream_query(query.sql(), output, query_timeout, write_timeout, cancel)
@@ -246,6 +284,34 @@ pub struct PostgresBackends {
 }
 
 impl PostgresBackends {
+    pub(crate) fn discovery_route(
+        &self,
+        route: Option<&BackendSelection>,
+    ) -> io::Result<BackendSelection> {
+        if let Some(route) = route {
+            return self
+                .pools
+                .contains_key(route)
+                .then(|| route.clone())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "discovery pair is not configured",
+                    )
+                });
+        }
+        let first =
+            self.pools.keys().next().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "no discovery source")
+            })?;
+        if self.pools.keys().any(|route| route.target != first.target) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "supply the discovery pair for multiple targets",
+            ));
+        }
+        Ok(first.clone())
+    }
     pub fn new(
         configurations: BTreeMap<BackendSelection, BackendConfig>,
         settings: BackendSettings,

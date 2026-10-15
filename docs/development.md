@@ -143,6 +143,31 @@ it finishes. Conflicting package versions, untrusted code, or hard kill deadline
 require process workers with separate environments. Replace processes to activate
 new packages; do not pip-install or reload native modules in a serving interpreter.
 
+### Schema discovery and desktop clients
+
+Metadata has a source independent of the application's query selector:
+
+```yaml
+schema_discovery:
+  target: primary
+  backend_login: secondary
+```
+
+The target provides the source database and credentials. Omit the target only when
+there is one; omit the login to select its first YAML declaration. Use the source
+database name as `YASP_GATEWAY_DATABASE` for browsing and restart after configuration
+changes. Catalog enumeration exposes only that source database; refresh the client's
+database tree to remove cached unrelated names such as `postgres`.
+
+In DBeaver, use autocommit and these PostgreSQL driver properties:
+`preferQueryMode=simple`, `prepareThreshold=0`, `binaryTransfer=false`, and local
+`sslmode=disable`. Connect to the gateway database explicitly. `SET application_name`
+and discovery `SET search_path` are supported. Use schema-qualified names for ordinary
+reads: the discovery search path does not change their routing or execution context.
+Clients can reaffirm fixed UTF-8, text formatting, and read-only defaults; other
+values receive an unsupported-feature error. Prepared queries, transactions, and
+full Metabase sync remain separate compatibility milestones.
+
 ### Python selector configuration
 
 The host accepts an external file reference in `hooks.select_backend` as well as

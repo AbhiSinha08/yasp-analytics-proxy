@@ -22,6 +22,8 @@ gateway:
   max_context_bytes: 65536
   tls:
     mode: local_development # Non-local deployments require certificates.
+  # NOTE: The Gateway requires setting 'preferQueryMode=simple' for JDBC connections to it.
+  # Otherwise JDBC defaults to extended query mode, which is not yet supported by YASP.
 
 targets:
   primary:
@@ -58,6 +60,12 @@ targets:
 #     permitted_connections:
 #       primary: [restricted, analyst]
 #       secondary: [restricted, analyst]
+
+# Metadata bypasses application hooks and the result cache. A target is required
+# when several targets exist; an omitted login uses its first declared login.
+schema_discovery:
+  target: primary
+  backend_login: restricted
 
 backend:
   max_connections_per_pool: 8 # Pools are partitioned by target/login.
@@ -114,6 +122,7 @@ hooks:
     max_payload_bytes: 2097152
     execution_timeout_ms: 2000 # Stops waiting; executing Python retains its worker.
 
+
   # Optional context provider runs after validation, before selection/cache checks.
   # Errors produce an empty context; they do not deny the query.
   # context:
@@ -121,7 +130,6 @@ hooks:
   #   path: ../hooks/examples/context.py
   #   callback: derive_context
   #   params: {}
-
 
   # Application-specific selector example: context and role policy remain host-owned.
   # Replace select_backend above after validating metadata and implementing the policy.

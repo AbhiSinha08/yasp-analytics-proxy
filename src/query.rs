@@ -44,6 +44,30 @@ pub enum QueryError {
 }
 
 impl ParsedQuery {
+    /// A generated metadata statement has its own effective SQL and query ID.
+    pub(crate) fn from_statement(statement: Statement) -> Result<Self, QueryError> {
+        let sql = statement.to_string();
+        if sql.len() > MAX_SQL_BYTES {
+            return Err(QueryError::TooLarge);
+        }
+        let tokens = Tokenizer::new(&PostgreSqlDialect {}, &sql)
+            .tokenize_with_location()
+            .map_err(|_| QueryError::Syntax)?;
+        if tokens
+            .iter()
+            .filter(|t| !matches!(t.token, Token::Whitespace(_) | Token::EOF))
+            .count()
+            > MAX_SQL_TOKENS
+        {
+            return Err(QueryError::TooComplex);
+        }
+        let query_id = query_id(&sql, &tokens);
+        Ok(Self {
+            sql,
+            statement,
+            query_id,
+        })
+    }
     pub fn parse(sql: &str) -> Result<Self, QueryError> {
         Self::parse_with_limit(sql, MAX_SQL_BYTES)
     }

@@ -114,7 +114,8 @@ fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
         required("YASP_GATEWAY_PASSWORD", "YASP_GATEWAY_PASSWORD")?,
         required("YASP_GATEWAY_DATABASE", "YASP_GATEWAY_DATABASE")?,
     )?
-    .with_settings(file.gateway.clone())?;
+    .with_settings(file.gateway.clone())?
+    .with_schema_discovery(file.discovery_backend()?);
     let cache_url = file
         .cache
         .enabled

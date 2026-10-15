@@ -173,12 +173,77 @@ set to `postgres` for test database administration and the target secret named
 loads the SQL fixture, runs the proxy against that database, and drops only the
 database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
 The runtime creates no application database or persistent data fixture.
-Client transactions, prepared statements, `SET`, binary results, organization-specific
+Client transactions, prepared statements, general session settings, binary results, organization-specific
 RBAC interpretation, query/result hooks, TLS, and BI-client integration are not yet
 available in the completed runtime. The Redis cache is implemented for supported
 read-only PostgreSQL queries; see its settings and limits below. Routing implements
 selection contracts, configured target/login validation, and bounded PostgreSQL pools.
 See [development setup](development.md) and [test guidance](../tests/README.md).
+
+### Schema discovery and client setup
+
+Recognized PostgreSQL catalog reads use a separate discovery target/login, without
+context, selection, or cache-eligibility callbacks and without the Redis result cache.
+`schema_discovery.target` is inferred for one target and required for multiple
+targets. `schema_discovery.backend_login` defaults to the first login declared in
+that target's YAML. The existing pool and source role enforce native metadata
+visibility. Library hosts register a pair with `GatewayConfig::with_schema_discovery`;
+fixed-backend serving uses its backend. Routed library hosts without an explicit
+pair can infer one target's first map entry, but should supply the desired login.
+
+The frontend classifier checks nested relations, helpers, and casts. Accepted
+requests enter `backend::discovery` with the original PostgreSQL AST, frontend
+session state, deadlines, and cancellation. Dispatch uses the configured concrete
+backend engine. The handler in `backend/postgres.rs` owns native name qualification,
+database-list filtering, session setup, and forwarding through its existing pool.
+Engine handlers own PostgreSQL client responses and can answer locally without
+forwarding SQL. A future source engine adds a dispatch variant and its own handler
+to translate PostgreSQL metadata requests into native catalog reads or local
+responses; the frontend classifier and client protocol remain PostgreSQL. Startup
+server-version reporting uses the same engine dispatch. Database
+listings are limited to the source's current database. Use the same gateway and
+source database name for client browsing; database alias adaptation is not implemented.
+Reads of any `information_schema` views use discovery when every relation stays
+within the supported metadata namespaces and every function passes the helper checks.
+Mixed catalog/data reads, unknown functions, and CTE queries follow ordinary routing.
+BI data fingerprinting and field-value samples are ordinary data queries.
+The supported catalog subset includes psql 18 database, schema, table/view, and
+table-description queries: ownership and encoding helpers, native name-filter regex
+operators, policy definitions, statistics definitions, publications, and partition
+ancestry. `ARRAY(SELECT ...)` inspects its nested query under the same rules.
+Stored statistics values and application data remain outside discovery.
+DBeaver discovery includes schema/login probes with separate result columns,
+keyword enumeration, extension and role membership catalogs, operator classes and
+families, type casts/ranges, and routine language/aggregate definitions. Reviewed
+helpers expose partition/rule/identity-sequence definitions, tablespace locations,
+and index scan counters. Metadata-returning functions also qualify as discovery
+sources in `FROM`, including nested reads and aggregates. Every function still
+requires an explicit allowlist entry; no `pg_catalog` or `pg_*` wildcard is granted.
+Standalone login queries and computed schema/login strings retain ordinary routing.
+Password catalogs, large-object contents, row-value statistics, file readers, and
+queries that include application relations or unknown functions stay outside discovery.
+
+`SET application_name` stores a frontend label (at most 63 UTF-8 bytes), and
+`SET search_path` stores a discovery-only path (at most 1,024 bytes and 16 entries).
+Matching `SHOW` requests read frontend state. Startup application name and search
+path are accepted with the same bounds. Discovery applies these settings locally
+inside its existing read-only execution transaction; ordinary queries use qualified
+table names and the source's normal path. Native operators resolve in `pg_catalog`
+before application schemas: an explicit `pg_catalog` entry must be first, otherwise
+PostgreSQL searches it implicitly. Cleanup prevents settings leaking between
+pool borrowers.
+
+Clients may reaffirm the fixed settings: UTF8 client encoding, standard strings on,
+DateStyle `ISO, MDY`, TimeZone `UTC`, IntervalStyle `postgres`, bytea output `hex`,
+extra float digits `3`, read-only mode on, and `read committed` isolation. `SET NAMES
+'UTF8'`, `SET TIME ZONE 'UTC'`, and session transaction characteristics with these
+defaults are accepted. Changes to protected values, roles, query timers, and other
+settings remain unsupported. No client transactions are implemented.
+
+Gateway startup probes the discovery source for its PostgreSQL version; the source
+must be reachable. Startup `server_version` and source version queries use the same
+discovery source. Restart the gateway after a source version upgrade. This server
+fingerprint does not imply support for all PostgreSQL protocol features.
 
 ## Phase 0 — Project foundation
 
@@ -266,7 +331,7 @@ An incomplete connectivity spike is not an access-controlled deployment.
 ### BI context and client validation
 
 The library exposes an optional context provider configured at `hooks.context`.
-It receives authenticated frontend identity, frontend database, client/query IDs,
+For ordinary queries it receives authenticated frontend identity, frontend database, client/query IDs,
 and the immutable parsed query. The provider derives bounded plain JSON context;
 the engine invokes it once after SQL validation and before backend selection and
 cache eligibility, including on cache hits. That context is passed to downstream
@@ -297,8 +362,8 @@ Metabase, Superset, and Redash extractor names are placeholders that report
   selection. Service authentication authenticates that integration, not each viewer;
   query comments alone do not prove an end-user identity. Verified end-user context
   is a later integration, not a requirement for the configuration/script prototype.
-- Forward authorized catalog queries to PostgreSQL for BI schema discovery and field
-  scanning. Schema caching is outside this phase.
+- Route recognized schema-discovery queries directly to the configured metadata
+  source. Field scanning uses ordinary application routing. Schema caching is deferred.
 - Support read-only session setup. Reject writes, COPY, replication, and
   temporary-table workflows with explicit errors.
 - Enforce read-only backend transactions as well as least-privileged source logins.
@@ -447,7 +512,7 @@ organization RBAC policy.
   `None`. `hooks::builtin::extractors` exposes named Metabase, Superset, and Redash
   placeholders that return `NotImplemented`; the Python `yasp_extractors` module
   exposes the same names and raises `NotImplementedError`.
-- Derive context once after SQL validation and before backend selection and cache
+- Derive context once for ordinary queries after SQL validation and before backend selection and cache
   eligibility, also on cache hits. Downstream selection sees context as nested plain
   immutable data; Python receives a copy. Context cannot replace frontend identity.
   The defaults are a 2-second context wait, 65,536 encoded bytes, and nesting 64.
