@@ -46,6 +46,23 @@ session/frame/SQL limits, query/read/startup/shutdown/write timeouts, and
 size stays fixed at 8 MiB. The loadable `config/example.yml` preserves future
 settings in commented blocks; prepared-statement and portal limits remain unsupported.
 
+The discovery checks classify catalog reads separately from data queries and replay
+the captured psql and DBeaver queries in `fixtures/psql_discovery.json` and
+`fixtures/dbeaver_discovery.json`. The psql replay requires PostgreSQL 18 catalog columns
+and covers database/schema/table/view listings and table descriptions, comparing
+against the same discovery login directly. It also covers native regex operators,
+policy arrays, statistics definitions, publications, and partition ancestry.
+The checks cover configured login selection, declaration-order
+defaults, callback/cache bypass, database-list filtering, native result values,
+source-version startup parameters, supported setup commands, metadata-only search
+paths, and isolation from shadowed catalog names/helpers. Desktop UI browsing remains
+a manual compatibility check; the user verified psql, VS Code SQL Client, and DBeaver
+with `preferQueryMode=simple`. DBeaver replay covers schema/login probes, keyword
+functions in `FROM`, partition/index helpers, tablespaces, operator classes, roles,
+and extensions. Negative checks keep data samples, file/large-object readers,
+password catalogs, row-value statistics, and unknown functions on ordinary routing.
+Protocol replay does not establish full BI compatibility.
+
 The test scope exercises simple-query forwarding for supported SELECT/read-only
 WITH queries, subqueries, joins, aggregates, unions, catalog queries, and SHOW
 variable/ALL requests. It checks raw PostgreSQL metadata and text-row forwarding,

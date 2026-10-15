@@ -1,9 +1,13 @@
 //! PostgreSQL frontend sessions, authentication, and responses.
 
 use crate::{
-    backend::{PostgresBackend, PostgresBackends},
+    backend::{
+        PostgresBackend, PostgresBackends,
+        discovery::{DiscoveryRequest, DiscoverySource},
+    },
     cache::{CacheBuffer, RedisCache},
     config::{GatewayConfig, GatewaySettings},
+    discovery::{self, SessionSettings, SetupResponse},
     hooks::{ContextHook, ContextRequest, RoutedSelector, SelectionError, SelectionRequest},
     logger,
     query::{ParsedQuery, QueryError},
@@ -27,9 +31,12 @@ use pgwire::{
     messages::{
         DecodeContext, Message, PgWireBackendMessage, PgWireFrontendMessage,
         SslNegotiationMetaMessage,
+        data::{DataRow, FieldDescription, RowDescription},
         response::{
-            EmptyQueryResponse, GssEncResponse, ReadyForQuery, SslResponse, TransactionStatus,
+            CommandComplete, EmptyQueryResponse, GssEncResponse, ReadyForQuery, SslResponse,
+            TransactionStatus,
         },
+        startup::ParameterStatus,
     },
     tokio::server::{PgWireMessageServerCodec, process_error, process_message},
 };
@@ -74,12 +81,14 @@ pub async fn serve_routed(
     selector: impl Into<RoutedSelector>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
+    let discovery = backends.discovery_route(config.schema_discovery.as_ref())?;
     serve_sessions(
         listener,
         config,
         Execution::Routed {
             backends,
             selector: selector.into(),
+            discovery,
         },
         shutdown,
     )
@@ -91,14 +100,28 @@ enum Execution {
     Routed {
         backends: Arc<PostgresBackends>,
         selector: RoutedSelector,
+        discovery: crate::hooks::BackendSelection,
     },
 }
 
 impl Execution {
+    fn discovery(&self) -> DiscoverySource<'_> {
+        let backend = match self {
+            Self::Fixed(backend) => backend,
+            Self::Routed {
+                backends,
+                discovery,
+                ..
+            } => backends.get(discovery).expect("validated discovery pair"),
+        };
+        backend.discovery()
+    }
     async fn select(&self, request: &SelectionRequest<'_>) -> PgWireResult<&PostgresBackend> {
         match self {
             Self::Fixed(backend) => Ok(backend),
-            Self::Routed { backends, selector } => {
+            Self::Routed {
+                backends, selector, ..
+            } => {
                 let route = selector
                     .select(request)
                     .await
@@ -128,7 +151,9 @@ impl Execution {
     fn close(&self) {
         match self {
             Self::Fixed(backend) => backend.close(),
-            Self::Routed { backends, selector } => {
+            Self::Routed {
+                backends, selector, ..
+            } => {
                 selector.shutdown();
                 backends.close();
             }
@@ -154,6 +179,11 @@ async fn serve_sessions(
             "gateway requires a loopback listener",
         ));
     }
+    let server_version = execution
+        .discovery()
+        .server_version()
+        .await
+        .map_err(|_| io::Error::other("cannot obtain PostgreSQL discovery profile"))?;
     let settings = Arc::new(config.settings);
     let execution = Arc::new(execution);
     let cancel_manager = Arc::new(ConnectionManager::new());
@@ -173,6 +203,7 @@ async fn serve_sessions(
         cache: cache.clone(),
         context_hook: context_hook.clone(),
         stopped,
+        server_version,
     });
     let mut sessions = JoinSet::new();
     tokio::pin!(shutdown);
@@ -254,6 +285,7 @@ struct Credentials {
     cache: Option<Arc<RedisCache>>,
     context_hook: Option<Arc<ContextHook>>,
     stopped: watch::Receiver<bool>,
+    server_version: String,
 }
 
 impl fmt::Debug for Credentials {
@@ -301,6 +333,8 @@ async fn connection(
         PgWireMessageServerCodec::new(client),
     );
     let mut parameters = DefaultServerParameterProvider::default();
+    parameters.server_version = source.server_version.clone();
+    parameters.search_path = SessionSettings::default().search_path;
     parameters.is_superuser = false;
     parameters.default_transaction_read_only = true;
     parameters.date_style = "ISO, MDY".into();
@@ -320,6 +354,7 @@ async fn connection(
     let deadline = Instant::now() + startup_timeout;
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
+    let mut session = SessionSettings::default();
     loop {
         let message = if authenticated {
             timeout(read_timeout, socket.next())
@@ -362,7 +397,7 @@ async fn connection(
                 .start_query()
                 .await;
             let result = tokio::select! {
-                result = execute_query(&mut socket, &execution, &query.query, &settings, client_id, &source, cancel) => result,
+                result = execute_query(&mut socket, &execution, &query.query, &settings, client_id, &source, &mut session, cancel) => result,
                 _ = disconnected(&observer) => return Ok(()),
             };
             if let Err(error) = result {
@@ -433,6 +468,28 @@ async fn connection(
                                 "0A000",
                                 "startup options and replication are unsupported",
                             ));
+                        }
+                        for setting in ["application_name", "search_path", "client_encoding"] {
+                            if let Some(value) = startup.parameters.get(setting) {
+                                if setting == "search_path" {
+                                    session.set_search_path(value).map_err(|_| {
+                                        protocol_error(
+                                            "FATAL",
+                                            "0A000",
+                                            "unsupported startup search path",
+                                        )
+                                    })?;
+                                    continue;
+                                }
+                                let sql =
+                                    format!("SET {setting} = '{}'", value.replace('\'', "''"));
+                                let parsed = ParsedQuery::parse(&sql).map_err(|_| {
+                                    protocol_error("FATAL", "0A000", "unsupported startup setting")
+                                })?;
+                                session.handle(parsed.statement()).map_err(|_| {
+                                    protocol_error("FATAL", "0A000", "unsupported startup setting")
+                                })?;
+                            }
                         }
                     }
                     if !matches!(socket.state(), PgWireConnectionState::AwaitingSync) {
@@ -531,6 +588,7 @@ async fn execute_query(
     settings: &GatewaySettings,
     client_id: u64,
     source: &Credentials,
+    session: &mut SessionSettings,
     mut cancel: futures::channel::oneshot::Receiver<()>,
 ) -> PgWireResult<()> {
     let authenticated_user = source.username.as_str();
@@ -566,9 +624,46 @@ async fn execute_query(
     let query_id = query.query_id();
     tracing::debug!(query_id, client_id, sql = ?query.sql(), "query received");
     let result = async {
+        if let Some(response) = session.handle(query.statement()).map_err(|message| protocol_error("ERROR", "0A000", message))? {
+            let messages = match response {
+                SetupResponse::Set { parameter } => {
+                    let mut messages = Vec::new();
+                    if let Some((name, value)) = parameter {
+                        messages.push(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(name.into(), value)));
+                    }
+                    messages.push(PgWireBackendMessage::CommandComplete(CommandComplete::new("SET".into())));
+                    messages
+                }
+                SetupResponse::Show { name, value } => {
+                    let mut row = bytes::BytesMut::new();
+                    row.extend_from_slice(&(value.len() as i32).to_be_bytes());
+                    row.extend_from_slice(value.as_bytes());
+                    vec![
+                        PgWireBackendMessage::RowDescription(RowDescription::new(vec![FieldDescription::new(name, 0, 0, 25, -1, -1, 0)])),
+                        PgWireBackendMessage::DataRow(DataRow::new(row, 1)),
+                        PgWireBackendMessage::CommandComplete(CommandComplete::new("SHOW".into())),
+                    ]
+                }
+            };
+            for message in messages {
+                timeout(write_timeout, socket.send(message)).await
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend setup response timed out"))??;
+            }
+            return Ok(());
+        }
         query
             .validate_read_only()
             .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
+        if let Some(kind) = discovery::classify(&query) {
+            return execution.discovery().execute(DiscoveryRequest {
+                query: &query,
+                kind,
+                session,
+                client_id,
+                query_timeout: settings.query_timeout(),
+                write_timeout,
+            }, socket, cancel).await;
+        }
         let context = if let Some(hook) = &source.context_hook {
             let mut stopped = source.stopped.clone();
             let context_request = ContextRequest {

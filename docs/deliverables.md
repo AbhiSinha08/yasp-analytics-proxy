@@ -42,7 +42,12 @@
   - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
   - [x] **Placeholder extractors** — Provides named Metabase, Superset, and Redash helper functions that report they are not implemented.
   - [ ] **Real BI metadata extractors** — Implement and validate extraction against observed client metadata; no extractor is enabled by default.
-- [ ] **DataBase Schema Discovery** - Let clients discover Database Schema
+- [x] **Database schema discovery** — Route metadata to its configured source and verify client browsing.
+  - [x] **Discovery route and inference** — Resolves a configured target/login, preserves the first declared login, and bypasses callbacks and Redis.
+  - [x] **PostgreSQL metadata rules** — Recognizes bounded catalog reads, qualifies native names, and limits database listings to the current source.
+  - [x] **Client setup and source fingerprint** — Handles bounded application name/discovery search path, fixed session defaults, and the discovery source's server version.
+  - [x] **Routing and protocol checks** — Tests metadata/data separation, native results, settings, callback bypass, and pool cleanup with real PostgreSQL clients.
+  - [x] **Live desktop-client browsing** — Verify VS Code Database Client and DBeaver UI refresh with autocommit and JDBC simple-query mode.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.

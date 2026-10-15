@@ -97,9 +97,10 @@ integration work.
 
 ## Context derivation
 
-The optional `hooks.context` provider runs once for each validated executable query,
+The optional `hooks.context` provider runs once for each validated ordinary query,
 after SQL validation and before backend selection and cache eligibility. It also runs
-for cache hits. The Rust `ContextRequest` borrows the authenticated frontend user,
+for cache hits. Recognized discovery reads and client setup commands bypass all
+application hooks. The Rust `ContextRequest` borrows the authenticated frontend user,
 frontend database, client ID, query ID, and `ParsedQuery`; it does not expose backend
 credentials. `bind_context(state, f)` accepts an async closure over the request and
 `Arc<State>`, returning a boxed future that produces an owned JSON object or
