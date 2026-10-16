@@ -26,6 +26,8 @@ implementation proceeds through requested subtasks
   when another implementation needs them, rather than building unused frameworks.
 - Preserve security checks, data integrity, lossless values, resource bounds, and
   necessary error handling while simplifying.
+- Follow the Rust structuring and verification norms in
+  [docs/development.md](docs/development.md#rust-structure-and-testing-norms).
 
 ## Core engine and customization boundary
 
@@ -121,5 +123,11 @@ implementation proceeds through requested subtasks
   or maintained documentation. Use commits and review descriptions for history.
 - Keep comments focused on purpose, contracts, constraints, and non-obvious
   reasons. Keep README, plan, setup instructions, and examples consistent.
+- Use [docs/README.md](docs/README.md) as the documentation index. Keep component
+  behavior in architecture, configuration, and extension guides, and planned scope
+  in docs/PLAN.md.
+- For large functionality changes, update the relevant component documentation and
+  Mermaid query, session, or component diagrams in the same change. Verify those
+  flows against the code; mark future stages explicitly.
 - Add Sub items to the file docs/deliverables.md if a plan implements multiple
   features or som sub-item is left delegated to the next session.

@@ -1,2 +1,2 @@
-//! Source-role selection policy and optional schema-preserving result masks.
-//! Database roles enforce RBAC; Phase 2 adds decision-model dynamic masking.
+//! Reserved for future engine policy and schema-preserving result masking.
+//! Current source access uses database roles selected through host-owned hooks.

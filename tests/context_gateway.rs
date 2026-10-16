@@ -1,4 +1,7 @@
-//! Exercise context cancellation and fallback through a fixed-backend gateway.
+//! Context cancellation, fallback, disconnect, and shutdown through a fixed gateway.
+
+#[cfg(unix)]
+mod support;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -13,8 +16,6 @@ async fn fixed_gateway_context_lifecycle() {
         tokio::client::{PgWireClient, PgWireMessageClientCodec},
     };
     use std::{
-        collections::HashMap,
-        path::Path,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -25,8 +26,7 @@ async fn fixed_gateway_context_lifecycle() {
     use tokio_util::codec::Framed;
     use yasp::{
         backend::PostgresBackend,
-        config::{BackendConfig, FileConfig, GatewayConfig, GatewaySettings},
-        gateway::serve,
+        config::{GatewayConfig, GatewaySettings},
         hooks::{ContextError, bind_context},
     };
 
@@ -49,41 +49,13 @@ async fn fixed_gateway_context_lifecycle() {
         }
     }
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut dotenv = HashMap::new();
-    if let Ok(items) = dotenvy::from_path_iter(root.join(".env")) {
-        for item in items {
-            let (key, value) = item.expect("test dotenv is valid");
-            dotenv.entry(key).or_insert(value);
-        }
-    }
-    let value = |key: &str| {
-        std::env::var(key)
-            .ok()
-            .or_else(|| dotenv.get(key).cloned())
-            .unwrap_or_else(|| panic!("required test environment value is missing: {key}"))
-    };
-    let file = FileConfig::read(&root.join("tests/config.yml"))
-        .expect("test backend configuration is valid");
-    let route = file.default_backend().expect("test default route exists");
-    let target = &file.targets[&route.target];
-    let login = &target.logins[&route.backend_login];
-    let gateway_user = value("YASP_GATEWAY_USERNAME");
-    let gateway_password = value("YASP_GATEWAY_PASSWORD");
-    let gateway_database = value("YASP_GATEWAY_DATABASE");
-    let backend = Arc::new(
-        PostgresBackend::new(
-            BackendConfig::new(
-                target.host.clone(),
-                target.port,
-                login.username.clone(),
-                value(&login.password_env),
-                target.database.clone(),
-            )
-            .expect("configured PostgreSQL backend is valid"),
-        )
-        .expect("configured PostgreSQL backend initializes"),
-    );
+    let environment = support::TestEnvironment::load();
+    let identity = environment.gateway();
+    let gateway_user = identity.user.clone();
+    let gateway_password = identity.password.clone();
+    let gateway_database = identity.database.clone();
+    let database = support::TestDatabase::create(&environment.source(None), "yasp_context");
+    let backend = Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap());
 
     let pending = Arc::new(PendingContext {
         entered: Arc::new(Notify::new()),
@@ -152,14 +124,8 @@ async fn fixed_gateway_context_lifecycle() {
     .expect("test gateway limits are valid")
     .with_context_hook(hook);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("ephemeral gateway listener binds");
-    let address = listener.local_addr().expect("listener address exists");
-    let (shutdown, stopped) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(serve(listener, gateway, backend, async move {
-        let _ = stopped.await;
-    }));
+    let server = support::GatewayServer::fixed(gateway, backend);
+    let address = server.address;
 
     async fn connect(
         address: std::net::SocketAddr,
@@ -301,12 +267,7 @@ async fn fixed_gateway_context_lifecycle() {
         })
     };
     wait_entered(&shutting_down).await;
-    shutdown.send(()).expect("gateway shutdown signal is sent");
-    timeout(Duration::from_secs(3), server)
-        .await
-        .expect("gateway shutdown completes")
-        .expect("gateway task joins")
-        .expect("gateway shuts down cleanly");
+    server.stop_with_timeout(Duration::from_secs(3));
     assert!(!shutting_down.completed.load(Ordering::SeqCst));
     assert!(shutting_down.dropped.load(Ordering::SeqCst));
     shutdown_query.abort();

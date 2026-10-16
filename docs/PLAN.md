@@ -115,135 +115,18 @@ core modules; consuming projects keep their custom Rust code in their own crates
 
 ## Current implementation
 
-The current PostgreSQL milestone serves loopback clients over the simple-query
-protocol and forwards supported read-only queries through bounded pools for
-configured PostgreSQL target/login pairs. Supported statements include `SELECT`, read-only
-`WITH`, subqueries, joins, aggregates, unions, catalog queries, and `SHOW` variable
-or `ALL` requests. Query inspection parses SQL once into a PostgreSQL-dialect AST;
-`ParsedQuery` retains the original SQL and an immutable statement tree for read-only
-inspection. Results preserve PostgreSQL column metadata and stream text rows without
-driver value conversion.
+The runtime supports a bounded PostgreSQL simple-query subset over loopback,
+configured source-role routing, optional application context, separate metadata
+discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
+access. It preserves native text values and metadata with verified pool cleanup.
+Prepared statements, client transactions, general query/result/lifecycle hooks,
+engine RBAC interpretation, masking, TLS, and management UI remain planned.
 
-Clients can cancel an active simple query with PostgreSQL's dedicated `CancelRequest`.
-The gateway matches its per-session cancel key to the active request and forwards a
-cancel request to the selected backend connection. A cancelled backend lease is
-discarded so a delayed cancel cannot affect a later pool borrower. The client receives
-SQLSTATE `57014` and can continue using the same frontend session.
-
-SQL parsing defaults to a 1 MiB byte limit, with 4,096 significant tokens and a parser
-recursion limit of 64; Unicode escaped identifiers (`U&"..."`) are unsupported.
-Incoming frontend frames default to 8 MiB; backend frames have a fixed 8 MiB limit,
-both checked before payload allocation. Queries run in
-read-only backend transactions. `set_config` is allowed only when its setting-name
-argument is the constant `application_name`; its value may be an expression. Calls
-targeting serialization or resource settings are rejected. SQL inspection does not
-analyze custom function bodies, so functions that change engine session settings are
-unsupported. Rollback and `DISCARD ALL` clean up a lease. PostgreSQL reported text
-`ParameterStatus` changes outside the allowed application name, failed cleanup,
-interrupted queries, or unhealthy leases cause the connection to be discarded. The
-PostgreSQL server checks disconnected clients every second. Backend connect, acquire,
-query, frontend-write, and shutdown operations have separate bounds. The frontend
-listener is loopback-only. Configured PostgreSQL targets use `tls_mode: disable`;
-TLS is not available in this milestone.
-
-The host loads ignored `config/local.yml` by default; `--config PATH` selects another
-file. Runtime YAML uses `version: 1`, configured PostgreSQL targets/logins, optional
-`hooks.select_backend` references with application params, shared `hooks.python`
-settings, an optional `backend` capacity block, and an optional `gateway` block for the loopback listener,
-session/frame/SQL bounds, query/read/write/startup/shutdown timeouts, and
-local-development transport mode.
-Omitted gateway settings use defaults. Query policy is passed to the PostgreSQL
-adapter for database waits and a transaction-local statement timeout. Frontend read
-limits apply between authenticated client messages, independently of query execution.
-`protocol` accepts only PostgreSQL; listener addresses must be loopback;
-`tls.mode: local_development` is plaintext. Frontend message size is configurable,
-while the backend frame cap remains fixed at 8 MiB. Prepared-statement and portal
-settings are not accepted by the runtime loader. Gateway username, password, and frontend database label come only
-from `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE`
-in the process environment or optional `.env`; target login password is resolved
-using YAML `password_env`. The frontend database label is separate from the actual
-database in `targets.<target>.database`. Unsupported engines fail startup. Library
-consumers can construct `BackendConfig` and `GatewayConfig` directly. Use
-`gateway::serve` for one backend or `gateway::serve_routed` with `PostgresBackends`
-and a registered selector for routed requests.
-
-`tests/config.yml` uses the same version/target/login layout, with the target database
-set to `postgres` for test database administration and the target secret named
-`YASP_TEST_TARGET_PASSWORD`. The harness creates a fresh database from `template0`,
-loads the SQL fixture, runs the proxy against that database, and drops only the
-database it created. The source login needs `CREATEDB`; a non-superuser is sufficient.
-The runtime creates no application database or persistent data fixture.
-Client transactions, prepared statements, general session settings, binary results, organization-specific
-RBAC interpretation, query/result hooks, TLS, and BI-client integration are not yet
-available in the completed runtime. The Redis cache is implemented for supported
-read-only PostgreSQL queries; see its settings and limits below. Routing implements
-selection contracts, configured target/login validation, and bounded PostgreSQL pools.
-See [development setup](development.md) and [test guidance](../tests/README.md).
-
-### Schema discovery and client setup
-
-Recognized PostgreSQL catalog reads use a separate discovery target/login, without
-context, selection, or cache-eligibility callbacks and without the Redis result cache.
-`schema_discovery.target` is inferred for one target and required for multiple
-targets. `schema_discovery.backend_login` defaults to the first login declared in
-that target's YAML. The existing pool and source role enforce native metadata
-visibility. Library hosts register a pair with `GatewayConfig::with_schema_discovery`;
-fixed-backend serving uses its backend. Routed library hosts without an explicit
-pair can infer one target's first map entry, but should supply the desired login.
-
-The frontend classifier checks nested relations, helpers, and casts. Accepted
-requests enter `backend::discovery` with the original PostgreSQL AST, frontend
-session state, deadlines, and cancellation. Dispatch uses the configured concrete
-backend engine. The handler in `backend/postgres.rs` owns native name qualification,
-database-list filtering, session setup, and forwarding through its existing pool.
-Engine handlers own PostgreSQL client responses and can answer locally without
-forwarding SQL. A future source engine adds a dispatch variant and its own handler
-to translate PostgreSQL metadata requests into native catalog reads or local
-responses; the frontend classifier and client protocol remain PostgreSQL. Startup
-server-version reporting uses the same engine dispatch. Database
-listings are limited to the source's current database. Use the same gateway and
-source database name for client browsing; database alias adaptation is not implemented.
-Reads of any `information_schema` views use discovery when every relation stays
-within the supported metadata namespaces and every function passes the helper checks.
-Mixed catalog/data reads, unknown functions, and CTE queries follow ordinary routing.
-BI data fingerprinting and field-value samples are ordinary data queries.
-The supported catalog subset includes psql 18 database, schema, table/view, and
-table-description queries: ownership and encoding helpers, native name-filter regex
-operators, policy definitions, statistics definitions, publications, and partition
-ancestry. `ARRAY(SELECT ...)` inspects its nested query under the same rules.
-Stored statistics values and application data remain outside discovery.
-DBeaver discovery includes schema/login probes with separate result columns,
-keyword enumeration, extension and role membership catalogs, operator classes and
-families, type casts/ranges, and routine language/aggregate definitions. Reviewed
-helpers expose partition/rule/identity-sequence definitions, tablespace locations,
-and index scan counters. Metadata-returning functions also qualify as discovery
-sources in `FROM`, including nested reads and aggregates. Every function still
-requires an explicit allowlist entry; no `pg_catalog` or `pg_*` wildcard is granted.
-Standalone login queries and computed schema/login strings retain ordinary routing.
-Password catalogs, large-object contents, row-value statistics, file readers, and
-queries that include application relations or unknown functions stay outside discovery.
-
-`SET application_name` stores a frontend label (at most 63 UTF-8 bytes), and
-`SET search_path` stores a discovery-only path (at most 1,024 bytes and 16 entries).
-Matching `SHOW` requests read frontend state. Startup application name and search
-path are accepted with the same bounds. Discovery applies these settings locally
-inside its existing read-only execution transaction; ordinary queries use qualified
-table names and the source's normal path. Native operators resolve in `pg_catalog`
-before application schemas: an explicit `pg_catalog` entry must be first, otherwise
-PostgreSQL searches it implicitly. Cleanup prevents settings leaking between
-pool borrowers.
-
-Clients may reaffirm the fixed settings: UTF8 client encoding, standard strings on,
-DateStyle `ISO, MDY`, TimeZone `UTC`, IntervalStyle `postgres`, bytea output `hex`,
-extra float digits `3`, read-only mode on, and `read committed` isolation. `SET NAMES
-'UTF8'`, `SET TIME ZONE 'UTC'`, and session transaction characteristics with these
-defaults are accepted. Changes to protected values, roles, query timers, and other
-settings remain unsupported. No client transactions are implemented.
-
-Gateway startup probes the discovery source for its PostgreSQL version; the source
-must be reachable. Startup `server_version` and source version queries use the same
-discovery source. Restart the gateway after a source version upgrade. This server
-fingerprint does not imply support for all PostgreSQL protocol features.
+Use the [documentation index](README.md) for verified current
+[architecture and flows](architecture.md), [configuration](configuration.md),
+[extension contracts](extensions.md), [development](development.md), and
+[test setup](../tests/README.md). The sections below define phase goals and intended
+boundaries rather than claiming every listed capability is implemented.
 
 ## Phase 0 — Project foundation
 
@@ -260,47 +143,9 @@ fingerprint does not imply support for all PostgreSQL protocol features.
 Keep modules flat until their implementations justify directories. Split workspace
 crates only when a component needs independent reuse or release.
 
-```text
-yasp/
-├── Cargo.toml
-├── Cargo.lock
-├── rust-toolchain.toml
-├── README.md
-├── AGENTS.md
-├── examples/python_environment.rs
-├── src/
-│   ├── main.rs
-│   ├── lib.rs
-│   ├── config.rs
-│   ├── gateway.rs
-│   ├── query.rs
-│   ├── backend.rs
-│   ├── policy.rs
-│   ├── cache.rs
-│   ├── hooks.rs
-│   └── hooks/
-│       └── python.rs
-├── config/
-│   └── example.yml
-├── hooks/
-│   ├── README.md
-│   ├── requirements.txt
-│   ├── builtin/
-│   │   ├── mod.rs
-│   │   └── select_backend/
-│   │       ├── mod.rs
-│   │       └── passthrough.rs
-│   └── examples/
-│       ├── role_selector.py
-│       ├── passthrough.py
-│       └── select_backend.py
-├── tests/
-│   ├── README.md
-│   └── fixtures/README.md
-└── docs/
-    ├── PLAN.md
-    └── development.md
-```
+Current source ownership is documented in the
+[component map](architecture.md#component-ownership). Add module directories only
+when a component's implementation needs separate responsibilities.
 
 ## Phase 1 — PostgreSQL analytics proxy
 
