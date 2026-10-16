@@ -153,8 +153,17 @@ fn rejects_malformed_references_and_unsupported_sections() {
             .is_err()
         );
     }
+    let partial = make_config(
+        "{type: rust, callback: builtin.select_backend.passthrough, params: {target: primary}}",
+        ONE_TARGET,
+        "  {}",
+    );
+    partial.validate().unwrap();
+    assert_eq!(
+        partial.default_decision().unwrap().target.as_deref(),
+        Some("primary")
+    );
     for params in [
-        "{target: primary}",
         "{target: 1, backend_login: reader}",
         "{target: primary, backend_login: reader, extra: true}",
     ] {
@@ -220,7 +229,7 @@ fn python_reference_and_runtime_bounds() {
 }
 
 #[test]
-fn defaults_infer_one_pair_and_reject_pool_overcommit() {
+fn defaults_infer_one_pair_and_shared_cap_may_be_below_pool_maxima() {
     let config = make_config(
         "builtin.select_backend.passthrough",
         ONE_TARGET,
@@ -234,9 +243,111 @@ fn defaults_infer_one_pair_and_reject_pool_overcommit() {
         ONE_TARGET,
         "  max_connections_per_pool: 8\n  max_connections_total: 7",
     );
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn compute_topology_validates_partial_discovery_scope_and_login_overrides() {
+    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD\n        allowed_computes: [small_a, small_b]\n        overrides:\n          small_b: {username: reader_b, password_env: READER_B_PASSWORD}\n    compute:\n      default_type: small\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
+    let ambiguous = make_config("custom.selector", target, "  max_connections_total: 1");
     assert!(matches!(
-        config.validate(),
-        Err(ConfigError::InvalidPoolLimit)
+        ambiguous.validate(),
+        Err(ConfigError::MissingDiscoveryCompute)
+    ));
+
+    let selected = format!(
+        "version: 1\nschema_discovery: {{target: primary, compute: small_b}}\nhooks: {{select_backend: custom.selector}}\nbackend: {{max_connections_total: 1}}\ntargets:\n{target}"
+    );
+    let selected: FileConfig = serde_saphyr::from_str(&selected).unwrap();
+    selected.validate().unwrap();
+    assert_eq!(
+        selected.discovery_compute().unwrap().as_deref(),
+        Some("small_b")
+    );
+
+    let partial: FileConfig = serde_saphyr::from_str(&format!(
+        "version: 1\nschema_discovery: {{target: primary, compute: small_a}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {{target: primary, compute_type: small}}}}\ntargets:\n{target}"
+    ))
+    .unwrap();
+    partial.validate().unwrap();
+    assert_eq!(
+        partial.default_decision().unwrap().compute_type.as_deref(),
+        Some("small")
+    );
+
+    let invalid = make_config(
+        "{type: rust, callback: builtin.select_backend.passthrough, params: {target: primary, compute_type: missing}}",
+        target,
+        "  {}",
+    );
+    assert!(matches!(
+        invalid.validate(),
+        Err(ConfigError::InvalidDefaultBackend)
+    ));
+
+    let invalid = target.replace(
+        "allowed_computes: [small_a, small_b]",
+        "allowed_computes: [missing]",
+    );
+    let invalid = make_config("custom.selector", &invalid, "  {}");
+    assert!(matches!(
+        invalid.validate(),
+        Err(ConfigError::InvalidComputeTopology)
+    ));
+
+    let invalid = target.replace(
+        "small_b: {username: reader_b, password_env: READER_B_PASSWORD}",
+        "other: {username: x, password_env: X}",
+    );
+    let invalid = make_config("custom.selector", &invalid, "  {}");
+    assert!(matches!(
+        invalid.validate(),
+        Err(ConfigError::InvalidComputeTopology)
+    ));
+
+    let unreachable = target
+        .replace("allowed_computes: [small_a, small_b]", "allowed_computes: [small_a]")
+        .replace(
+            "        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:",
+            "        large:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: large_a, host: localhost, port: 5435}\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:",
+        );
+    let unreachable = make_config("custom.selector", &unreachable, "  {}");
+    assert!(matches!(
+        unreachable.validate(),
+        Err(ConfigError::InvalidComputeTopology)
+    ));
+}
+
+#[test]
+fn passthrough_partial_fields_resolve_and_validate_after_inference() {
+    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\n    compute:\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
+    let config_text = |params: &str| {
+        format!(
+            "version: 1\nschema_discovery: {{target: primary, compute: small_a}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}\ntargets:\n{target}"
+        )
+    };
+
+    let config: FileConfig = serde_saphyr::from_str(&config_text("{compute_type: small}")).unwrap();
+    config.validate().unwrap();
+    assert_eq!(config.default_backend().unwrap().target, "primary");
+    assert_eq!(config.default_backend().unwrap().backend_login, "reader");
+
+    for params in ["{backend_login: missing}", "{compute_type: missing}"] {
+        let config: FileConfig = serde_saphyr::from_str(&config_text(params)).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidDefaultBackend)
+        ));
+    }
+
+    let ordinary = make_config(
+        "{type: rust, callback: builtin.select_backend.passthrough, params: {compute_type: small}}",
+        ONE_TARGET,
+        "  {}",
+    );
+    assert!(matches!(
+        ordinary.default_decision(),
+        Err(ConfigError::InvalidDefaultBackend)
     ));
 }
 

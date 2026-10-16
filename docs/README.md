@@ -13,6 +13,7 @@ routing, application context hooks, metadata discovery, and an optional Redis ca
 | [Hook examples](../hooks/README.md) | Binding callbacks and choosing runnable examples. |
 | [Tests](../tests/README.md) | Isolated test services, fixtures, requirements, and Cargo filters. |
 | [Plan](PLAN.md) | Product direction, phase boundaries, and planned capabilities. |
+| [Source access and compute routing](source-access-routing-plan.md) | Partial selector decisions, compute types, overflow, shared budgets, and future queuing. |
 
 Architecture and configuration describe implemented behavior. The plan and the
 explicitly marked future sections in the extension guide describe the intended

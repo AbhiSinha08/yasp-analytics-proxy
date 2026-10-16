@@ -183,10 +183,18 @@ pub(super) fn redis_set(url: &str, key: &str, value: &str) {
 }
 
 #[cfg(unix)]
-pub(super) fn cache_key(namespace: &str, sql: &str) -> String {
+pub(super) fn cache_key(namespace: &str, route: &BackendSelection, sql: &str) -> String {
+    let query_id = yasp::query::ParsedQuery::parse(sql)
+        .unwrap()
+        .query_id()
+        .to_owned();
     format!(
-        "{namespace}:{}",
-        yasp::query::ParsedQuery::parse(sql).unwrap().query_id()
+        "{namespace}:v2:{}:{}:{}:{}:{}:{query_id}",
+        route.target.len(),
+        route.target,
+        route.backend_login.len(),
+        route.backend_login,
+        query_id.len(),
     )
 }
 

@@ -38,7 +38,7 @@ introduce only the contracts needed by the current phase.
 | Routing | Invoke the registered selector with available request context, validate its configured target/login pair, and acquire that connection. | Application-specific context and policy remain outside the engine. |
 | Policy | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks. | Database access controls remain authoritative; masking preserves the result schema. |
 | Extensions | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks. | Contracts belong to the library; organization implementations live outside core engine code. |
-| Result cache | Store source results for a limited time, then apply current engine processing. | The Redis key uses the namespace and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
+| Result cache | Store source results for a limited time, then apply current engine processing. | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
 | Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance. | Shared configuration names the client protocol and each target's engine explicitly. |
 
 The gateway passes execution requests to the backend boundary rather than opening
@@ -244,16 +244,23 @@ that control before claiming hard memory bounds. Do not silently weaken the limi
 
 ### Backend execution and routing
 
+The [source access and compute routing guide](source-access-routing-plan.md)
+describes partial selector decisions, target-scoped compute types, overflow, and
+shared connection budgets.
+
 The current routing milestone supports configured PostgreSQL target/login pairs and
 an application-registered selector. `SelectionRequest` borrows the authenticated
 frontend user, client and query IDs, and `ParsedQuery`; it contains no credentials.
-`BackendSelection` names a target and backend login, while `SelectionError` distinguishes
+`BackendDecision` names optional target, backend login, and compute type. The engine
+resolves it to a concrete `BackendSelection` pair before allocation. `SelectionError` distinguishes
 denial from selector failure. The built-in passthrough selector uses the sole configured
-pair automatically with empty params; multiple pairs require explicit `target` and
-`backend_login` in `hooks.select_backend.params`. Denials and invalid configured-pair
+pair automatically with empty params; ambiguous target/login choices require explicit names in
+`hooks.select_backend.params`. Compute-enabled targets use an explicit default type
+or their sole type when the decision omits it. Denials and invalid configured-pair
 selections map to PostgreSQL SQLSTATE `42501`; selector failures map to `XX000`. Per-pool capacity defaults to 8 connections and
-total capacity to 16; startup rejects limits whose per-pool capacities cannot fit
-within the total.
+total capacity to 16; the total bounds actual open pooled connections rather than reserving every pool
+maximum. Idle sessions can be reclaimed for another binding. Saturation waits
+asynchronously under a 10-second acquisition deadline, then returns `53300`.
 
 The library exposes `yasp::hooks::bind_select_backend` to bind a typed Rust callback
 to application state. Rust extensions compile into the consuming host. The repository's
@@ -273,11 +280,11 @@ Python selection uses the dedicated bounded runtime described below.
 
 - Invoke the configured selector for each executable query using its request context.
   Its decision
-  names a configured target and backend login profile, never arbitrary credentials.
+  names optional configured target, backend login profile, and compute type, never arbitrary credentials.
 - Validate the selected pair against configured targets and logins.
   Acquire an idle matching connection, or open a new one with that profile's
   credentials if the bounded pool has capacity. Pool exhaustion has a bounded wait.
-- Partition pools by target and backend login. Authenticate directly using the
+- Partition pools by target, backend login, and physical compute instance. Authenticate directly using the
   selected source role's credentials; source roles enforce their existing RBAC.
 - Autocommit queries release connections after execution and verified cleanup.
   Consecutive queries on the same frontend session may select different roles.
@@ -424,7 +431,8 @@ organization RBAC policy.
   literals, so it may bypass extra queries; it does not parse SQL or guarantee a
   table-name match. Use it for freshness-sensitive monitoring such as
   `pg_stat_activity` or `clock_timestamp()`. Normalized effective-SQL SHA-256 query
-  IDs remain cache keys under `namespace:query_id`, not an exclusion policy.
+  IDs combine with configured target/login names under the namespace to identify
+  cache entries; SQL-text fragments remain the exclusion policy.
 - Entries preserve PostgreSQL metadata and values in an opaque versioned payload.
   Before replay, the envelope validates frontend identity/database, selected backend
   endpoint/database and source user, fixed text settings, query/write timers, and codec
@@ -503,6 +511,7 @@ through a System 1 decision model, and authenticated management tools.
 | Management service | Add authenticated APIs for configuration inspection, health, and cache clearing; use Axum if an embedded HTTP service fits. |
 | Admin UI and SQL Studio | Manage routing/access mappings and inspect query results through the same authorized execution path. |
 | Configuration lifecycle | Validate replacement settings and hook versions, then activate a consistent generation without exposing mixed policies. |
+| Redis query queue | Bound burst admission with deadlines, cancellation, worker ownership, and recovery. Current local acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns a capacity error. |
 
 Choose the second engine when this phase starts. Do not install its SDK or implement
 its adapter in Phase 1. Adding another native client protocol is a separate gateway
@@ -587,6 +596,7 @@ processing, and cache isolation across roles and model/policy versions.
 | Component | Capability and design requirement |
 | --- | --- |
 | Compute lifecycle | Provider-specific provisioning/suspension with coordination, readiness checks, and failure recovery. |
+| Load distribution | Add round-robin and least-busy allocation within the authorized compute type, preserving shared limits and cancellation. Overflow is the current default. |
 | Governance integration | Verified end-user context and external governance rules, with privacy controls for classification inputs. |
 | Cache evolution | Metadata caching, explicit cross-target equivalence, and reliable data-version invalidation. |
 | Semantic caching | Reuse compatible supersets through a local execution engine with correct ordering, NULLs, limits, filters, and aggregates. |

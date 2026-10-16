@@ -116,7 +116,7 @@ pub(super) async fn load_hooks(
         .select_backend
     {
         SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => Ok(bind_select_backend(
-            file.default_backend()?,
+            file.default_decision()?,
             builtin::select_backend::passthrough,
         )
         .into()),

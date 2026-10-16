@@ -56,7 +56,9 @@ def application_route(request, params):
     if 'unknown' in sql:
         return {'target': 'absent', 'backend_login': 'reader'}
     if 'malformed' in sql:
-        return {'target': 'absent'}
+        return {'target': []}
+    if 'partial' in sql:
+        return {'target': params['one']['target']}
     if 'sequence' in sql:
         return [params['one']['target'], params['one']['backend_login']]
     if 'slow' in sql:
@@ -102,7 +104,7 @@ def application_route(request, params):
                 other => panic!("unexpected frontend error: {other:?}"),
             }
         }
-        for (tag, expected) in [("route_one", marker_one), ("route_two", marker_two)] {
+        for (tag, expected) in [("route_one", marker_one), ("route_two", marker_two), ("partial", marker_one)] {
             assert_eq!(marker(&mut client, &format!("SELECT current_database() || ':' || current_user /* {tag} */")).await, expected);
         }
         for (tag, expected) in [("denied", "42501"), ("failed", "XX000"), ("unknown", "42501"), ("malformed", "XX000"), ("sequence", "XX000")] {

@@ -17,6 +17,6 @@ pub use cache::{
 };
 pub use context::{ContextCallback, ContextError, ContextHook, ContextRequest, bind_context};
 pub use selection::{
-    BackendSelection, BackendSelector, RoutedSelector, SelectionError, SelectionRequest,
-    bind_select_backend,
+    BackendDecision, BackendSelection, BackendSelector, RoutedSelector, SelectionError,
+    SelectionRequest, bind_select_backend,
 };

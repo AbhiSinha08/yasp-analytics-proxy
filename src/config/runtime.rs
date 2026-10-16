@@ -11,6 +11,7 @@ pub struct GatewayConfig {
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
+    pub(crate) schema_discovery_compute: Option<String>,
 }
 
 impl GatewayConfig {
@@ -32,6 +33,7 @@ impl GatewayConfig {
             cache: None,
             context_hook: None,
             schema_discovery: None,
+            schema_discovery_compute: None,
         })
     }
 
@@ -48,6 +50,11 @@ impl GatewayConfig {
     /// Use a configured pair for discovery without invoking application hooks.
     pub fn with_schema_discovery(mut self, route: crate::hooks::BackendSelection) -> Self {
         self.schema_discovery = Some(route);
+        self
+    }
+
+    pub fn with_schema_discovery_compute(mut self, compute: String) -> Self {
+        self.schema_discovery_compute = Some(compute);
         self
     }
 

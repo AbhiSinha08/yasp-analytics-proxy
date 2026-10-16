@@ -116,14 +116,21 @@ impl RedisCache {
 
     pub(crate) async fn get(
         &self,
+        target: &str,
+        backend_login: &str,
         query_id: &str,
         scope: &[u8; 32],
         buffer: &mut CacheBuffer,
     ) -> bool {
         let mut cmd = redis::cmd("GETRANGE");
-        cmd.arg(self.key(query_id))
-            .arg(0)
-            .arg(self.max_entry_bytes());
+        cmd.arg(cache_key(
+            &self.settings.namespace,
+            target,
+            backend_login,
+            query_id,
+        ))
+        .arg(0)
+        .arg(self.max_entry_bytes());
         if let Some(Value::BulkString(value)) = self.command(cmd).await
             && value.len() > HEADER_BYTES
             && value.len() <= self.max_entry_bytes()
@@ -139,28 +146,32 @@ impl RedisCache {
         false
     }
 
-    pub(crate) async fn put(&self, query_id: &str, buffer: &CacheBuffer) {
+    pub(crate) async fn put(
+        &self,
+        target: &str,
+        backend_login: &str,
+        query_id: &str,
+        buffer: &CacheBuffer,
+    ) {
         if buffer.bytes.len() <= HEADER_BYTES || buffer.bytes.len() > self.max_entry_bytes() {
             return;
         }
         let mut cmd = redis::cmd("SET");
-        cmd.arg(self.key(query_id))
-            .arg(buffer.bytes.as_ref())
-            .arg("EX")
-            .arg(self.settings.ttl_seconds);
+        cmd.arg(cache_key(
+            &self.settings.namespace,
+            target,
+            backend_login,
+            query_id,
+        ))
+        .arg(buffer.bytes.as_ref())
+        .arg("EX")
+        .arg(self.settings.ttl_seconds);
         if self.command(cmd).await.is_none() {
             tracing::debug!(
                 query_id,
                 "cache write failed; query result remains successful"
             );
         }
-    }
-
-    fn key(&self, query_id: &str) -> String {
-        // ponytail: one slot per SQL hash; revisit role-partitioned keys with RBAC
-        // to avoid overwrite churn. Scope validation must remain because source
-        // roles can return different rows for the same SQL.
-        format!("{}:{query_id}", self.settings.namespace)
     }
 
     async fn command(&self, cmd: Cmd) -> Option<Value> {
@@ -205,4 +216,18 @@ impl RedisCache {
         self.connection.lock().await.take();
         self.budget.close();
     }
+}
+
+pub(crate) fn cache_key(
+    namespace: &str,
+    target: &str,
+    backend_login: &str,
+    query_id: &str,
+) -> String {
+    format!(
+        "{namespace}:v2:{}:{target}:{}:{backend_login}:{}:{query_id}",
+        target.len(),
+        backend_login.len(),
+        query_id.len()
+    )
 }

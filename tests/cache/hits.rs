@@ -82,10 +82,7 @@ fn normalized_hits_expiry_and_source_scope() {
     ] {
         redis_set(
             &redis_url,
-            &format!(
-                "{namespace}:{}",
-                ParsedQuery::parse(query).unwrap().query_id()
-            ),
+            &cache_key(&namespace, &route(&default.backend_login), query),
             &raw_value,
         );
         let result = client(query);
@@ -114,4 +111,88 @@ fn normalized_hits_expiry_and_source_scope() {
         stdout(&primary_again).trim()
     );
     assert_eq!(selection_count.load(Ordering::SeqCst), 9);
+}
+
+#[test]
+fn named_routes_keep_separate_entries_with_identical_source_credentials() {
+    let fixture = CacheScenario::new();
+    let namespace = fixture.namespace.name.clone();
+    let redis_url = fixture.redis_url.clone();
+    let user = fixture.identity.user.clone();
+    let password = fixture.identity.password.clone();
+    let database = fixture.identity.database.clone();
+    let first_route = fixture.route.clone();
+    let second_route = BackendSelection {
+        target: "same-source-alias".into(),
+        backend_login: first_route.backend_login.clone(),
+    };
+    let backends = Arc::new(
+        PostgresBackends::new(
+            BTreeMap::from([
+                (first_route.clone(), fixture.primary.backend_config()),
+                (second_route.clone(), fixture.primary.backend_config()),
+            ]),
+            BackendSettings::default(),
+        )
+        .expect("two route names may share source credentials"),
+    );
+    let second_selected = Arc::new(AtomicBool::new(false));
+    let selector = {
+        let second_selected = second_selected.clone();
+        bind_select_backend(
+            (first_route.clone(), second_route.clone()),
+            move |_, routes| {
+                Ok(if second_selected.load(Ordering::SeqCst) {
+                    routes.1.clone()
+                } else {
+                    routes.0.clone()
+                })
+            },
+        )
+    };
+    let cache = Arc::new(
+        RedisCache::new(settings(&namespace, 60, 5, 16384), &redis_url, None)
+            .expect("local Redis cache initializes"),
+    );
+    let server = start_server(
+        GatewayConfig::new(user.clone(), password.clone(), database.clone())
+            .expect("frontend identity is valid")
+            .with_schema_discovery(first_route.clone())
+            .with_cache(cache),
+        backends,
+        selector,
+    );
+    let address = server.address;
+    let client = || {
+        psql(
+            "SELECT clock_timestamp()",
+            &address,
+            &user,
+            &password,
+            &database,
+        )
+    };
+
+    let first = client();
+    second_selected.store(true, Ordering::SeqCst);
+    let second = client();
+    second_selected.store(false, Ordering::SeqCst);
+    let first_hit = client();
+    second_selected.store(true, Ordering::SeqCst);
+    let second_hit = client();
+    for result in [&first, &second, &first_hit, &second_hit] {
+        assert_success(result, "query on aliased route");
+    }
+    assert_ne!(stdout(&first).trim(), stdout(&second).trim());
+    assert_eq!(stdout(&first), stdout(&first_hit));
+    assert_eq!(stdout(&second), stdout(&second_hit));
+
+    let first_key = cache_key(&namespace, &first_route, "SELECT clock_timestamp()");
+    let second_key = cache_key(&namespace, &second_route, "SELECT clock_timestamp()");
+    assert_ne!(first_key, second_key);
+    assert_ne!(
+        redis_get(&redis_url, &first_key),
+        redis_get(&redis_url, &second_key)
+    );
+    server.stop();
 }

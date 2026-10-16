@@ -42,15 +42,12 @@ where
     tracing::debug!(query_id = query.query_id(), client_id, ?kind, database = ?backend.target(), database_user = %backend.database_user(), sql = ?query.sql(), "discovery query sent to backend");
     let query =
         prepare(query).map_err(|_| error_response("54000", "metadata query exceeds its bound"))?;
+    let setup = setup(session);
     backend
-        .execute_inner(
-            &query,
-            output,
-            query_timeout,
-            write_timeout,
-            Some(cancel),
-            Some(&setup(session)),
-        )
+        .route()
+        .acquire()
+        .await?
+        .execute_discovery(&query, output, query_timeout, write_timeout, cancel, &setup)
         .await
         .map(|_| ())
 }

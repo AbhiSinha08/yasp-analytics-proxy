@@ -99,7 +99,11 @@ fn context_and_metadata_bypass() {
         let result = normalized_context_hit(&query);
         assert_success(&result, "psql discovery with cache enabled");
         assert!(
-            redis_get(&redis_url, &cache_key(&context_namespace, &query)).is_empty(),
+            redis_get(
+                &redis_url,
+                &cache_key(&context_namespace, &fixture.route, &query)
+            )
+            .is_empty(),
             "psql metadata must not populate Redis"
         );
     }
@@ -113,7 +117,13 @@ fn context_and_metadata_bypass() {
     for query in &dbeaver {
         let result = normalized_context_hit(query);
         assert_success(&result, "DBeaver discovery with cache enabled");
-        assert!(redis_get(&redis_url, &cache_key(&context_namespace, query)).is_empty());
+        assert!(
+            redis_get(
+                &redis_url,
+                &cache_key(&context_namespace, &fixture.route, query)
+            )
+            .is_empty()
+        );
     }
     assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
     assert!(context_observations.lock().unwrap().is_empty());
@@ -126,7 +136,7 @@ fn context_and_metadata_bypass() {
     assert!(
         redis_get(
             &redis_url,
-            &cache_key(&context_namespace, information_schema_sql)
+            &cache_key(&context_namespace, &fixture.route, information_schema_sql)
         )
         .is_empty()
     );
@@ -174,7 +184,11 @@ fn context_and_metadata_bypass() {
     );
     assert!(redis_exists(
         &redis_url,
-        &cache_key(&context_namespace, "SELECT clock_timestamp()")
+        &cache_key(
+            &context_namespace,
+            &fixture.route,
+            "SELECT clock_timestamp()"
+        )
     ));
     context_server.stop();
 }

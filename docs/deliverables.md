@@ -24,7 +24,7 @@
 - [x] **Choose a database login for each query** — Lets the application select which configured database connection handles a query.
   - [x] **Built-in and application selectors** — Includes a default selector and lets an application register its own compiled selector.
   - [x] **Check selected connections** — Allows only database/login pairs listed in the configuration. The built-in selector needs a default when there is more than one choice.
-  - [x] **Connection pools for each choice** — Opens connections when needed, with a default limit of 8 per choice and 16 total. Startup reports limits that cannot fit the configured choices.
+  - [x] **Connection pools for each choice** — Opens connections when needed, with a default limit of 8 per choice and 16 total. Shared physical budgets bound actual open connections across choices.
   - [x] **Test query routing** — Tests routing to two databases, separate connection pools, pool limits, selector errors, and recovery.
   - [x] **Test source-login access** — Checks that `local2` can read granted test data but is denied access to another database and a restricted table, then verifies the client can query again. Test usernames are in YAML; passwords are in environment variables or `.env`.
 - [x] **Python backend selector** — Execute application-supplied Python callbacks through the optional reusable runtime.
@@ -36,7 +36,7 @@
 - [x] **PostgreSQL cancellation** — Handle client cancel requests and Forward backend cancellation safely.
 - [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only PostgreSQL results.
   - [x] **Cache settings and bounds** — Keeps caching disabled by default and limits cached rows and aggregate in-process buffers.
-  - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes remain cache keys.
+  - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes and configured target/login names identify cache entries.
 - [ ] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
   - [x] **Context hook platform** — Derives bounded application context once per validated query with async Rust or external Python callbacks.
   - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
@@ -49,6 +49,13 @@
   - [x] **Routing and protocol checks** — Tests metadata/data separation, native results, settings, callback bypass, and pool cleanup with real PostgreSQL clients.
   - [x] **Live desktop-client browsing** — Verify VS Code Database Client and DBeaver UI refresh with autocommit and JDBC simple-query mode.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
+  - [ ] **Application policy and identity contract** — Map required BI context to configured source logins, deny missing required identity, and verify source grants.
+  - [x] **Partial selector decisions** — Let the single selector omit unambiguous target/login fields and request an optional target-scoped compute type.
+  - [ ] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended client.
+- [x] **Optional compute-type routing and overflow** — Uses [target-scoped compute routing](source-access-routing-plan.md) and bounded shared allocation.
+  - [x] **Target-scoped compute configuration** — Define compute types, ordered instances, and supported login bindings without changing ordinary targets.
+  - [x] **Shared connection budgets** — Bound actual open connections across pools and reclaim idle sessions when another binding needs capacity.
+  - [x] **Type-local overflow and recovery** — Allocate within the selected type and verify shared capacity, cancellation, cleanup, discovery, and cache scope.
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
 
@@ -59,6 +66,7 @@
 - [ ] **Shared execution contract** — Dispatches to multiple adapters while keeping routing and policy independent of drivers.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
 - [ ] **AST Based Dynamic Masking**
+- [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.
@@ -68,6 +76,7 @@
 
 ## Phase 3 — Advanced analytics and integrations
 
+- [ ] **Additional load-distribution algorithms** — Add round-robin and least-busy allocation within a selected compute type, preserving access, capacity, and cancellation bounds.
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.
 - [ ] **Remaining BI client compatibility** — Do these last in Phase 1; move an item earlier if client testing requires it.
   - [ ] **Prepared queries and basic portals** — Let clearlier prepare a/2 later.

@@ -329,8 +329,13 @@ def eligible(request, params):
         .unwrap()
         .into();
     assert_eq!(
-        selector.select(&downstream).await.unwrap().backend_login,
-        "reader"
+        selector
+            .select(&downstream)
+            .await
+            .unwrap()
+            .backend_login
+            .as_deref(),
+        Some("reader")
     );
     assert!(
         eligibility.eligible(&downstream).await.unwrap(),

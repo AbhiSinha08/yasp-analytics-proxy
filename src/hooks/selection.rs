@@ -1,5 +1,5 @@
 //! Application-owned route choice over immutable query metadata.
-//! The gateway validates each returned configured target/login pair.
+//! The gateway resolves each decision against configured targets and bindings.
 
 #[cfg(feature = "python")]
 use super::python;
@@ -19,6 +19,25 @@ pub struct SelectionRequest<'a> {
     pub context: &'a Map<String, Value>,
 }
 
+/// A partial policy decision resolved against configured connections by the engine.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendDecision {
+    pub target: Option<String>,
+    pub backend_login: Option<String>,
+    pub compute_type: Option<String>,
+}
+
+impl From<BackendSelection> for BackendDecision {
+    fn from(selection: BackendSelection) -> Self {
+        Self {
+            target: Some(selection.target),
+            backend_login: Some(selection.backend_login),
+            compute_type: None,
+        }
+    }
+}
+
 /// A target and login pair selected from the host's configured connections.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +55,7 @@ pub enum SelectionError {
 }
 
 pub type BackendSelector = Arc<
-    dyn for<'a> Fn(&SelectionRequest<'a>) -> Result<BackendSelection, SelectionError> + Send + Sync,
+    dyn for<'a> Fn(&SelectionRequest<'a>) -> Result<BackendDecision, SelectionError> + Send + Sync,
 >;
 
 /// Registered selection behavior; the router owns validation and acquisition.
@@ -63,7 +82,7 @@ impl RoutedSelector {
     pub async fn select(
         &self,
         request: &SelectionRequest<'_>,
-    ) -> Result<BackendSelection, SelectionError> {
+    ) -> Result<BackendDecision, SelectionError> {
         match self {
             Self::Rust(selector) => selector(request),
             #[cfg(feature = "python")]
@@ -86,11 +105,16 @@ impl RoutedSelector {
                 if !value.is_object() {
                     return Err(SelectionError::Failed);
                 }
-                let selected: BackendSelection =
+                let selected: BackendDecision =
                     serde_json::from_value(value).map_err(|_| SelectionError::Failed)?;
-                if [&selected.target, &selected.backend_login]
-                    .iter()
-                    .any(|name| name.trim().is_empty() || name.contains('\0'))
+                if [
+                    &selected.target,
+                    &selected.backend_login,
+                    &selected.compute_type,
+                ]
+                .iter()
+                .filter_map(|name| name.as_ref())
+                .any(|name| name.trim().is_empty() || name.contains('\0'))
                 {
                     return Err(SelectionError::Failed);
                 }
@@ -133,7 +157,7 @@ pub(super) fn request_payload(request: &SelectionRequest<'_>) -> Value {
 ///     authenticated_user: "analytics", client_id: 1, query_id: query.query_id(), query: &query,
 ///     context: &serde_json::Map::new(),
 /// }).unwrap();
-/// assert_eq!(selected.backend_login, "reader");
+/// assert_eq!(selected.backend_login.as_deref(), Some("reader"));
 /// ```
 ///
 /// Captured state must be safe to share between query tasks:
@@ -144,7 +168,7 @@ pub(super) fn request_payload(request: &SelectionRequest<'_>) -> Value {
 /// let _ = bind_select_backend(state, |_, selection| Ok(selection.as_ref().clone()));
 /// ```
 ///
-/// A callback must return a backend selection:
+/// A callback must return a concrete pair or a decision:
 /// ```compile_fail
 /// use yasp::hooks::{bind_select_backend, SelectionRequest};
 /// let _ = bind_select_backend((), |_request: &SelectionRequest<'_>, _state| Ok(()));
@@ -157,13 +181,14 @@ pub(super) fn request_payload(request: &SelectionRequest<'_>) -> Value {
 ///     Ok(BackendSelection { target: "local".into(), backend_login: "reader".into() })
 /// });
 /// ```
-pub fn bind_select_backend<State, F>(state: State, function: F) -> BackendSelector
+pub fn bind_select_backend<State, F, Decision>(state: State, function: F) -> BackendSelector
 where
     State: Send + Sync + 'static,
-    F: for<'a> Fn(&SelectionRequest<'a>, &State) -> Result<BackendSelection, SelectionError>
+    Decision: Into<BackendDecision>,
+    F: for<'a> Fn(&SelectionRequest<'a>, &State) -> Result<Decision, SelectionError>
         + Send
         + Sync
         + 'static,
 {
-    Arc::new(move |request| function(request, &state))
+    Arc::new(move |request| function(request, &state).map(Into::into))
 }

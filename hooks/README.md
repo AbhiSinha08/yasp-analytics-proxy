@@ -23,8 +23,9 @@ let selector = bind_select_backend(
 
 The binder owns host state; state/function must be `Send + Sync + 'static`.
 Selection receives borrowed identity/query metadata and derived context, never
-credentials. It returns a configured pair or `SelectionError`; the router validates
-it and delegates connection acquisition to the backend. Denial/unconfigured pairs
+credentials. It returns a concrete pair convertible into `BackendDecision`, a partial decision,
+or `SelectionError`; the router resolves configured defaults and delegates compute
+allocation to the backend. Denial/unconfigured pairs
 report `42501`, failure reports `XX000`. Keep synchronous Rust callbacks fast and
 nonblocking.
 
@@ -41,8 +42,8 @@ hooks:
 ```
 
 Both languages use `type`, `callback`, and application-owned `params`; Python also
-requires `path`. The built-in passthrough accepts exactly these pair keys or infers
-a sole configured pair from empty params. Compiled string names are shorthand.
+requires `path`. The built-in passthrough accepts optional `target`, `backend_login`, and
+`compute_type` keys. Empty params infer only unambiguous choices. Compiled string names are shorthand.
 The repository host registers only its documented built-ins and Python references;
 custom Rust names/typed params are mapped by the consuming application at startup.
 See [runtime configuration](../docs/configuration.md#routing-and-pools).
@@ -72,9 +73,11 @@ Use [examples/select_backend.py](examples/select_backend.py) for runnable passth
 selection. Replace the reference above with `type: python`,
 `path: ../hooks/examples/select_backend.py`, and `callback: select_backend` while
 keeping pair params. Paths resolve relative to YAML. The callback returns a
-`target`/`backend_login` mapping or `None` to deny. No fallback route is selected.
-[examples/role_selector.py](examples/role_selector.py) is an unimplemented
-application-policy scaffold. [examples/passthrough.py](examples/passthrough.py) also
+mapping with optional `target`, `backend_login`, and `compute_type` fields, or
+`None` to deny. The engine chooses an instance by overflow within the selected type.
+[examples/role_selector.py](examples/role_selector.py) demonstrates application-owned
+user/workload/report maps and denies missing or unmapped required classifications.
+Its input identity still needs the consuming application's verified metadata contract. [examples/passthrough.py](examples/passthrough.py) also
 contains future callback sketches; they are not wired into query/result stages.
 
 See [Python setup](../docs/development.md#python-embedding) and

@@ -71,7 +71,7 @@ fn cancelled_fill_and_lowered_row_limit() {
     );
     assert!(!redis_exists(
         &redis_url,
-        &cache_key(&namespace, cancel_sql)
+        &cache_key(&namespace, &fixture.route, cancel_sql)
     ));
     let recovered = client("SELECT 12345");
     assert_success(&recovered, "query after cache-fill cancellation");
@@ -84,7 +84,7 @@ fn cancelled_fill_and_lowered_row_limit() {
         &before_lowered_limit,
         "fill five-row entry before lowering cap",
     );
-    let lowered_limit_key = cache_key(&namespace, lowered_limit_sql);
+    let lowered_limit_key = cache_key(&namespace, &fixture.route, lowered_limit_sql);
     let original_entry = redis_get(&redis_url, &lowered_limit_key);
     assert!(!original_entry.is_empty());
 

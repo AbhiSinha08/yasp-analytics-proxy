@@ -49,12 +49,13 @@ flowchart TD
     ReadOnly --> Metadata{Recognized metadata query?}
     Metadata -->|yes| Discovery[Configured discovery source]
     Metadata -->|no| Context[Derive optional bounded context]
-    Context --> Route[Select and validate configured pair]
+    Context --> Route[Resolve target, login, and optional compute type]
     Route --> Eligible{Cache enabled and eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
     Lookup -->|hit| Replay[Replay PostgreSQL response]
-    Lookup -->|miss or no budget| Execute[Acquire backend lease and execute]
-    Eligible -->|no| Execute
+    Lookup -->|miss or no budget| Allocate[Overflow within type; reserve shared capacity]
+    Eligible -->|no| Allocate
+    Allocate --> Execute[Acquire backend lease and execute]
     Execute --> Stream[Stream native text rows]
     Stream --> Cleanup[Rollback, discard state, verify idle]
     Cleanup --> Complete[Send success completion]
@@ -79,9 +80,23 @@ Context runs once for each ordinary query, including cache hits. It cannot repla
 authenticated frontend identity. Context errors supply an empty mapping; selector
 errors stop the query; eligibility errors bypass caching. See [extensions](extensions.md).
 
+## Compute and connection ownership
+
+A target can expose optional compute types with ordered physical instances. The
+application selector returns the source/login and optional type; overflow is
+engine-owned and never changes those decisions. Login-specific pools preserve
+source authentication while instance limits cover all logins together.
+
+Physical connection budgets include idle sessions and remain held until socket
+closure. Idle pressure reclamation lets a different login use shared capacity.
+Queries wait asynchronously under a fixed 10-second acquisition deadline when
+capacity is exhausted, then receive `53300`. Session limits bound waiting queries;
+Redis query queuing is future work. Cache replay acquires no compute lease.
+
 ## Discovery and frontend state
 
-Recognized catalog reads use the configured discovery target/login, bypassing
+Recognized catalog reads use the configured discovery target/login and optional
+compute instance, sharing capacity limits while bypassing
 application hooks and the result cache. The frontend classifier checks nested
 relations, functions, and casts. Mixed application/catalog reads, CTE queries, and
 unrecognized helpers follow ordinary routing. Source-role visibility still applies.
@@ -139,10 +154,12 @@ representation. The adapter validates text row framing and owns response capture
 cache scope, validation, and replay in `backend/postgres/cache.rs`.
 
 Shared Redis code stores a versioned opaque payload under a namespace and normalized
-SQL SHA-256 identifier. Scope also validates frontend identity/database, backend
-endpoint/database/user, fixed text settings, query/write timers, and codec version.
-Different scopes can replace the same SQL slot; validation prevents cross-scope
-replay. Derived context does not partition cache entries.
+SQL SHA-256 identifier together with configured target/login names. Separate named
+pairs retain separate entries. Scope also validates frontend identity/database,
+compute instance, backend endpoint/database/user, fixed text settings, query/write
+timers, and codec version. Different physical scopes within a named pair can
+replace its SQL slot; validation prevents cross-scope replay. Derived context does
+not partition cache entries.
 
 Only complete successful results within row and byte limits are stored. Oversized
 results continue streaming. Redis errors, deadlines, malformed entries, and scope

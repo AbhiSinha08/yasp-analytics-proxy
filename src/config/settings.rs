@@ -122,6 +122,7 @@ impl PythonSettings {
 pub struct BackendSettings {
     pub max_connections_per_pool: usize,
     pub max_connections_total: usize,
+    pub acquire_timeout_ms: u64,
 }
 
 impl Default for BackendSettings {
@@ -129,6 +130,7 @@ impl Default for BackendSettings {
         Self {
             max_connections_per_pool: 8,
             max_connections_total: 16,
+            acquire_timeout_ms: 60_000,
         }
     }
 }

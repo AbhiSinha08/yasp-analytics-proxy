@@ -1,18 +1,15 @@
 //! Host configuration and environment-backed secret resolution.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    env, io,
-    path::Path,
-};
+use std::{collections::HashMap, env, io, path::Path};
 use yasp::{
+    backend::PostgresBinding,
     config::{BackendConfig, FileConfig, GatewayConfig},
     hooks::BackendSelection,
 };
 
 pub(super) struct HostConfig {
     pub(super) gateway: GatewayConfig,
-    pub(super) backends: BTreeMap<BackendSelection, BackendConfig>,
+    pub(super) backends: Vec<PostgresBinding>,
     pub(super) file: FileConfig,
     pub(super) log_level: String,
     pub(super) cache_url: Option<String>,
@@ -63,29 +60,77 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
     )?
     .with_settings(file.gateway.clone())?
     .with_schema_discovery(file.discovery_backend()?);
+    let gateway = match file.discovery_compute()? {
+        Some(compute) => gateway.with_schema_discovery_compute(compute),
+        None => gateway,
+    };
     let cache_url = file
         .cache
         .enabled
         .then(|| required(&file.cache.url_env, "cache URL environment variable"))
         .transpose()?;
-    let mut backends = BTreeMap::new();
+    let mut backends = Vec::new();
     for (target_name, target) in &file.targets {
         for (login_name, login) in &target.logins {
             let route = BackendSelection {
                 target: target_name.clone(),
                 backend_login: login_name.clone(),
             };
-            let config = BackendConfig::new(
-                target.host.clone(),
-                target.port,
-                login.username.clone(),
-                required(
-                    &login.password_env,
-                    "target login password environment variable",
-                )?,
-                target.database.clone(),
-            )?;
-            backends.insert(route, config);
+            if let Some(compute) = &target.compute {
+                for (compute_type, settings) in &compute.types {
+                    for instance in &settings.instances {
+                        if !file.login_allows(target_name, login_name, &instance.id) {
+                            continue;
+                        }
+                        let (username, password_env) = login
+                            .overrides
+                            .get(&instance.id)
+                            .map(|override_| {
+                                (override_.username.as_str(), override_.password_env.as_str())
+                            })
+                            .unwrap_or((&login.username, &login.password_env));
+                        let config = BackendConfig::new(
+                            instance.host.clone(),
+                            instance.port,
+                            username.to_owned(),
+                            required(password_env, "target login password environment variable")?,
+                            target.database.clone(),
+                        )?;
+                        let default_compute_type = compute.default_type.as_deref()
+                            == Some(compute_type.as_str())
+                            || (compute.default_type.is_none() && compute.types.len() == 1);
+                        backends.push(PostgresBinding {
+                            selection: route.clone(),
+                            compute_type: Some(compute_type.clone()),
+                            compute: instance.id.clone(),
+                            default_compute_type,
+                            max_connections: settings.max_connections,
+                            max_in_flight: settings.max_in_flight,
+                            config,
+                        });
+                    }
+                }
+            } else {
+                let config = BackendConfig::new(
+                    target.host.clone(),
+                    target.port,
+                    login.username.clone(),
+                    required(
+                        &login.password_env,
+                        "target login password environment variable",
+                    )?,
+                    target.database.clone(),
+                )?;
+                backends.push(PostgresBinding {
+                    selection: route,
+                    compute_type: None,
+                    compute: "default".to_owned(),
+                    default_compute_type: true,
+                    max_connections: file.backend.max_connections_total,
+                    max_in_flight: file.backend.max_connections_total,
+                    config,
+                });
+            }
         }
     }
     Ok(HostConfig {

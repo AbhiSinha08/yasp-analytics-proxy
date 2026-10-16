@@ -4,4 +4,6 @@
 pub(crate) mod discovery;
 pub(crate) mod postgres;
 
-pub use postgres::{PostgresBackend, PostgresBackends};
+pub use postgres::{
+    BackendLease, BackendRoute, PostgresBackend, PostgresBackends, PostgresBinding,
+};

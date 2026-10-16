@@ -43,6 +43,16 @@ pub async fn serve_routed(
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
     let discovery = backends.discovery_route(config.schema_discovery.as_ref())?;
+    let discovery_compute = config.schema_discovery_compute.clone();
+    if backends
+        .get_discovery(&discovery, discovery_compute.as_deref())
+        .is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "discovery requires a configured compute instance",
+        ));
+    }
     serve_sessions(
         listener,
         config,
@@ -50,6 +60,7 @@ pub async fn serve_routed(
             backends,
             selector: selector.into(),
             discovery,
+            discovery_compute,
         },
         shutdown,
     )

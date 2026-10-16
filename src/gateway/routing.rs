@@ -3,7 +3,9 @@
 
 use super::protocol_error;
 use crate::{
-    backend::{PostgresBackend, PostgresBackends, discovery::DiscoverySource},
+    backend::{
+        PostgresBackend, PostgresBackends, discovery::DiscoverySource, postgres::BackendRoute,
+    },
     hooks::{RoutedSelector, SelectionError, SelectionRequest},
 };
 use pgwire::error::PgWireResult;
@@ -15,6 +17,7 @@ pub(super) enum Execution {
         backends: Arc<PostgresBackends>,
         selector: RoutedSelector,
         discovery: crate::hooks::BackendSelection,
+        discovery_compute: Option<String>,
     },
 }
 
@@ -25,21 +28,24 @@ impl Execution {
             Self::Routed {
                 backends,
                 discovery,
+                discovery_compute,
                 ..
-            } => backends.get(discovery).expect("validated discovery pair"),
+            } => backends
+                .get_discovery(discovery, discovery_compute.as_deref())
+                .expect("validated discovery binding"),
         };
         backend.discovery()
     }
     pub(super) async fn select(
         &self,
         request: &SelectionRequest<'_>,
-    ) -> PgWireResult<&PostgresBackend> {
+    ) -> PgWireResult<BackendRoute<'_>> {
         match self {
-            Self::Fixed(backend) => Ok(backend),
+            Self::Fixed(backend) => Ok(backend.route()),
             Self::Routed {
                 backends, selector, ..
             } => {
-                let route = selector
+                let decision = selector
                     .select(request)
                     .await
                     .map_err(|error| match error {
@@ -50,17 +56,17 @@ impl Execution {
                             protocol_error("ERROR", "XX000", "backend selection failed")
                         }
                     })?;
-                let backend = backends.get(&route).ok_or_else(|| {
+                let route = backends.resolve(&decision).map_err(|_| {
                     protocol_error("ERROR", "42501", "backend selection is not configured")
                 })?;
                 tracing::debug!(
                     query_id = request.query_id,
                     client_id = request.client_id,
-                    target = %route.target,
-                    backend_login = %route.backend_login,
+                    target = %route.selection().target,
+                    backend_login = %route.selection().backend_login,
                     "backend selected"
                 );
-                Ok(backend)
+                Ok(route)
             }
         }
     }

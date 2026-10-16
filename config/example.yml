@@ -53,6 +53,42 @@ targets:
         username: yasp_analyst
         password_env: YASP_SECONDARY_ANALYST_PASSWORD
 
+# Example only: warehouse engines can group compute resources behind one target.
+# PostgreSQL targets use a single host/port and should not configure this section.
+# targets:
+#   warehouse_analytics:
+#     engine: warehouse
+#     database: analytics
+#     tls_mode: verify_full
+#     logins:
+#       analyst:
+#         username: yasp_analyst
+#         password_env: YASP_WAREHOUSE_ANALYST_PASSWORD
+#         overrides:
+#           large_a:
+#             username: yasp_analyst_large
+#             password_env: YASP_WAREHOUSE_ANALYST_LARGE_PASSWORD
+#     compute:
+#       default_type: small
+#       types:
+#         small:
+#           max_in_flight: 4
+#           max_connections: 8
+#           instances:
+#             - id: small_a
+#               host: warehouse-small-a.example
+#               port: 443
+#             - id: small_b
+#               host: warehouse-small-b.example
+#               port: 443
+#         large:
+#           max_in_flight: 8
+#           max_connections: 12
+#           instances:
+#             - id: large_a
+#               host: warehouse-large-a.example
+#               port: 443
+
 # Future frontend principals and engine-enforced connection bounds:
 # principals:
 #   metabase:
@@ -69,10 +105,10 @@ schema_discovery:
 
 backend:
   max_connections_per_pool: 8 # Pools are partitioned by target/login.
-  max_connections_total: 32 # Covers four pools of eight, including pinned/retiring connections.
+  max_connections_total: 32 # Shared physical connection cap across configured targets.
+  acquire_timeout_ms: 60000 # Maximum asynchronous wait for pool capacity.
   # Future configurable backend lifecycle deadlines:
   # connect_timeout_ms: 5000
-  # acquire_timeout_ms: 5000
   # idle_transaction_timeout_ms: 30000
   # cleanup_timeout_ms: 5000
 
@@ -133,25 +169,16 @@ hooks:
 
   # Application-specific selector example: context and role policy remain host-owned.
   # Replace select_backend above after validating metadata and implementing the policy.
-  # role_selector.py is an unimplemented scaffold.
   # select_backend:
   #   type: python
   #   path: ../hooks/examples/role_selector.py
   #   callback: select_backend
   #   params:
-  #     rbac:
-  #       metadata_key: group # Application-defined; stock Metabase is not assumed to emit it.
-  #       mappings:
-  #         restricted:
-  #           target: primary
-  #           backend_login: restricted
-  #         analysts:
-  #           target: primary
-  #           backend_login: analyst
-  #       missing_or_unmapped: deny
-  #       discovery_connection: # For recognized metadata/setup operations only.
-  #         target: primary
-  #         backend_login: restricted
+  #     target_by_workload: {realtime: primary, reporting: warehouse_analytics}
+  #     login_by_user:
+  #       alice: {primary: restricted, warehouse_analytics: restricted}
+  #       bob: {primary: analyst, warehouse_analytics: analyst}
+  #     type_by_report: {realtime: null, dashboard: small, monthly_export: large}
 
   # Future ordered result callbacks; stage contracts are not implemented yet.
   # result_processing:

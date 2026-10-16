@@ -37,6 +37,7 @@ pub(super) struct PgConnection {
     pub(super) clean: bool,
     pub(super) query_complete: bool,
     pub(super) cancel_requested: bool,
+    pub(super) _physical: super::pool::PhysicalPermit,
 }
 
 impl PgConnection {

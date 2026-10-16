@@ -16,10 +16,10 @@ and Python examples are under [hooks/examples](../hooks/examples).
 | Stage | Binding and data | Result/failure policy |
 | --- | --- | --- |
 | Context | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query. | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query. |
-| Selection | `bind_select_backend(state, f)`; synchronous borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Configured `BackendSelection`; denial/unconfigured pair is `42501`, failure is `XX000`. No fallback. |
+| Selection | `bind_select_backend(state, f)`; synchronous borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
 | Cache eligibility | `bind_cache_eligibility(state, f)`; the same selection request. | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits. |
 
-The router validates every selection and delegates execution; the backend owns
+The router resolves and validates every selection, including cache hits, and delegates execution; the backend owns
 credentials and connection acquisition. Callbacks receive no backend passwords or
 driver objects. Authenticated frontend identity stays separate from derived context.
 SQL comments are untrusted hints;
@@ -53,7 +53,8 @@ function receives `function(request, params)` with fresh copied JSON-compatible
 objects. Selection/eligibility requests contain `authenticated_user`, `client_id`,
 `query_id`, original `sql`, and `context`. Context input also includes
 `frontend_database` and has no derived context yet. Selection returns exactly
-`{target: ..., backend_login: ...}` or `None` to deny; context returns a dictionary
+a dictionary with optional `target`, `backend_login`, and `compute_type` keys,
+or `None` to deny; context returns a dictionary
 or `None`; eligibility returns a boolean.
 
 The boundary accepts exact built-in null/bool/string/list/string-keyed dictionary,
@@ -114,7 +115,7 @@ to that future contract. See [Phase 2](PLAN.md#phase-2--additional-engines-dynam
 | Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders. |
 | RBAC and identity mapping | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output. |
 | Query/result/lifecycle hooks | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry. |
-| Load balancing | Extend selection/execution for actual configured endpoints when required. Define health, failure/retry behavior, session/transaction/prepared-state pinning, and endpoint-aware cache scope. Current routing selects one configured pair; it is not an automatic load balancer. |
+| Load balancing | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and transaction/prepared-state pinning are later milestones. |
 | Management or UI | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet. |
 
 Keep PostgreSQL-specific response types and parsing inside the relevant adapters

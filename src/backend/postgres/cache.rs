@@ -33,6 +33,8 @@ pub(crate) fn scope(
         database,
         backend.target(),
         backend.database_user(),
+        backend.compute_type().unwrap_or(""),
+        backend.compute(),
         super::SESSION_DEFAULTS,
     ] {
         hash.update((value.len() as u64).to_be_bytes());

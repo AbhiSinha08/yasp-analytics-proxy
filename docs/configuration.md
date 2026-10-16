@@ -35,10 +35,12 @@ Provision source logins with the intended PostgreSQL grants and RLS policy.
 
 ## Routing and pools
 
-Each named target/login pair gets a lazy pool. The optional `backend` block defaults
-to 8 connections per pool and 16 total. Limits must be positive, and total capacity
-must cover every configured pool at its per-pool limit. For four pairs of eight,
-set `max_connections_total: 32`, as in the reference configuration.
+The single selector may return `target`, `backend_login`, and `compute_type`.
+Omitted target/login fields resolve only when there is exactly one choice in their
+scope. A target without compute settings uses its ordinary endpoint. A target with
+compute settings uses its explicit `default_type`, or its sole type. Ambiguous
+omissions and invalid explicit choices deny the query; they never fall back to
+another source identity.
 
 ```yaml
 hooks:
@@ -50,9 +52,66 @@ hooks:
       backend_login: reader
 ```
 
-The default selector is built-in passthrough. Empty params infer the sole configured
-pair; multiple pairs require explicit `target` and `backend_login` strings. An
-explicit passthrough mapping accepts exactly those two keys.
+The built-in passthrough uses the same resolution rules. Empty params are useful
+for a single target/login. Python `None` denies explicitly; `{}` requests default
+resolution. Custom policy remains application-owned.
+
+### Optional compute types
+
+Only targets that use compute classes need a `compute` block. The PostgreSQL
+adapter supports configured local endpoints; other engines require their own
+adapters. Instances are tried in list order within the selected type.
+
+```yaml
+targets:
+  analytics:
+    engine: postgresql
+    database: analytics
+    tls_mode: disable
+    logins:
+      reader:
+        username: report_reader
+        password_env: REPORT_PASSWORD
+    compute:
+      default_type: small
+      types:
+        small:
+          max_in_flight: 4
+          max_connections: 8
+          instances:
+            - {id: small_a, host: "127.0.0.1", port: 5433}
+            - {id: small_b, host: "127.0.0.1", port: 5434}
+        large:
+          max_in_flight: 8
+          max_connections: 12
+          instances:
+            - {id: large_a, host: "127.0.0.1", port: 5435}
+```
+
+Type limits apply separately to each instance and are shared across all its logins.
+A login can restrict `allowed_computes` to named instances and provide credential
+`overrides.<instance>` containing a complete `username`/`password_env` pair. Omitted
+eligibility permits all configured instances. The application must verify intended
+access under every credential binding.
+
+### Capacity and waiting
+
+Pools open connections on demand. Defaults are eight physical connections per pool
+and sixteen total. The total is enforced across actual pooled source connections,
+including idle, creating, and cleanup states; it does not reserve every pool's
+maximum. Each compute instance also enforces its shared `max_connections` and
+`max_in_flight` bounds. Idle sessions can be reclaimed when another binding needs
+physical capacity. Cancellation uses its separate control connection.
+
+Overflow stays within the selected type and login. If all eligible instances or
+the shared budget are full, acquisition waits asynchronously for capacity, up to
+`backend.acquire_timeout_ms` (60 seconds by default), then reports SQLSTATE
+`53300`. The frontend session can continue. Set this value in milliseconds; it
+must be between 1 and 2,147,483,647.
+Waiting consumes a bounded frontend session slot, not a dedicated worker thread;
+there is no durable query queue. Redis-backed queuing remains planned for Phase 2.
+Connection failures can try another eligible instance before application SQL is
+submitted; source permission errors and submitted queries are not retried.
 
 Hook references use `type`, `callback`, and an optional JSON-compatible `params`
 mapping. Python also requires `path`. Compiled string names are shorthand with
@@ -82,8 +141,9 @@ organization-specific params stay outside the engine. See [extensions](extension
 
 Session, SQL, context, and timeout limits must be positive. Frontend frames must be
 between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
-Backend connect, acquire, and cleanup deadlines are fixed separately at 10 seconds
-each. PostgreSQL transaction-local idle timeout uses the larger query/write budget.
+Backend connection and cleanup deadlines are fixed at 10 seconds. Acquisition
+uses `backend.acquire_timeout_ms`, which defaults to 60,000 ms. PostgreSQL
+transaction-local idle timeout uses the larger query/write budget.
 Prepared-statement and portal settings remain future configuration.
 
 ## Discovery and client setup
@@ -96,9 +156,12 @@ schema_discovery:
 
 The target is inferred only when exactly one exists. An omitted login uses the
 first login declared in that target's YAML, preserved through config serialization.
-The selected pair must exist. Recognized metadata queries use this pair independently
+The selected pair must exist. For multiple eligible compute instances, specify
+`schema_discovery.compute` explicitly. Discovery uses the same connection and work
+limits as ordinary queries. Recognized metadata queries use this binding independently
 of ordinary-query callbacks and caching. Library hosts use
-`GatewayConfig::with_schema_discovery` to choose explicitly.
+`GatewayConfig::with_schema_discovery` and optional
+`with_schema_discovery_compute` to choose explicitly.
 
 For DBeaver, use autocommit, connect to the configured gateway/source database, and
 set PostgreSQL driver properties `preferQueryMode=simple`, `prepareThreshold=0`,
@@ -128,6 +191,13 @@ source version; restart after a source version upgrade.
 | `max_rows_per_query` | 10,000 |
 | `max_buffered_bytes_total` | 33,554,432 |
 | `eligibility` | None; an optional Rust/Python callback can bypass supported queries. |
+
+Redis keys include a version marker, configured target and login names, and the
+normalized SQL query ID. Names are length-prefixed to avoid delimiter collisions.
+Different named pairs keep separate entries even when they share source credentials.
+Compute-instance and physical source settings remain part of entry scope validation.
+Dynamic masking will still load the selected source pair's cache entry and apply
+current masks before output; masking is not implemented yet.
 
 Hits skip PostgreSQL, so source grants and RLS can remain stale until expiry. Scope
 checks isolate identity, source, and fixed execution context. Redis transport is

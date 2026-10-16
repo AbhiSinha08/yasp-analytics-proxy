@@ -126,11 +126,13 @@ impl QuerySession<'_> {
             query,
             context: &context,
         };
-        let backend = tokio::select! {
+        let route = tokio::select! {
             biased;
             _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
             result = self.execution.select(&request) => result?,
         };
+        let selected = route.selection();
+        let backend = route.preferred();
         let cache = self.source.cache.as_deref();
         let mut buffer = None;
         if let Some(cache) = cache {
@@ -151,7 +153,7 @@ impl QuerySession<'_> {
                     let hit = tokio::select! {
                         biased;
                         _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
-                        hit = cache.get(query_id, &scope, entry) => hit,
+                        hit = cache.get(&selected.target, &selected.backend_login, query_id, &scope, entry) => hit,
                     };
                     if hit
                         && response_cache::valid_response(&entry.bytes, cache.max_rows_per_query())
@@ -169,26 +171,47 @@ impl QuerySession<'_> {
                 tracing::debug!(query_id, client_id, "cache miss or buffer limit reached");
             }
         }
+        let lease = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+            result = route.acquire() => result?,
+        };
+        let backend = lease.backend();
+        if buffer.is_some() {
+            // Capture under the actual binding if overflow changed the cache probe's source.
+            drop(buffer.take());
+            let scope = response_cache::scope(
+                backend,
+                authenticated_user,
+                frontend_database,
+                self.settings,
+            );
+            buffer = cache.and_then(|cache| cache.reserve(&scope));
+        }
         tracing::debug!(
             query_id,
             client_id,
             database = ?backend.target(),
             database_user = %backend.database_user(),
+            target = %selected.target,
+            backend_login = %selected.backend_login,
             sql = ?query.sql(),
             "query sent to backend"
         );
         let mut output = CaptureSink::new(socket, buffer, cache);
-        let cacheable_completion = backend
-            .execute_with_cancel(
+        let cacheable_completion = lease
+            .execute(
                 query,
                 &mut output,
                 self.settings.query_timeout(),
                 write_timeout,
-                cancel,
+                Some(cancel),
             )
             .await?;
         if cacheable_completion && let (Some(cache), Some(buffer)) = (cache, output.captured()) {
-            cache.put(query_id, buffer).await;
+            cache
+                .put(&selected.target, &selected.backend_login, query_id, buffer)
+                .await;
         }
         Ok(())
     }

@@ -20,10 +20,7 @@ fn malformed_cached_responses_are_misses() {
     let client = |query: &str| psql(query, &address, &user, &password, &database);
     const HEADER_BYTES: usize = 5 + 32;
     let wire_query = "SELECT 8675309";
-    let wire_key = format!(
-        "{namespace}:{}",
-        ParsedQuery::parse(wire_query).unwrap().query_id()
-    );
+    let wire_key = cache_key(&namespace, &fixture.route, wire_query);
     let wire_fill = client(wire_query);
     assert_success(&wire_fill, "cache wire fixture query");
     assert_eq!(stdout(&wire_fill).trim(), "8675309");

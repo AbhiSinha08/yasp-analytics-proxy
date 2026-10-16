@@ -1,10 +1,9 @@
-use crate::hooks::{BackendSelection, SelectionError, SelectionRequest};
+use crate::hooks::{BackendDecision, SelectionError, SelectionRequest};
 
-/// Select the configured default pair. Hosts can replace this callback with
-/// their own routing policy.
+/// Return the configured partial decision for engine resolution.
 pub fn passthrough(
     _request: &SelectionRequest<'_>,
-    default: &BackendSelection,
-) -> Result<BackendSelection, SelectionError> {
+    default: &BackendDecision,
+) -> Result<BackendDecision, SelectionError> {
     Ok(default.clone())
 }

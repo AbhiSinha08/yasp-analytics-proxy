@@ -133,6 +133,7 @@ pub(super) fn routed_gateway_contract() {
             BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 4,
+                acquire_timeout_ms: 60_000,
             },
         )
         .expect("route pools must fit the configured bounds"),
@@ -251,6 +252,7 @@ pub(super) fn routed_gateway_contract() {
                 BackendSettings {
                     max_connections_per_pool: 1,
                     max_connections_total: 4,
+                    acquire_timeout_ms: 60_000,
                 },
             )
             .unwrap(),

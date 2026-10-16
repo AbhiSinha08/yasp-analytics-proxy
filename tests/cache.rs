@@ -21,7 +21,6 @@ use yasp::{
     cache::RedisCache,
     config::{BackendSettings, GatewayConfig},
     hooks::{BackendSelection, bind_cache_eligibility, bind_context, bind_select_backend},
-    query::ParsedQuery,
 };
 
 #[path = "cache/support.rs"]

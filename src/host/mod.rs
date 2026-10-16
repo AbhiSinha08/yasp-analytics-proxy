@@ -39,7 +39,10 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             gateway
         };
-        let backends = Arc::new(PostgresBackends::new(host.backends, host.file.backend)?);
+        let backends = Arc::new(PostgresBackends::with_bindings(
+            host.backends,
+            host.file.backend,
+        )?);
         let listener = TcpListener::bind(gateway.settings().listen).await?;
         tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
         gateway::serve_routed(listener, gateway, backends, selector, async {

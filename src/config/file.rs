@@ -31,6 +31,7 @@ pub struct FileConfig {
 pub struct SchemaDiscoverySettings {
     pub target: Option<String>,
     pub backend_login: Option<String>,
+    pub compute: Option<String>,
 }
 
 /// Named logins retain their declaration order for the discovery default.
@@ -105,17 +106,54 @@ impl<'de> Deserialize<'de> for Logins {
 pub struct LoginSettings {
     pub username: String,
     pub password_env: String,
+    #[serde(default)]
+    pub allowed_computes: Option<Vec<String>>,
+    #[serde(default)]
+    pub overrides: BTreeMap<String, CredentialOverride>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialOverride {
+    pub username: String,
+    pub password_env: String,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetSettings {
     pub engine: String,
+    #[serde(default)]
     pub host: String,
+    #[serde(default)]
     pub port: u16,
     pub database: String,
     pub tls_mode: String,
     pub logins: Logins,
+    pub compute: Option<ComputeSettings>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeSettings {
+    pub default_type: Option<String>,
+    pub types: BTreeMap<String, ComputeTypeSettings>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeTypeSettings {
+    pub max_in_flight: usize,
+    pub max_connections: usize,
+    pub instances: Vec<ComputeInstanceSettings>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComputeInstanceSettings {
+    pub id: String,
+    pub host: String,
+    pub port: u16,
 }
 
 impl FileConfig {
@@ -164,16 +202,15 @@ impl FileConfig {
         }
         if self.backend.max_connections_per_pool == 0
             || self.backend.max_connections_total == 0
-            || self.backend.max_connections_per_pool > self.backend.max_connections_total
+            || self.backend.acquire_timeout_ms == 0
+            || self.backend.acquire_timeout_ms > i32::MAX as u64
         {
             return Err(ConfigError::InvalidPoolLimit);
         }
-        let mut pool_capacity = 0usize;
         for (target_name, target) in &self.targets {
             validate_value("target name", target_name)?;
             for (name, value) in [
                 ("target.engine", &target.engine),
-                ("target.host", &target.host),
                 ("target.database", &target.database),
                 ("target.tls_mode", &target.tls_mode),
             ] {
@@ -182,42 +219,99 @@ impl FileConfig {
             if target.engine != "postgresql" || target.tls_mode != "disable" {
                 return Err(ConfigError::UnsupportedTarget);
             }
-            if target.port == 0 {
-                return Err(ConfigError::InvalidPort);
-            }
-            if target.host != "localhost"
-                && !target
-                    .host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-            {
-                return Err(ConfigError::NonLocalBackend);
+            match (&target.compute, target.host.is_empty(), target.port) {
+                (None, false, port) if port != 0 => validate_endpoint(&target.host, port)?,
+                (Some(_), true, 0) => {}
+                _ => return Err(ConfigError::InvalidComputeTopology),
             }
             if target.logins.is_empty() {
                 return Err(ConfigError::MissingRoutes);
+            }
+            let mut instance_ids = BTreeMap::new();
+            if let Some(compute) = &target.compute {
+                if compute.types.is_empty() {
+                    return Err(ConfigError::InvalidComputeTopology);
+                }
+                for (type_name, settings) in &compute.types {
+                    validate_value("compute type name", type_name)?;
+                    if settings.max_in_flight == 0
+                        || settings.max_connections == 0
+                        || settings.instances.is_empty()
+                    {
+                        return Err(ConfigError::InvalidComputeTopology);
+                    }
+                    for instance in &settings.instances {
+                        validate_value("compute instance id", &instance.id)?;
+                        validate_endpoint(&instance.host, instance.port)?;
+                        if instance_ids
+                            .insert(instance.id.as_str(), type_name.as_str())
+                            .is_some()
+                        {
+                            return Err(ConfigError::InvalidComputeTopology);
+                        }
+                    }
+                }
+                if let Some(default_type) = &compute.default_type {
+                    validate_value("compute.default_type", default_type)?;
+                    if !compute.types.contains_key(default_type) {
+                        return Err(ConfigError::InvalidComputeTopology);
+                    }
+                }
             }
             for (login_name, login) in &target.logins {
                 validate_value("backend login name", login_name)?;
                 validate_value("backend login username", &login.username)?;
                 validate_value("backend login password_env", &login.password_env)?;
-                if login.password_env.contains('=') {
+                if login.password_env.contains(['=', '\0']) {
                     return Err(ConfigError::InvalidValue("backend login password_env"));
                 }
-                pool_capacity = pool_capacity
-                    .checked_add(self.backend.max_connections_per_pool)
-                    .ok_or(ConfigError::InvalidPoolLimit)?;
+                if let Some(allowed) = &login.allowed_computes
+                    && (allowed.is_empty()
+                        || allowed
+                            .iter()
+                            .any(|id| !instance_ids.contains_key(id.as_str())))
+                {
+                    return Err(ConfigError::InvalidComputeTopology);
+                }
+                for (id, credentials) in &login.overrides {
+                    if !instance_ids.contains_key(id.as_str())
+                        || login
+                            .allowed_computes
+                            .as_ref()
+                            .is_some_and(|allowed| !allowed.contains(id))
+                    {
+                        return Err(ConfigError::InvalidComputeTopology);
+                    }
+                    validate_value("compute override username", &credentials.username)?;
+                    validate_value("compute override password_env", &credentials.password_env)?;
+                    if credentials.password_env.contains(['=', '\0']) {
+                        return Err(ConfigError::InvalidValue("compute override password_env"));
+                    }
+                }
+            }
+            if let Some(compute) = &target.compute
+                && compute.types.values().any(|settings| {
+                    !settings.instances.iter().any(|instance| {
+                        target.logins.values().any(|login| {
+                            login
+                                .allowed_computes
+                                .as_ref()
+                                .is_none_or(|ids| ids.contains(&instance.id))
+                        })
+                    })
+                })
+            {
+                return Err(ConfigError::InvalidComputeTopology);
             }
         }
         if self.targets.is_empty() {
             return Err(ConfigError::MissingRoutes);
         }
-        if pool_capacity > self.backend.max_connections_total {
-            return Err(ConfigError::InvalidPoolLimit);
-        }
         if self.hooks.select_backend.rust_callback() == Some("builtin.select_backend.passthrough") {
-            self.default_backend()?;
+            self.default_decision()?;
         }
         self.discovery_backend()?;
+        self.discovery_compute()?;
         Ok(())
     }
 
@@ -246,51 +340,160 @@ impl FileConfig {
         })
     }
 
-    /// Resolve builtin passthrough params, or infer the sole configured pair.
-    /// Application selectors interpret their own params when the host binds them.
-    pub fn default_backend(&self) -> Result<crate::hooks::BackendSelection, ConfigError> {
-        if let SelectorSettings::RustReference(hook) = &self.hooks.select_backend
-            && hook.callback == "builtin.select_backend.passthrough"
-            && !hook.params.is_empty()
-        {
-            let selection = serde_json::from_value(serde_json::Value::Object(hook.params.clone()))
-                .map_err(|_| ConfigError::InvalidSelectorParams)?;
-            self.validate_selection(&selection)?;
-            return Ok(selection);
+    pub fn discovery_compute(&self) -> Result<Option<String>, ConfigError> {
+        let selection = self.discovery_backend()?;
+        let target = &self.targets[&selection.target];
+        let Some(compute) = &target.compute else {
+            return self
+                .schema_discovery
+                .compute
+                .as_ref()
+                .map_or(Ok(None), |_| Err(ConfigError::InvalidDiscoveryBackend));
+        };
+        let login = &target.logins[&selection.backend_login];
+        let eligible: Vec<_> = compute
+            .types
+            .values()
+            .flat_map(|kind| kind.instances.iter())
+            .filter(|instance| {
+                login
+                    .allowed_computes
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&instance.id))
+            })
+            .collect();
+        if let Some(id) = &self.schema_discovery.compute {
+            return eligible
+                .iter()
+                .any(|instance| instance.id == *id)
+                .then(|| Some(id.clone()))
+                .ok_or(ConfigError::InvalidDiscoveryBackend);
         }
-        let mut pairs = self.targets.iter().flat_map(|(target, settings)| {
-            settings
-                .logins
-                .keys()
-                .map(move |login| crate::hooks::BackendSelection {
-                    target: target.clone(),
-                    backend_login: login.clone(),
-                })
-        });
-        let first = pairs.next();
-        if pairs.next().is_some() {
-            return Err(ConfigError::MissingDefaultBackend);
+        match eligible.as_slice() {
+            [instance] => Ok(Some(instance.id.clone())),
+            [] => Err(ConfigError::InvalidDiscoveryBackend),
+            _ => Err(ConfigError::MissingDiscoveryCompute),
         }
-        first.ok_or(ConfigError::MissingDefaultBackend)
     }
 
-    fn validate_selection(
-        &self,
-        selection: &crate::hooks::BackendSelection,
-    ) -> Result<(), ConfigError> {
-        validate_value("hooks.select_backend.params.target", &selection.target)?;
-        validate_value(
-            "hooks.select_backend.params.backend_login",
-            &selection.backend_login,
-        )?;
-        if !self
+    pub fn login_allows(&self, target: &str, login: &str, instance: &str) -> bool {
+        self.targets
+            .get(target)
+            .and_then(|target| target.logins.get(login))
+            .is_some_and(|login| {
+                login
+                    .allowed_computes
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.iter().any(|id| id == instance))
+            })
+    }
+
+    /// Resolve the built-in selector to a concrete target and login pair.
+    pub fn default_backend(&self) -> Result<crate::hooks::BackendSelection, ConfigError> {
+        let decision = self.default_decision()?;
+        let target = decision
+            .target
+            .or_else(|| {
+                (self.targets.len() == 1).then(|| self.targets.keys().next().unwrap().clone())
+            })
+            .ok_or(ConfigError::MissingDefaultBackend)?;
+        let settings = self
             .targets
-            .get(&selection.target)
-            .is_some_and(|target| target.logins.contains_key(&selection.backend_login))
+            .get(&target)
+            .ok_or(ConfigError::InvalidDefaultBackend)?;
+        let backend_login = decision
+            .backend_login
+            .or_else(|| {
+                (settings.logins.len() == 1).then(|| settings.logins.keys().next().unwrap().clone())
+            })
+            .ok_or(ConfigError::MissingDefaultBackend)?;
+        Ok(crate::hooks::BackendSelection {
+            target,
+            backend_login,
+        })
+    }
+
+    /// Return configured passthrough fields as a partial decision. The router
+    /// resolves omitted fields against this target's eligible bindings.
+    pub fn default_decision(&self) -> Result<crate::hooks::BackendDecision, ConfigError> {
+        let decision = match &self.hooks.select_backend {
+            SelectorSettings::RustReference(hook)
+                if hook.callback == "builtin.select_backend.passthrough" =>
+            {
+                serde_json::from_value(serde_json::Value::Object(hook.params.clone()))
+                    .map_err(|_| ConfigError::InvalidSelectorParams)?
+            }
+            _ => {
+                let mut pairs = self.targets.iter().flat_map(|(target, settings)| {
+                    settings
+                        .logins
+                        .keys()
+                        .map(move |login| crate::hooks::BackendSelection {
+                            target: target.clone(),
+                            backend_login: login.clone(),
+                        })
+                });
+                let first = pairs.next().ok_or(ConfigError::MissingDefaultBackend)?;
+                if pairs.next().is_some() {
+                    return Err(ConfigError::MissingDefaultBackend);
+                }
+                crate::hooks::BackendDecision::from(first)
+            }
+        };
+        for value in [
+            &decision.target,
+            &decision.backend_login,
+            &decision.compute_type,
+        ]
+        .into_iter()
+        .flatten()
         {
+            validate_value("hooks.select_backend.params", value)?;
+        }
+        let target_name = match decision.target.as_deref() {
+            Some(target) => target,
+            None if self.targets.len() == 1 => self.targets.keys().next().unwrap(),
+            None => return Err(ConfigError::MissingDefaultBackend),
+        };
+        let target = self
+            .targets
+            .get(target_name)
+            .ok_or(ConfigError::InvalidDefaultBackend)?;
+        let login_name = match decision.backend_login.as_deref() {
+            Some(login) => login,
+            None if target.logins.len() == 1 => target.logins.keys().next().unwrap(),
+            None => return Err(ConfigError::MissingDefaultBackend),
+        };
+        let login = target
+            .logins
+            .get(login_name)
+            .ok_or(ConfigError::InvalidDefaultBackend)?;
+        if let Some(compute) = &target.compute {
+            let type_name = match decision.compute_type.as_deref() {
+                Some(type_name) => type_name,
+                None => match compute.default_type.as_deref() {
+                    Some(default_type) => default_type,
+                    None if compute.types.len() == 1 => compute.types.keys().next().unwrap(),
+                    None => return Err(ConfigError::MissingDefaultBackend),
+                },
+            };
+            let type_settings = compute
+                .types
+                .get(type_name)
+                .ok_or(ConfigError::InvalidDefaultBackend)?;
+            let has_eligible_instance = type_settings.instances.iter().any(|instance| {
+                login
+                    .allowed_computes
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&instance.id))
+            });
+            if !has_eligible_instance {
+                return Err(ConfigError::InvalidDefaultBackend);
+            }
+        } else if decision.compute_type.is_some() {
             return Err(ConfigError::InvalidDefaultBackend);
         }
-        Ok(())
+        Ok(decision)
     }
 
     /// Return the configured default pair for hosts that still need one connection.
@@ -310,4 +513,19 @@ impl FileConfig {
         }
         Ok((target, target.logins.values().next().unwrap()))
     }
+}
+
+fn validate_endpoint(host: &str, port: u16) -> Result<(), ConfigError> {
+    validate_value("target.host", host)?;
+    if port == 0 {
+        return Err(ConfigError::InvalidPort);
+    }
+    if host != "localhost"
+        && !host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    {
+        return Err(ConfigError::NonLocalBackend);
+    }
+    Ok(())
 }

@@ -8,11 +8,11 @@ mod pool;
 
 use connection::validate_text_fields;
 pub(super) use discovery::discover;
-use pool::{Lease, PgManager};
+use pool::{ConnectionBudget, InstanceState, Lease, PgManager};
 
 use crate::{
     config::{BackendConfig, BackendSettings},
-    hooks::BackendSelection,
+    hooks::{BackendDecision, BackendSelection, SelectionError},
     query::ParsedQuery,
 };
 use deadpool::managed::Pool;
@@ -21,11 +21,18 @@ use pgwire::{
     error::{ErrorInfo, PgWireError, PgWireResult},
     messages::{PgWireBackendMessage, response::TransactionStatus},
 };
-use std::{collections::BTreeMap, fmt, io, time::Duration};
-use tokio::time::timeout;
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt, io,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::{timeout, timeout_at},
+};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET extra_float_digits = 3; SET default_transaction_read_only = on; SET default_transaction_isolation = 'read committed'; SET client_connection_check_interval = '1s'";
 
@@ -34,6 +41,14 @@ pub struct PostgresBackend {
     pool: Pool<PgManager>,
     target: String,
     database_user: String,
+    selection: BackendSelection,
+    compute_type: Option<String>,
+    compute: String,
+    default_compute_type: bool,
+    instance: Arc<InstanceState>,
+    pool_slots: Arc<Semaphore>,
+    budget: Arc<ConnectionBudget>,
+    acquire_timeout: Duration,
 }
 
 impl PostgresBackend {
@@ -60,17 +75,68 @@ impl PostgresBackend {
         super::discovery::DiscoverySource::Postgres(self)
     }
     pub fn new(config: BackendConfig) -> io::Result<Self> {
-        Self::with_capacity(config, 8)
+        let settings = BackendSettings::default();
+        let selection = BackendSelection {
+            target: "default".into(),
+            backend_login: "default".into(),
+        };
+        Self::build(
+            PostgresBinding {
+                selection,
+                compute_type: None,
+                compute: "default".into(),
+                default_compute_type: true,
+                max_connections: settings.max_connections_total,
+                max_in_flight: settings.max_connections_total,
+                config,
+            },
+            settings.max_connections_per_pool,
+            ConnectionBudget::new(settings.max_connections_total),
+            Arc::new(InstanceState::new(
+                "default".into(),
+                settings.max_connections_total,
+                settings.max_connections_total,
+            )),
+            Duration::from_millis(settings.acquire_timeout_ms),
+        )
     }
 
-    fn with_capacity(config: BackendConfig, capacity: usize) -> io::Result<Self> {
+    fn build(
+        binding: PostgresBinding,
+        capacity: usize,
+        budget: Arc<ConnectionBudget>,
+        instance: Arc<InstanceState>,
+        acquire_timeout: Duration,
+    ) -> io::Result<Self> {
+        let PostgresBinding {
+            selection,
+            compute_type,
+            compute,
+            default_compute_type,
+            config,
+            ..
+        } = binding;
         let target = format!("{}:{}/{}", config.host, config.port, config.database);
         let database_user = config.username.clone();
-        let pool = pool::new(config, capacity)?;
+        let pool = pool::new(
+            config,
+            capacity,
+            budget.clone(),
+            instance.clone(),
+            acquire_timeout,
+        )?;
         Ok(Self {
             pool,
             target,
             database_user,
+            selection,
+            compute_type,
+            compute,
+            default_compute_type,
+            instance,
+            pool_slots: Arc::new(Semaphore::new(capacity)),
+            budget,
+            acquire_timeout,
         })
     }
 
@@ -80,6 +146,21 @@ impl PostgresBackend {
 
     pub(crate) fn database_user(&self) -> &str {
         &self.database_user
+    }
+
+    pub fn compute(&self) -> &str {
+        &self.compute
+    }
+
+    pub fn compute_type(&self) -> Option<&str> {
+        self.compute_type.as_deref()
+    }
+
+    pub fn route(&self) -> BackendRoute<'_> {
+        BackendRoute {
+            selection: self.selection.clone(),
+            candidates: vec![self],
+        }
     }
 
     /// Execute the already parsed statement. Native PostgreSQL messages stay
@@ -96,44 +177,202 @@ impl PostgresBackend {
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_inner(query, output, query_timeout, write_timeout, None, None)
+        query
+            .validate_read_only()
+            .map_err(|error| error_response("0A000", &error.to_string()))?;
+        self.route()
+            .acquire()
+            .await?
+            .execute(query, output, query_timeout, write_timeout, None)
             .await
             .map(|_| ())
     }
 
-    /// True permits caching: cleanup completed and no cancellation was delivered.
-    pub(crate) async fn execute_with_cancel<S>(
+    async fn acquire_if_usable(
         &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<BackendLease<'_>>, PgWireError> {
+        // Status only guides preference; `get` and the physical budget enforce use.
+        let idle_available = self.pool.status().available > 0;
+        let Ok(in_flight) = self.instance.in_flight.clone().try_acquire_owned() else {
+            return Ok(None);
+        };
+        let Ok(pool_slot) = self.pool_slots.clone().try_acquire_owned() else {
+            return Ok(None);
+        };
+        if !idle_available && !self.budget.may_open(&self.instance) {
+            return Ok(None);
+        }
+        let object = match timeout_at(deadline, self.pool.get()).await {
+            Ok(Ok(object)) => object,
+            Ok(Err(deadpool::managed::PoolError::Backend(PgWireError::UserError(info))))
+                if info.code == "53300" =>
+            {
+                return Ok(None);
+            }
+            Ok(Err(_)) => {
+                return Err(error_response("08006", "PostgreSQL connection unavailable"));
+            }
+            Err(_) => {
+                return Err(error_response(
+                    "53300",
+                    "PostgreSQL pool acquisition timed out",
+                ));
+            }
+        };
+        Ok(Some(BackendLease {
+            backend: self,
+            object: Some(object),
+            _in_flight: AdmissionPermit::new(in_flight, self.budget.clone()),
+            _pool_slot: AdmissionPermit::new(pool_slot, self.budget.clone()),
+        }))
+    }
+
+    pub(crate) fn close(&self) {
+        self.pool.close();
+    }
+}
+
+/// Configured PostgreSQL routes, each with its own bounded, lazily opened pool.
+/// Construction does not connect to PostgreSQL or expose credentials to hooks.
+pub struct PostgresBackends {
+    pools: BTreeMap<BackendSelection, Vec<PostgresBackend>>,
+}
+
+/// One configured source login and one concrete compute instance.
+pub struct PostgresBinding {
+    pub selection: BackendSelection,
+    pub compute_type: Option<String>,
+    pub compute: String,
+    pub default_compute_type: bool,
+    pub max_connections: usize,
+    pub max_in_flight: usize,
+    pub config: BackendConfig,
+}
+
+pub struct BackendRoute<'a> {
+    selection: BackendSelection,
+    candidates: Vec<&'a PostgresBackend>,
+}
+
+impl BackendRoute<'_> {
+    pub fn selection(&self) -> &BackendSelection {
+        &self.selection
+    }
+
+    /// Cache lookup can use the configured first instance without reserving work.
+    pub fn preferred(&self) -> &PostgresBackend {
+        self.candidates[0]
+    }
+
+    pub async fn acquire(&self) -> PgWireResult<BackendLease<'_>> {
+        let deadline = tokio::time::Instant::now() + self.candidates[0].acquire_timeout;
+        let budget = &self.candidates[0].budget;
+        loop {
+            let notified = budget.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let mut last_error = None;
+            for backend in &self.candidates {
+                match backend.acquire_if_usable(deadline).await {
+                    Ok(Some(lease)) => return Ok(lease),
+                    Ok(None) => {}
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            if let Some(error) = last_error {
+                return Err(error);
+            }
+            timeout_at(deadline, notified)
+                .await
+                .map_err(|_| error_response("53300", "PostgreSQL connection capacity timed out"))?;
+        }
+    }
+}
+
+pub struct BackendLease<'a> {
+    backend: &'a PostgresBackend,
+    object: Option<deadpool::managed::Object<PgManager>>,
+    _in_flight: AdmissionPermit,
+    _pool_slot: AdmissionPermit,
+}
+
+struct AdmissionPermit {
+    permit: Option<OwnedSemaphorePermit>,
+    budget: Arc<ConnectionBudget>,
+}
+
+impl AdmissionPermit {
+    fn new(permit: OwnedSemaphorePermit, budget: Arc<ConnectionBudget>) -> Self {
+        Self {
+            permit: Some(permit),
+            budget,
+        }
+    }
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        self.budget.changed.notify_waiters();
+    }
+}
+
+impl BackendLease<'_> {
+    pub fn backend(&self) -> &PostgresBackend {
+        self.backend
+    }
+
+    pub async fn execute<S>(
+        self,
         query: &ParsedQuery,
         output: &mut S,
         query_timeout: Duration,
         write_timeout: Duration,
-        cancel: futures::channel::oneshot::Receiver<()>,
+        cancel: Option<futures::channel::oneshot::Receiver<()>>,
     ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_inner(
+        self.execute_with_setup(query, output, query_timeout, write_timeout, cancel, None)
+            .await
+    }
+
+    pub(super) async fn execute_discovery<S>(
+        self,
+        query: &ParsedQuery,
+        output: &mut S,
+        query_timeout: Duration,
+        write_timeout: Duration,
+        cancel: futures::channel::oneshot::Receiver<()>,
+        setup: &str,
+    ) -> PgWireResult<bool>
+    where
+        S: Sink<PgWireBackendMessage> + Unpin + Send,
+        S::Error: fmt::Debug,
+        PgWireError: From<S::Error>,
+    {
+        self.execute_with_setup(
             query,
             output,
             query_timeout,
             write_timeout,
             Some(cancel),
-            None,
+            Some(setup),
         )
         .await
     }
 
-    async fn execute_inner<S>(
-        &self,
+    async fn execute_with_setup<S>(
+        mut self,
         query: &ParsedQuery,
         output: &mut S,
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: Option<futures::channel::oneshot::Receiver<()>>,
-        discovery_setup: Option<&str>,
+        setup: Option<&str>,
     ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
@@ -143,22 +382,11 @@ impl PostgresBackend {
         query
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
-        let object = timeout(ACQUIRE_TIMEOUT, self.pool.get())
-            .await
-            .map_err(|_| error_response("53300", "PostgreSQL pool acquisition timed out"))?
-            .map_err(|error| match error {
-                deadpool::managed::PoolError::Timeout(_) => {
-                    error_response("53300", "PostgreSQL pool acquisition timed out")
-                }
-                _ => error_response("08006", "PostgreSQL connection unavailable"),
-            })?;
-        let mut lease = Lease(Some(object));
+        let mut lease = Lease(self.object.take());
         let connection = lease.0.as_mut().unwrap();
         connection.clean = false;
         connection.query_complete = false;
         connection.cancel_requested = false;
-        // The gateway owns execution policy; PostgreSQL also enforces that budget.
-        // Local settings end at rollback and cannot leak to the next pool borrower.
         let transaction = format!(
             "BEGIN READ ONLY; SET LOCAL statement_timeout = '{}ms'; SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
             query_timeout.as_millis(),
@@ -173,7 +401,7 @@ impl PostgresBackend {
                 "unexpected PostgreSQL transaction state",
             ));
         }
-        if let Some(setup) = discovery_setup {
+        if let Some(setup) = setup {
             timeout(CONNECT_TIMEOUT, connection.control(setup))
                 .await
                 .map_err(|_| error_response("08006", "PostgreSQL metadata setup timed out"))??;
@@ -182,8 +410,6 @@ impl PostgresBackend {
             .stream_query(query.sql(), output, query_timeout, write_timeout, cancel)
             .await;
         let cancel_requested = connection.cancel_requested;
-        // A cancelled future may have unread protocol messages. Its lease is
-        // discarded; it must never enter the pool's idle queue.
         if !connection.query_complete {
             return completion.map(|_| false);
         }
@@ -215,8 +441,6 @@ impl PostgresBackend {
         if let Err(error) = cleanup {
             return Err(completion.err().unwrap_or(error));
         }
-        // Return only a verified idle connection. Completion is emitted after
-        // cleanup so a failed cleanup cannot be advertised as a successful read.
         let message = match completion {
             Ok(message) => message,
             Err(error) => {
@@ -234,16 +458,16 @@ impl PostgresBackend {
         }
         Ok(!cancel_requested)
     }
-
-    pub(crate) fn close(&self) {
-        self.pool.close();
-    }
 }
 
-/// Configured PostgreSQL routes, each with its own bounded, lazily opened pool.
-/// Construction does not connect to PostgreSQL or expose credentials to hooks.
-pub struct PostgresBackends {
-    pools: BTreeMap<BackendSelection, PostgresBackend>,
+impl Drop for BackendLease<'_> {
+    fn drop(&mut self) {
+        if let Some(object) = self.object.take() {
+            let budget = object._physical.budget();
+            drop(object);
+            budget.changed.notify_waiters();
+        }
+    }
 }
 
 impl PostgresBackends {
@@ -279,45 +503,199 @@ impl PostgresBackends {
         configurations: BTreeMap<BackendSelection, BackendConfig>,
         settings: BackendSettings,
     ) -> io::Result<Self> {
-        let capacity = settings.max_connections_per_pool;
-        if configurations.is_empty()
-            || capacity == 0
-            || settings.max_connections_total == 0
-            || configurations
-                .keys()
-                .any(|route| route.target.is_empty() || route.backend_login.is_empty())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "routes and pool limits must be nonempty and positive",
-            ));
-        }
-        if configurations
-            .len()
-            .checked_mul(capacity)
-            .is_none_or(|total| total > settings.max_connections_total)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "sum of route pool capacities exceeds max_connections_total; reduce max_connections_per_pool or increase max_connections_total",
-            ));
-        }
-        let pools = configurations
+        let capacity = settings.max_connections_total;
+        let bindings = configurations
             .into_iter()
-            .map(|(route, config)| {
-                PostgresBackend::with_capacity(config, capacity).map(|pool| (route, pool))
+            .map(|(selection, config)| PostgresBinding {
+                selection,
+                compute_type: None,
+                compute: "default".into(),
+                default_compute_type: true,
+                max_connections: capacity,
+                max_in_flight: capacity,
+                config,
             })
-            .collect::<io::Result<_>>()?;
+            .collect();
+        Self::with_bindings(bindings, settings)
+    }
+
+    pub fn with_bindings(
+        bindings: Vec<PostgresBinding>,
+        settings: BackendSettings,
+    ) -> io::Result<Self> {
+        if bindings.is_empty()
+            || settings.max_connections_per_pool == 0
+            || settings.max_connections_per_pool > Semaphore::MAX_PERMITS
+            || settings.max_connections_total == 0
+            || settings.max_connections_total > Semaphore::MAX_PERMITS
+            || settings.acquire_timeout_ms == 0
+            || settings.acquire_timeout_ms > i32::MAX as u64
+            || bindings.iter().any(|binding| {
+                binding.selection.target.is_empty()
+                    || binding.selection.backend_login.is_empty()
+                    || binding.compute.is_empty()
+                    || binding.max_connections == 0
+                    || binding.max_connections > Semaphore::MAX_PERMITS
+                    || binding.max_in_flight == 0
+                    || binding.max_in_flight > Semaphore::MAX_PERMITS
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "routes and pool limits must be nonempty and acquisition timeout must be valid",
+            ));
+        }
+
+        let mut instances = HashMap::<String, Arc<InstanceState>>::new();
+        let mut pools = BTreeMap::<BackendSelection, Vec<PostgresBackend>>::new();
+        let budget = ConnectionBudget::new(settings.max_connections_total);
+        let mut identities = std::collections::BTreeSet::new();
+        for binding in bindings {
+            let identity = format!(
+                "{}\0{}\0{}",
+                binding.selection.target,
+                binding.compute_type.as_deref().unwrap_or(""),
+                binding.compute
+            );
+            let pool_identity = (
+                binding.selection.clone(),
+                binding.compute_type.clone(),
+                binding.compute.clone(),
+            );
+            if !identities.insert(pool_identity) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "duplicate backend compute binding",
+                ));
+            }
+            let instance = if let Some(instance) = instances.get(&identity) {
+                if instance.max_connections != binding.max_connections
+                    || instance.max_in_flight != binding.max_in_flight
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "inconsistent limits for a shared compute instance",
+                    ));
+                }
+                instance.clone()
+            } else {
+                let instance = Arc::new(InstanceState::new(
+                    identity.clone(),
+                    binding.max_connections,
+                    binding.max_in_flight,
+                ));
+                instances.insert(identity, instance.clone());
+                instance
+            };
+            let route = binding.selection.clone();
+            let backend = PostgresBackend::build(
+                binding,
+                settings.max_connections_per_pool,
+                budget.clone(),
+                instance,
+                Duration::from_millis(settings.acquire_timeout_ms),
+            )?;
+            pools.entry(route).or_default().push(backend);
+        }
         Ok(Self { pools })
     }
 
-    pub(crate) fn get(&self, route: &BackendSelection) -> Option<&PostgresBackend> {
-        self.pools.get(route)
+    pub fn resolve(&self, decision: &BackendDecision) -> Result<BackendRoute<'_>, SelectionError> {
+        let targets = self
+            .pools
+            .keys()
+            .map(|route| route.target.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let target = match decision.target.as_deref() {
+            Some(target) => target,
+            None if targets.len() == 1 => *targets.iter().next().unwrap(),
+            None => return Err(SelectionError::Failed),
+        };
+        let target_bindings = self
+            .pools
+            .iter()
+            .filter(|(route, _)| route.target == target)
+            .collect::<Vec<_>>();
+        if target_bindings.is_empty() {
+            return Err(SelectionError::Failed);
+        }
+        let logins = target_bindings
+            .iter()
+            .map(|(route, _)| route.backend_login.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let login = match decision.backend_login.as_deref() {
+            Some(login) => login,
+            None if logins.len() == 1 => *logins.iter().next().unwrap(),
+            None => return Err(SelectionError::Failed),
+        };
+        let selection = BackendSelection {
+            target: target.to_owned(),
+            backend_login: login.to_owned(),
+        };
+        let candidates = self.pools.get(&selection).ok_or(SelectionError::Failed)?;
+        let has_compute = target_bindings
+            .iter()
+            .flat_map(|(_, backends)| backends.iter())
+            .any(|backend| backend.compute_type.is_some());
+        let desired_type = if let Some(compute_type) = decision.compute_type.as_deref() {
+            Some(compute_type)
+        } else if !has_compute {
+            None
+        } else {
+            let target_types = target_bindings
+                .iter()
+                .flat_map(|(_, backends)| backends.iter());
+            let defaults = target_types
+                .clone()
+                .filter(|backend| backend.default_compute_type)
+                .filter_map(|backend| backend.compute_type.as_deref())
+                .collect::<std::collections::BTreeSet<_>>();
+            if defaults.len() == 1 {
+                defaults.iter().next().copied()
+            } else if defaults.is_empty() {
+                let types = target_types
+                    .filter_map(|backend| backend.compute_type.as_deref())
+                    .collect::<std::collections::BTreeSet<_>>();
+                if types.len() == 1 {
+                    types.iter().next().copied()
+                } else {
+                    return Err(SelectionError::Failed);
+                }
+            } else {
+                return Err(SelectionError::Failed);
+            }
+        };
+        let selected = candidates
+            .iter()
+            .filter(|backend| backend.compute_type.as_deref() == desired_type)
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err(SelectionError::Failed);
+        }
+        Ok(BackendRoute {
+            selection,
+            candidates: selected,
+        })
+    }
+
+    pub fn get_discovery(
+        &self,
+        route: &BackendSelection,
+        compute: Option<&str>,
+    ) -> Option<&PostgresBackend> {
+        let candidates = self.pools.get(route)?;
+        match compute {
+            Some(compute) => candidates.iter().find(|backend| backend.compute == compute),
+            None if candidates.len() == 1 => candidates.first(),
+            None => None,
+        }
     }
 
     pub(crate) fn close(&self) {
-        for pool in self.pools.values() {
-            pool.close();
+        for pools in self.pools.values() {
+            for pool in pools {
+                pool.close();
+            }
         }
     }
 }

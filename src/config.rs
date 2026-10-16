@@ -4,7 +4,10 @@ mod file;
 mod runtime;
 mod settings;
 
-pub use file::{FileConfig, LoginSettings, Logins, SchemaDiscoverySettings, TargetSettings};
+pub use file::{
+    ComputeInstanceSettings, ComputeSettings, ComputeTypeSettings, CredentialOverride, FileConfig,
+    LoginSettings, Logins, SchemaDiscoverySettings, TargetSettings,
+};
 pub use runtime::{BackendConfig, GatewayConfig};
 pub use settings::{
     BackendSettings, CacheSettings, GatewaySettings, GatewayTls, HooksSettings, PythonHookKind,
@@ -20,6 +23,10 @@ pub enum ConfigError {
     MissingDiscoveryTarget,
     #[error("schema_discovery must identify a configured target and login")]
     InvalidDiscoveryBackend,
+    #[error("schema_discovery.compute is required when several eligible instances exist")]
+    MissingDiscoveryCompute,
+    #[error("compute topology, limits, and login eligibility must be valid")]
+    InvalidComputeTopology,
     #[error("cache requires positive row, byte-budget, and TTL limits")]
     InvalidCache,
     #[error(
@@ -38,15 +45,15 @@ pub enum ConfigError {
     MissingRoutes,
     #[error("connection() requires exactly one configured target with one login")]
     UnsupportedTopology,
-    #[error(
-        "backend pool limits must be positive and max_connections_total must cover every configured target/login pool; adjust either setting"
-    )]
+    #[error("backend pool limits must be positive and acquire_timeout_ms must be 1..=2147483647")]
     InvalidPoolLimit,
-    #[error("passthrough params must contain exactly target and backend_login strings")]
+    #[error(
+        "passthrough params must contain optional target, backend_login, and compute_type strings"
+    )]
     InvalidSelectorParams,
     #[error("passthrough params must identify a configured target and backend login")]
     InvalidDefaultBackend,
-    #[error("provide target and backend_login in passthrough params when multiple pairs exist")]
+    #[error("passthrough fields must resolve to one configured target, login, and compute type")]
     MissingDefaultBackend,
     #[error("target engine must be postgresql and tls_mode must be disable")]
     UnsupportedTarget,

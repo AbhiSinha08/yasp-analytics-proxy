@@ -32,7 +32,7 @@ fn eligibility_budgets_and_redis_outage() {
     let seed_address = seed_server.address;
     let seeded = psql(monitored_sql, &seed_address, &user, &password, &database);
     assert_success(&seeded, "seed monitored query cache entry");
-    let monitored_key = cache_key(&namespace, monitored_sql);
+    let monitored_key = cache_key(&namespace, &fixture.route, monitored_sql);
     let seeded_entry = redis_get(&redis_url, &monitored_key);
     seed_server.stop();
 
@@ -87,7 +87,7 @@ fn eligibility_budgets_and_redis_outage() {
     );
     assert!(redis_exists(
         &redis_url,
-        &cache_key(&namespace, ordinary_sql)
+        &cache_key(&namespace, &fixture.route, ordinary_sql)
     ));
     let error_first = bypass_client("SELECT clock_timestamp() /* eligibility error */");
     let error_second = bypass_client("SELECT clock_timestamp() /* eligibility error */");
@@ -242,7 +242,7 @@ def eligibility(request, params):
         );
         let example_address = example_server.address;
         let monitored_query = monitored_sql;
-        let monitored_key = cache_key(&python_example_namespace, monitored_query);
+        let monitored_key = cache_key(&python_example_namespace, &fixture.route, monitored_query);
         let seeded_entry = redis_get(&redis_url, &monitored_key);
 
         let first = psql(
@@ -293,7 +293,7 @@ def eligibility(request, params):
         );
         assert!(redis_exists(
             &redis_url,
-            &cache_key(&python_example_namespace, ordinary_query)
+            &cache_key(&python_example_namespace, &fixture.route, ordinary_query)
         ));
 
         example_server.stop();
