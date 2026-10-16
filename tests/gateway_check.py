@@ -20,8 +20,10 @@ BINARY = str(Path(sys.argv[1]).resolve())
 ROOT = Path(__file__).resolve().parents[1]
 INPUT = json.loads(sys.stdin.read())
 CONFIG, GATEWAY = INPUT["config"], INPUT["gateway"]
-listen_host, listen_port = CONFIG.get("gateway", {}).get("listen", "127.0.0.1:6432").rsplit(":", 1)
-ADDRESS = (listen_host.strip("[]"), int(listen_port))
+with socket.socket() as available:
+    available.bind(("127.0.0.1", 0))
+    ADDRESS = available.getsockname()
+CONFIG.setdefault("gateway", {})["listen"] = f"{ADDRESS[0]}:{ADDRESS[1]}"
 default_route = INPUT["default_backend"]
 CONFIG.setdefault("hooks", {})["select_backend"] = {
     "type": "rust", "callback": "builtin.select_backend.passthrough", "params": default_route
@@ -108,6 +110,8 @@ def server(directory, config_file=None, **overrides):
                 assert not value or value not in output, "password appeared in logs"
             assert "SECRET_MARKER" not in output, "invalid input appeared in logs"
             assert "panicked" not in output, output
+            if sys.exc_info()[0] is not None:
+                print(output, file=sys.stderr)
 
 
 def packet(kind, payload=b""):
@@ -883,17 +887,16 @@ def gateway_settings_checks(directory):
             wait_ready(process)
     finally:
         ADDRESS = original_address
-    if ADDRESS == ("127.0.0.1", 6432):
-        custom.pop("gateway")
-        custom_path.write_text(json.dumps(custom))
-        with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
-            wait_ready(process)
-            health()
+    custom["gateway"] = {"listen": f"{ADDRESS[0]}:{ADDRESS[1]}"}
+    custom_path.write_text(json.dumps(custom))
+    with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
+        wait_ready(process)
+        health()
 
 
 def main():
     with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as probe:
-        assert probe.connect_ex(ADDRESS) != 0, "configured gateway port is occupied; stop the existing gateway before testing"
+        assert probe.connect_ex(ADDRESS) != 0, "ephemeral gateway port was occupied before startup"
     with tempfile.TemporaryDirectory(prefix="yasp-gateway-") as directory:
         startup_checks(directory)
         assert all(PASSWORDS.values()), "supply the password environment variables named by tests/config.yml"

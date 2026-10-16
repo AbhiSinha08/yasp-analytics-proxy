@@ -1,4 +1,5 @@
-//! YASP subsystem boundaries. See docs/PLAN.md for the implementation plan.
+//! Bounded analytics gateway with host-owned extensions and PostgreSQL adapters.
+//! See docs/architecture.md for component ownership and docs/PLAN.md for phase scope.
 
 pub mod backend;
 pub mod cache;

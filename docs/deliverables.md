@@ -51,11 +51,6 @@
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
-- [ ] **Remaining BI client compatibility** — Do these last in Phase 1; move an item earlier if client testing requires it.
-  - [ ] **Prepared queries and basic portals** — Let clients prepare a query once and run it later.
-  - [ ] **Limited `SET` support** — Support selected session settings requested by BI clients.
-  - [ ] **Client transactions and resumable results** — Keep related queries in one transaction and let clients pause and continue receiving results.
-  - [ ] **Binary data formats** — Support PostgreSQL's compact binary representation for query values and results when clients request it.
 
 ## Phase 2 — Additional engines, dynamic masking, and management
 
@@ -63,14 +58,22 @@
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
 - [ ] **Shared execution contract** — Dispatches to multiple adapters while keeping routing and policy independent of drivers.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
+- [ ] **AST Based Dynamic Masking**
 - [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.
 - [ ] **Backend Database Schema Caching**
+- [ ] **Benchmarking Framework**
+- [ ] **Git Backed config Management in UI**
 
 ## Phase 3 — Advanced analytics and integrations
 
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.
+- [ ] **Remaining BI client compatibility** — Do these last in Phase 1; move an item earlier if client testing requires it.
+  - [ ] **Prepared queries and basic portals** — Let clearlier prepare a/2 later.
+  - [ ] **Limited `SET` support** — Support selected session settings requested by BI clients.
+  - [ ] **Client transactions and resumable results** — Keep related queries in one transaction and let clients pause and continue receiving results.
+  - [ ] **Binary data formats** — Support PostgreSQL's compact binary representation for query values and results when clients request it.
 - [ ] **Governance integration** — Adds verified end-user context and external policy checks with privacy controls.
 - [ ] **Cache evolution** — Adds metadata caching and reliable invalidation across data versions and targets.
 - [ ] **Semantic caching** — Reuses compatible result supersets while preserving SQL ordering, filtering, NULL, limit, and aggregate semantics.
