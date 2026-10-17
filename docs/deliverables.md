@@ -54,43 +54,36 @@
   - [x] **Routing and protocol checks** — Tests metadata/data separation, native results, settings, callback bypass, and pool cleanup with real PostgreSQL clients.
   - [x] **Live desktop-client browsing** — Verify VS Code Database Client and DBeaver UI refresh with autocommit and JDBC simple-query mode.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
-  - [ ] **Application identity and routing policy** — Map required BI context to configured source logins, deny missing required identity, and verify source grants.
   - [x] **Partial selector decisions** — Let the single selector omit unambiguous target/login fields and request an optional target-scoped compute type.
-  - [ ] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended client.
+  - [ ] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended real BI client.
 - [x] **Optional compute-type routing and overflow** — Uses [target-scoped compute routing](source-access-routing-plan.md) and bounded shared allocation.
   - [x] **Target-scoped compute configuration** — Define compute types, ordered instances, and supported login bindings without changing ordinary targets.
   - [x] **Shared connection budgets** — Bound actual open connections across pools and reclaim idle sessions when another binding needs capacity.
   - [x] **Type-local overflow and recovery** — Allocate within the selected type and verify shared capacity, cancellation, cleanup, discovery, and cache scope.
-- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
 
 ## Phase 2 — Additional engines, dynamic masking, and management
 
 - [ ] **Warehouse adapter** — Adds one selected engine with its own execution, metadata, type, and session behavior.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
-- [ ] **Shared execution contract** — Dispatches to multiple adapters while keeping routing and policy independent of drivers.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
+- [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
+- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
+- [ ] **Backend Database Schema Caching**
 - [ ] **AST Based Dynamic Masking**
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
-- [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls.
-  - [ ] **Dataset management** — Inspect, atomically update, refresh, and invalidate named datasets through authenticated management operations.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.
-- [ ] **Backend Database Schema Caching**
-- [ ] **Benchmarking Framework**
 - [ ] **Git Backed config Management in UI**
 
 ## Phase 3 — Advanced analytics and integrations
 
+- [ ] **Benchmarking Framework**
 - [ ] **Additional load-distribution algorithms** — Add round-robin and least-busy allocation within a selected compute type, preserving access, capacity, and cancellation bounds.
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.
-- [ ] **Remaining BI client compatibility** — Do these last in Phase 1; move an item earlier if client testing requires it.
-  - [ ] **Prepared queries and basic portals** — Let clearlier prepare a/2 later.
-  - [ ] **Limited `SET` support** — Support selected session settings requested by BI clients.
-  - [ ] **Client transactions and resumable results** — Keep related queries in one transaction and let clients pause and continue receiving results.
-  - [ ] **Binary data formats** — Support PostgreSQL's compact binary representation for query values and results when clients request it.
-- [ ] **Governance integration** — Adds verified end-user context and external policy checks with privacy controls.
-- [ ] **Cache evolution** — Adds metadata caching and reliable invalidation across data versions and targets.
+- [ ] **Remaining BI client compatibility** — Prepared queries, Portals, limited SET support, resumable results, Binary Data formats
+- [ ] **Governance integration in UI** — Adds verified end-user context and external policy checks with privacy controls.
+- [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls, Dataset refreshes, edits.
 - [ ] **Semantic caching** — Reuses compatible result supersets while preserving SQL ordering, filtering, NULL, limit, and aggregate semantics.
 - [ ] **Federation** — Plans and runs cross-engine queries with explicit type, consistency, and failure behavior.
 - [ ] **Natural-language queries** — Adds model-assisted query creation through the existing authorized execution path.
