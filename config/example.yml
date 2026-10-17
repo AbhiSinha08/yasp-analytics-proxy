@@ -116,7 +116,7 @@ backend:
 cache:
   enabled: false
   url_env: YASP_REDIS_URL
-  namespace: "yasp::cache"
+  namespace: "yasp:cache"
   ttl_seconds: 3600 # Hits do not extend expiry.
   max_rows_per_query: 10000
   max_buffered_bytes_total: 33554432 # Aggregate in-process cache buffer budget.
@@ -192,7 +192,7 @@ hooks:
 
 application_contexts:
   url_env: YASP_REDIS_URL
-  namespace: "yasp::datasets"
+  namespace: "yasp:datasets"
   refresh_timeout_ms: 30000
   max_dataset_bytes: 16777216
   max_lookup_bytes: 65536

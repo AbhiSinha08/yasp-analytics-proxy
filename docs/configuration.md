@@ -159,7 +159,7 @@ be any JSON value, including arrays, scalars, and `null`.
 ```yaml
 application_contexts:
   url_env: YASP_CONTEXT_REDIS_URL
-  namespace: "yasp::datasets"
+  namespace: "yasp:datasets"
   refresh_timeout_ms: 30000
   max_dataset_bytes: 16777216
   max_lookup_bytes: 65536
@@ -186,8 +186,8 @@ than a process-local copy. Failed refreshes keep the previous value and retry at
 next interval. Manual refresh/invalidation controls are Phase 2 management work.
 
 For example, dataset `users` stores field `42` as JSON object data at Redis
-hash key `yasp::datasets::users::data`; the separate `email_locations` dataset stores
-field `columns` as a JSON array at `yasp::datasets::email_locations::data`. Registry
+hash key `yasp:datasets:users:data`; the separate `email_locations` dataset stores
+field `columns` as a JSON array at `yasp:datasets:email_locations:data`. Registry
 state records `format_version`, `revision`, `loaded_at_ms`, and
 `next_refresh_at_ms`; its internal empty marker is hidden from callbacks.
 

@@ -178,7 +178,7 @@ impl Default for ApplicationContextsSettings {
     fn default() -> Self {
         Self {
             url_env: "YASP_CONTEXT_REDIS_URL".into(),
-            namespace: "yasp::datasets".into(),
+            namespace: "yasp:datasets".into(),
             refresh_timeout_ms: 30_000,
             max_dataset_bytes: 16_777_216,
             max_lookup_bytes: 65_536,

@@ -111,7 +111,7 @@ async fn assert_bad_refresh_keeps_generation(
     let client = redis::Client::open(url).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();
     let stored: String = redis::cmd("HGET")
-        .arg(format!("{namespace}::users::data"))
+        .arg(format!("{namespace}:users:data"))
         .arg("generation")
         .query_async(&mut connection)
         .await
@@ -258,14 +258,14 @@ async fn reads_json_values_missing_keys_limits_and_new_redis_values() {
     let client = redis::Client::open(url.as_str()).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();
     redis::cmd("HSET")
-        .arg(format!("{}::values::state", namespace.name))
+        .arg(format!("{}:values:state", namespace.name))
         .arg("format_version")
         .arg("1")
         .query_async::<()>(&mut connection)
         .await
         .unwrap();
     redis::cmd("HSET")
-        .arg(format!("{}::values::data", namespace.name))
+        .arg(format!("{}:values:data", namespace.name))
         .arg("")
         .arg("1")
         .arg("scalar")
@@ -366,7 +366,7 @@ async fn startup_reloads_existing_data_and_loader_errors_are_redacted() {
     let client = redis::Client::open(url.as_str()).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();
     let stored: String = redis::cmd("HGET")
-        .arg(format!("{}::users::data", namespace.name))
+        .arg(format!("{}:users:data", namespace.name))
         .arg("generation")
         .query_async(&mut connection)
         .await
@@ -510,7 +510,7 @@ async fn concurrent_startup_uses_one_loader_and_scheduled_refresh_fences_late_wr
     let client = redis::Client::open(url.as_str()).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();
     redis::cmd("HSET")
-        .arg(format!("{first_namespace}::users::data"))
+        .arg(format!("{first_namespace}:users:data"))
         .arg("generation")
         .arg("1")
         .query_async::<()>(&mut connection)
@@ -520,7 +520,7 @@ async fn concurrent_startup_uses_one_loader_and_scheduled_refresh_fences_late_wr
         .await
         .expect("scheduled loader begins");
     redis::cmd("SET")
-        .arg(format!("{first_namespace}::users::lease"))
+        .arg(format!("{first_namespace}:users:lease"))
         .arg("newer-owner")
         .query_async::<()>(&mut connection)
         .await
@@ -538,12 +538,12 @@ async fn concurrent_startup_uses_one_loader_and_scheduled_refresh_fences_late_wr
 
     // Let the next scheduled attempt fail and then recover on its following interval.
     redis::cmd("DEL")
-        .arg(format!("{first_namespace}::users::lease"))
+        .arg(format!("{first_namespace}:users:lease"))
         .query_async::<()>(&mut connection)
         .await
         .unwrap();
     redis::cmd("HSET")
-        .arg(format!("{first_namespace}::users::state"))
+        .arg(format!("{first_namespace}:users:state"))
         .arg("next_refresh_at_ms")
         .arg("0")
         .query_async::<()>(&mut connection)
@@ -611,7 +611,7 @@ async fn malformed_revision_does_not_replace_published_data() {
         .unwrap();
     for revision in ["invalid", "0001", "999999999999999999999"] {
         redis::cmd("HSET")
-            .arg(format!("{}::users::state", namespace.name))
+            .arg(format!("{}:users:state", namespace.name))
             .arg("revision")
             .arg(revision)
             .query_async::<()>(&mut connection)
@@ -630,7 +630,7 @@ async fn malformed_revision_does_not_replace_published_data() {
         .await;
         assert!(matches!(result, Err(DatasetError::InvalidData)));
         let current: String = redis::cmd("HGET")
-            .arg(format!("{}::users::data", namespace.name))
+            .arg(format!("{}:users:data", namespace.name))
             .arg("value")
             .query_async(&mut connection)
             .await

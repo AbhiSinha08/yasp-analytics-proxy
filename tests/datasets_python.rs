@@ -406,7 +406,7 @@ def queued(request, params):
     let client = redis::Client::open(url.as_str()).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();
     redis::cmd("HSET")
-        .arg(format!("{}::malformed::data", namespace.name))
+        .arg(format!("{}:malformed:data", namespace.name))
         .arg("bad")
         .arg("PRIVATE_MALFORMED_VALUE")
         .query_async::<()>(&mut connection)

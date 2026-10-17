@@ -229,8 +229,8 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
     }
     let mut process = ChildGuard::new(command.spawn().expect("configured host starts"));
 
-    let data_key = format!("{}::email_locations::data", namespace.name);
-    let users_key = format!("{}::users::data", namespace.name);
+    let data_key = format!("{}:email_locations:data", namespace.name);
+    let users_key = format!("{}:users:data", namespace.name);
     let expected = r#"["crm.contacts.email","billing.invoices.recipient_email"]"#;
     let started = Instant::now();
     loop {

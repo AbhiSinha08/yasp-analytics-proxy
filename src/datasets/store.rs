@@ -93,7 +93,7 @@ impl Store {
     }
 
     pub fn key(&self, name: &str, suffix: &str) -> String {
-        format!("{}::{name}::{suffix}", self.settings.namespace)
+        format!("{}:{name}:{suffix}", self.settings.namespace)
     }
 
     pub async fn read_command(&self, cmd: Cmd) -> Result<Value, DatasetError> {
@@ -153,7 +153,7 @@ impl Store {
         revision: &str,
         data: &serde_json::Value,
     ) -> Result<(), DatasetError> {
-        let stage = self.key(name, &format!("staging::{token}"));
+        let stage = self.key(name, &format!("staging:{token}"));
         let mut begin = redis::cmd("EVAL");
         begin
             .arg(scripts::BEGIN)

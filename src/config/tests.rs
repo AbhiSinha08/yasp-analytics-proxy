@@ -83,7 +83,7 @@ fn application_context_dataset_settings_are_bounded_and_well_formed() {
     let settings = ApplicationContextsSettings::default();
     settings.validate().unwrap();
     assert_eq!(settings.url_env, "YASP_CONTEXT_REDIS_URL");
-    assert_eq!(settings.namespace, "yasp::datasets");
+    assert_eq!(settings.namespace, "yasp:datasets");
     assert_eq!(settings.refresh_timeout_ms, 30_000);
     assert_eq!(settings.max_dataset_bytes, 16_777_216);
     assert_eq!(settings.max_lookup_bytes, 65_536);
@@ -161,6 +161,8 @@ fn example_is_loadable_without_secrets_or_database_access() {
     let config =
         FileConfig::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"))
             .unwrap();
+    assert_eq!(config.cache.namespace, "yasp:cache");
+    assert_eq!(config.application_contexts.namespace, "yasp:datasets");
     let selected = config.default_backend().unwrap();
     assert_eq!(selected.target, "primary");
     assert_eq!(selected.backend_login, "restricted");
