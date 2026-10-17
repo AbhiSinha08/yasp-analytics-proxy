@@ -210,10 +210,14 @@ pub(crate) fn cache_key(
     backend_login: &str,
     query_id: &str,
 ) -> String {
+    let component = |name: &str| {
+        name.replace('%', "%25")
+            .replace(':', "%3A")
+            .replace('_', "%5F")
+    };
     format!(
-        "{namespace}:v2:{}:{target}:{}:{backend_login}:{}:{query_id}",
-        target.len(),
-        backend_login.len(),
-        query_id.len()
+        "{namespace}:{}_{}:{query_id}",
+        component(target),
+        component(backend_login)
     )
 }

@@ -19,14 +19,14 @@ The process environment takes precedence over optional `.env` in the working
 directory. The host parses `.env` without mutating the process environment. Keep
 secret values out of YAML and logs.
 
-| Resource | Secret/configuration source |
-| --- | --- |
-| Frontend username/password/database label | `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, `YASP_GATEWAY_DATABASE`. |
-| Backend endpoint/database | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls.mode: disable` or `enable`. |
-| Backend login | `targets.<name>.logins.<name>.username` and a `password_env` variable name. |
-| Result-cache Redis URL | The variable named by `cache.url_env`, required only when caching is enabled. |
-| Dataset Redis URL | The variable named by `application_contexts.url_env`, required when datasets are configured. |
-| Log level | `LOG_LEVEL`: DEBUG, INFO, WARN, ERROR; defaults to INFO. Logs go to stdout. |
+| Resource                                  | Secret/configuration source                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Frontend username/password/database label | `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, `YASP_GATEWAY_DATABASE`.                        |
+| Backend endpoint/database                 | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls.mode: disable` or `enable`. |
+| Backend login                             | `targets.<name>.logins.<name>.username` and a `password_env` variable name.                       |
+| Result-cache Redis URL                    | The variable named by `cache.url_env`, required only when caching is enabled.                     |
+| Dataset Redis URL                         | The variable named by `application_contexts.url_env`, required when datasets are configured.      |
+| Log level                                 | `LOG_LEVEL`: DEBUG, INFO, WARN, ERROR; defaults to INFO. Logs go to stdout.                       |
 
 The frontend database is a connection label; each target names its actual source
 database. Use the same name for browsing because database-alias adaptation is not
@@ -82,13 +82,13 @@ targets:
           max_in_flight: 4
           max_connections: 8
           instances:
-            - {id: small_a, host: "127.0.0.1", port: 5433}
-            - {id: small_b, host: "127.0.0.1", port: 5434}
+            - { id: small_a, host: "127.0.0.1", port: 5433 }
+            - { id: small_b, host: "127.0.0.1", port: 5434 }
         large:
           max_in_flight: 8
           max_connections: 12
           instances:
-            - {id: large_a, host: "127.0.0.1", port: 5435}
+            - { id: large_a, host: "127.0.0.1", port: 5435 }
 ```
 
 Type limits apply separately to each instance and are shared across all its logins.
@@ -126,22 +126,22 @@ organization-specific params stay outside the engine. See [extensions](extension
 
 ## Gateway defaults and limits
 
-| Setting under `gateway` | Default | Meaning |
-| --- | --- | --- |
-| `protocol` | `postgresql` | Only supported frontend protocol. |
-| `listen` | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`. |
-| `max_sessions` | 32 | Normal frontend session capacity. |
-| `max_message_bytes` | 8,388,608 | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound. |
-| `max_sql_bytes` | 1,048,576 | SQL input size. |
-| `max_context_bytes` | 65,536 | Encoded derived-context bound; nesting is limited to 64. |
-| `context_timeout_ms` | 2,000 | Query-context derivation wait; failure supplies empty context. |
-| `async_hook_timeout_ms` | 2,000 | Async Rust selection and cache-eligibility wait. |
-| `query_timeout_ms` | 60,000 | Database query wait and PostgreSQL statement timeout. |
-| `read_timeout_ms` | 600,000 | Next complete authenticated message, including idle/partial reads; not query execution. |
-| `write_timeout_ms` | 60,000 | Each frontend response write. |
-| `startup_timeout_ms` | 120,000 | Complete TLS negotiation and startup/authentication exchange. |
-| `shutdown_timeout_ms` | 10,000 | Session drain after listener shutdown. |
-| `tls.mode` | `disable` | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`. |
+| Setting under `gateway` | Default          | Meaning                                                                                 |
+| ----------------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `protocol`              | `postgresql`     | Only supported frontend protocol.                                                       |
+| `listen`                | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
+| `max_sessions`          | 32               | Normal frontend session capacity.                                                       |
+| `max_message_bytes`     | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
+| `max_sql_bytes`         | 1,048,576        | SQL input size.                                                                         |
+| `max_context_bytes`     | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
+| `context_timeout_ms`    | 2,000            | Query-context derivation wait; failure supplies empty context.                          |
+| `async_hook_timeout_ms` | 2,000            | Async Rust selection and cache-eligibility wait.                                        |
+| `query_timeout_ms`      | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
+| `read_timeout_ms`       | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
+| `write_timeout_ms`      | 60,000           | Each frontend response write.                                                           |
+| `startup_timeout_ms`    | 120,000          | Complete TLS negotiation and startup/authentication exchange.                           |
+| `shutdown_timeout_ms`   | 10,000           | Session drain after listener shutdown.                                                  |
+| `tls.mode`              | `disable`        | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`.     |
 
 Session, SQL, context, and timeout limits must be positive. Frontend frames must be
 between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
@@ -171,7 +171,7 @@ application_contexts:
       loader:
         type: rust
         callback: builtin.dataset.load_json
-        params: {file: hooks/examples/users.json}
+        params: { file: hooks/examples/users.json }
 ```
 
 The built-in JSON file loader requires only `params.file`; relative paths resolve
@@ -242,18 +242,20 @@ source version; restart after a source version upgrade.
 
 ## Redis result cache
 
-| Setting under `cache` | Default |
-| --- | --- |
-| `enabled` | `false`; the only cache opt-in. |
-| `url_env` | `YASP_REDIS_URL` |
-| `namespace` | `yasp:dev:v1` |
-| `ttl_seconds` | 3,600; hits do not extend expiry. |
-| `max_rows_per_query` | 10,000 |
-| `max_buffered_bytes_total` | 33,554,432 |
-| `eligibility` | None; an optional Rust/Python callback can bypass supported queries. |
+| Setting under `cache`      | Default                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
+| `enabled`                  | `false`; the only cache opt-in.                                      |
+| `url_env`                  | `YASP_REDIS_URL`                                                     |
+| `namespace`                | `yasp:dev:v1`                                                        |
+| `ttl_seconds`              | 3,600; hits do not extend expiry.                                    |
+| `max_rows_per_query`       | 10,000                                                               |
+| `max_buffered_bytes_total` | 33,554,432                                                           |
+| `eligibility`              | None; an optional Rust/Python callback can bypass supported queries. |
 
-Redis keys include a version marker, configured target and login names, and the
-normalized SQL query ID. Names are length-prefixed to avoid delimiter collisions.
+Redis keys use `<namespace>:<target>_<login>:<query-id>`, for example
+`yasp:cache:primary_analyst:<query-id>`. The query ID is the normalized SQL hash.
+Within target and login names, `%`, `:`, and `_` are percent-escaped so the pair
+occupies one Redis path segment and cannot collide with another pair.
 Different named pairs keep separate entries even when they share source credentials.
 Compute-instance and physical source settings remain part of entry scope validation.
 Dynamic masking will still load the selected source pair's cache entry and apply

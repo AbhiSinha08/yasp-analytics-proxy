@@ -3,7 +3,7 @@
 
 def select_backend(request, params):
     """Show policy-based routing with a secondary route as the demo fallback."""
-    fallback = {"target": "secondary", "backend_login": "restricted"}
+    fallback = {"target": "primary", "backend_login": "analyst"}
     # return None  # Return None to deny backend selection.
 
     context = request.get("context", {})

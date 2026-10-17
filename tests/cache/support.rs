@@ -189,13 +189,15 @@ pub(super) fn cache_key(namespace: &str, route: &BackendSelection, sql: &str) ->
         .unwrap()
         .query_id()
         .to_owned();
+    let component = |name: &str| {
+        name.replace('%', "%25")
+            .replace(':', "%3A")
+            .replace('_', "%5F")
+    };
     format!(
-        "{namespace}:v2:{}:{}:{}:{}:{}:{query_id}",
-        route.target.len(),
-        route.target,
-        route.backend_login.len(),
-        route.backend_login,
-        query_id.len(),
+        "{namespace}:{}_{}:{query_id}",
+        component(&route.target),
+        component(&route.backend_login),
     )
 }
 

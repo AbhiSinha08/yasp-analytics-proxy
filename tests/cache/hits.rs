@@ -121,10 +121,13 @@ fn named_routes_keep_separate_entries_with_identical_source_credentials() {
     let user = fixture.identity.user.clone();
     let password = fixture.identity.password.clone();
     let database = fixture.identity.database.clone();
-    let first_route = fixture.route.clone();
+    let first_route = BackendSelection {
+        target: "shared_target%".into(),
+        backend_login: "analyst".into(),
+    };
     let second_route = BackendSelection {
-        target: "same-source-alias".into(),
-        backend_login: first_route.backend_login.clone(),
+        target: "shared".into(),
+        backend_login: "target%_analyst".into(),
     };
     let backends = Arc::new(
         PostgresBackends::new(
@@ -189,6 +192,8 @@ fn named_routes_keep_separate_entries_with_identical_source_credentials() {
 
     let first_key = cache_key(&namespace, &first_route, "SELECT clock_timestamp()");
     let second_key = cache_key(&namespace, &second_route, "SELECT clock_timestamp()");
+    assert!(first_key.starts_with(&format!("{namespace}:shared%5Ftarget%25_analyst:")));
+    assert!(second_key.starts_with(&format!("{namespace}:shared_target%25%5Fanalyst:")));
     assert_ne!(first_key, second_key);
     assert_ne!(
         redis_get(&redis_url, &first_key),
