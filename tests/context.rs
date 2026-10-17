@@ -20,6 +20,7 @@ fn request(query: &ParsedQuery, client_id: u64) -> ContextRequest<'_> {
         client_id,
         query_id: query.query_id(),
         query,
+        datasets: None,
     }
 }
 

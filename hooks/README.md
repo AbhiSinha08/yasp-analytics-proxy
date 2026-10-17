@@ -61,13 +61,50 @@ Superset, and Redash extractors under `builtin::extractors` are placeholders ret
 `NotImplemented`; Python `yasp_extractors` raises `NotImplementedError`. SQL comments
 are untrusted hints, and live BI metadata/identity contracts remain integration work.
 
+## Shared datasets
+
+The host can load application JSON datasets at startup and pass a bounded reader to
+context, selection, and eligibility callbacks. A Python callback uses ordinary values:
+
+```python
+user = request["datasets"].get("users", user_id)
+users = request["datasets"].get_many("users", [user_id, "bob"])
+locations = request["datasets"].read("email_locations")
+```
+
+`get_many` omits missing fields. `read` returns the complete mapping. These helpers
+read the latest shared Redis value on each call; they do not return JSON text or use an
+expiring process-local cache. Dataset and lookup size, depth, and field-count limits
+are enforced by the core. Python helpers wait synchronously on the async registry;
+dataset loaders use a dedicated worker, while loader and callback code shares one
+interpreter and the GIL.
+
+`examples/datasets.py` loads a JSON object from `users.json`; values can be nested JSON
+objects, arrays, scalars, or `null`. [examples/datasets.rs](examples/datasets.rs) shows
+a compiled loader for the full `email_locations.json` shape. The supplied host
+registers it as `example.datasets.email_locations`. A consuming host registers its
+own callbacks. [examples/dataset_selector.rs](examples/dataset_selector.rs) shows
+an async Rust selector bound to application-owned department policy.
+Configure `application_contexts.datasets` with the chosen loader references and
+keep its Redis namespace separate from the result cache. The reference configuration
+has no active loaders by default. A zero refresh interval means startup-only loading;
+scheduled refreshes require a positive per-dataset interval.
+
+`examples/context.py` demonstrates `get` and `read`, and
+`examples/role_selector.py` demonstrates `get_many` plus reading the full email
+location dataset. Their SQL-comment extractor is an application test fixture only:
+comments are client-controlled and must never be treated as authenticated identity.
+The examples pass field locations as context and do not mask data.
+
 ## External Python callbacks
 
 Build with `--features python`, create one `PythonRuntime`, and register external
 file/function references before serving. Clone the runtime for more callbacks.
 Each trusted synchronous function receives `function(request, params)` with fresh
-copied data. All hooks share one bounded dedicated worker and interpreter state;
-a timeout stops waiting while executing code retains capacity.
+copied data. Query hooks share one bounded dedicated worker and interpreter state;
+configured dataset loaders use a separate bounded worker in the same interpreter.
+A timeout stops waiting while executing code retains capacity. Dataset helpers
+expose only read operations and expire when their callback finishes or is cancelled.
 
 Use [examples/select_backend.py](examples/select_backend.py) for runnable passthrough
 selection. Replace the reference above with `type: python`,

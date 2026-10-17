@@ -13,6 +13,7 @@ pub(super) struct HostConfig {
     pub(super) file: FileConfig,
     pub(super) log_level: String,
     pub(super) cache_url: Option<String>,
+    pub(super) application_contexts_url: Option<String>,
 }
 
 pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
@@ -68,6 +69,14 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         .cache
         .enabled
         .then(|| required(&file.cache.url_env, "cache URL environment variable"))
+        .transpose()?;
+    let application_contexts_url = (!file.application_contexts.datasets.is_empty())
+        .then(|| {
+            required(
+                &file.application_contexts.url_env,
+                "application contexts URL environment variable",
+            )
+        })
         .transpose()?;
     let mut backends = Vec::new();
     for (target_name, target) in &file.targets {
@@ -139,5 +148,6 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         file,
         log_level,
         cache_url,
+        application_contexts_url,
     })
 }

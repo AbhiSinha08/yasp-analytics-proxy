@@ -75,7 +75,7 @@ pub enum PythonHookKind {
     Python,
 }
 
-/// One trusted interpreter and one dedicated worker per host process.
+/// One trusted interpreter with a query worker and optional dataset loader worker.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PythonSettings {
@@ -162,6 +162,90 @@ impl Default for CacheSettings {
     }
 }
 
+/// Shared application-owned lookup snapshots loaded before serving queries.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApplicationContextsSettings {
+    pub url_env: String,
+    pub namespace: String,
+    pub refresh_timeout_ms: u32,
+    pub max_dataset_bytes: usize,
+    pub max_lookup_bytes: usize,
+    pub datasets: std::collections::BTreeMap<String, DatasetSettings>,
+}
+
+impl Default for ApplicationContextsSettings {
+    fn default() -> Self {
+        Self {
+            url_env: "YASP_CONTEXT_REDIS_URL".into(),
+            namespace: "yasp::datasets".into(),
+            refresh_timeout_ms: 30_000,
+            max_dataset_bytes: 16_777_216,
+            max_lookup_bytes: 65_536,
+            datasets: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DatasetSettings {
+    pub refresh_interval_seconds: u64,
+    pub loader: SelectorSettings,
+}
+
+impl Default for DatasetSettings {
+    fn default() -> Self {
+        Self {
+            refresh_interval_seconds: 0,
+            loader: SelectorSettings::Rust("".into()),
+        }
+    }
+}
+
+impl ApplicationContextsSettings {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        validate_value("application_contexts.namespace", &self.namespace)?;
+        validate_value("application_contexts.url_env", &self.url_env)?;
+        if self.url_env.contains('=')
+            || !self
+                .namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+            || self.refresh_timeout_ms == 0
+            || self.max_dataset_bytes == 0
+            || self.max_lookup_bytes == 0
+            || self.max_lookup_bytes > self.max_dataset_bytes
+            || self.max_dataset_bytes > u32::MAX as usize / 4
+            || self.max_dataset_bytes > tokio::sync::Semaphore::MAX_PERMITS / 4
+            || self.max_lookup_bytes > u32::MAX as usize / (32 * 3)
+        {
+            return Err(ConfigError::InvalidApplicationContexts);
+        }
+        for (name, dataset) in &self.datasets {
+            validate_value("application context dataset name", name)?;
+            if !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                || dataset.refresh_interval_seconds > i64::MAX as u64 / 1000
+            {
+                return Err(ConfigError::InvalidApplicationContexts);
+            }
+            match &dataset.loader {
+                SelectorSettings::Rust(name) => validate_value("dataset loader", name)?,
+                SelectorSettings::RustReference(hook) => {
+                    validate_value("dataset loader callback", &hook.callback)?;
+                }
+                SelectorSettings::Python(hook) => {
+                    validate_value("dataset loader path", &hook.path.to_string_lossy())?;
+                    validate_value("dataset loader callback", &hook.callback)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CacheSettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_value("cache.namespace", &self.namespace)?;
@@ -202,6 +286,7 @@ pub struct GatewaySettings {
     pub max_sql_bytes: usize,
     pub max_context_bytes: usize,
     pub context_timeout_ms: u32,
+    pub async_hook_timeout_ms: u32,
     pub query_timeout_ms: u32,
     pub read_timeout_ms: u32,
     pub write_timeout_ms: u32,
@@ -234,6 +319,7 @@ impl Default for GatewaySettings {
             max_sql_bytes: 1024 * 1024,
             max_context_bytes: 65536,
             context_timeout_ms: 2000,
+            async_hook_timeout_ms: 2000,
             query_timeout_ms: 60_000,
             read_timeout_ms: 600_000,
             write_timeout_ms: 60_000,
@@ -257,6 +343,7 @@ impl GatewaySettings {
             || self.max_context_bytes == 0
             || [
                 self.context_timeout_ms,
+                self.async_hook_timeout_ms,
                 self.query_timeout_ms,
                 self.read_timeout_ms,
                 self.write_timeout_ms,

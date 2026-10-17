@@ -125,6 +125,8 @@ impl QuerySession<'_> {
             query_id,
             query,
             context: &context,
+            datasets: self.source.datasets.as_ref(),
+            async_hook_timeout_ms: self.settings.async_hook_timeout_ms,
         };
         let route = tokio::select! {
             biased;
@@ -231,6 +233,7 @@ impl QuerySession<'_> {
             client_id: self.client_id,
             query_id: query.query_id(),
             query,
+            datasets: self.source.datasets.as_ref(),
         };
         let deadline = Duration::from_millis(u64::from(self.settings.context_timeout_ms));
         tokio::select! {

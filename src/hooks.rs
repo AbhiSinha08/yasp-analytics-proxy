@@ -3,7 +3,7 @@
 
 mod cache;
 mod context;
-mod payload;
+pub(crate) mod payload;
 mod selection;
 
 #[path = "../hooks/builtin/mod.rs"]
@@ -13,10 +13,11 @@ pub mod builtin;
 pub mod python;
 
 pub use cache::{
-    CacheEligibility, CacheEligibilityCallback, CacheEligibilityError, bind_cache_eligibility,
+    AsyncCacheEligibilityCallback, CacheEligibility, CacheEligibilityCallback,
+    CacheEligibilityError, bind_cache_eligibility, bind_cache_eligibility_async,
 };
 pub use context::{ContextCallback, ContextError, ContextHook, ContextRequest, bind_context};
 pub use selection::{
-    BackendDecision, BackendSelection, BackendSelector, RoutedSelector, SelectionError,
-    SelectionRequest, bind_select_backend,
+    AsyncBackendSelector, BackendDecision, BackendSelection, BackendSelector, RoutedSelector,
+    SelectionError, SelectionRequest, bind_select_backend, bind_select_backend_async,
 };

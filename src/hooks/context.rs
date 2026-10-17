@@ -3,6 +3,7 @@
 use super::payload;
 #[cfg(feature = "python")]
 use super::python;
+use crate::datasets::DatasetReader;
 use crate::query::ParsedQuery;
 use futures::future::BoxFuture;
 #[cfg(feature = "python")]
@@ -19,6 +20,7 @@ pub struct ContextRequest<'a> {
     pub client_id: u64,
     pub query_id: &'a str,
     pub query: &'a ParsedQuery,
+    pub datasets: Option<&'a DatasetReader>,
 }
 
 /// Context diagnostics contain no application data or lookup error text.
@@ -73,17 +75,30 @@ impl ContextHook {
     ) -> Map<String, Value> {
         let result = async {
             let value = match self {
-                Self::Rust(callback) => Value::Object(callback(request).await?),
+                Self::Rust(callback) => {
+                    let (datasets, _guard) = request
+                        .datasets
+                        .map(DatasetReader::invocation)
+                        .map_or((None, None), |(reader, guard)| (Some(reader), Some(guard)));
+                    let request = ContextRequest {
+                        datasets: datasets.as_ref(),
+                        ..request
+                    };
+                    Value::Object(callback(request).await?)
+                }
                 #[cfg(feature = "python")]
                 Self::Python(callback) => {
                     callback
-                        .call(json!({
-                            "authenticated_user": request.authenticated_user,
-                            "frontend_database": request.frontend_database,
-                            "client_id": request.client_id,
-                            "query_id": request.query_id,
-                            "sql": request.query.sql(),
-                        }))
+                        .call_with_datasets(
+                            json!({
+                                "authenticated_user": request.authenticated_user,
+                                "frontend_database": request.frontend_database,
+                                "client_id": request.client_id,
+                                "query_id": request.query_id,
+                                "sql": request.query.sql(),
+                            }),
+                            request.datasets.cloned(),
+                        )
                         .await?
                 }
             };

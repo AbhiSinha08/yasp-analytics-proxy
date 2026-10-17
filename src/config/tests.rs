@@ -79,6 +79,84 @@ fn cache_settings_and_bounds_are_validated() {
 }
 
 #[test]
+fn application_context_dataset_settings_are_bounded_and_well_formed() {
+    let settings = ApplicationContextsSettings::default();
+    settings.validate().unwrap();
+    assert_eq!(settings.url_env, "YASP_CONTEXT_REDIS_URL");
+    assert_eq!(settings.namespace, "yasp::datasets");
+    assert_eq!(settings.refresh_timeout_ms, 30_000);
+    assert_eq!(settings.max_dataset_bytes, 16_777_216);
+    assert_eq!(settings.max_lookup_bytes, 65_536);
+    assert!(settings.datasets.is_empty());
+
+    let mut config = make_config("app.selector", ONE_TARGET, "  {}");
+    config
+        .application_contexts
+        .datasets
+        .insert("missing_loader".into(), DatasetSettings::default());
+    assert!(config.validate().is_err());
+    config.application_contexts.datasets.clear();
+    config.application_contexts.datasets.insert(
+        "email_locations".into(),
+        DatasetSettings {
+            refresh_interval_seconds: 0,
+            loader: SelectorSettings::Rust("example.datasets.email_locations".into()),
+        },
+    );
+    config.validate().unwrap();
+
+    config.application_contexts.datasets.insert(
+        "unsafe/name".into(),
+        DatasetSettings {
+            refresh_interval_seconds: 0,
+            loader: SelectorSettings::Rust("example.datasets.email_locations".into()),
+        },
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidApplicationContexts)
+    ));
+
+    config.application_contexts.datasets.remove("unsafe/name");
+    config.application_contexts.max_lookup_bytes =
+        config.application_contexts.max_dataset_bytes + 1;
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidApplicationContexts)
+    ));
+
+    config.application_contexts.max_lookup_bytes = 65_536;
+    config.application_contexts.datasets.insert(
+        "email_locations".into(),
+        DatasetSettings {
+            refresh_interval_seconds: 0,
+            loader: SelectorSettings::Rust(String::new()),
+        },
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidValue(_))
+    ));
+
+    config.application_contexts.datasets.insert(
+        "email_locations".into(),
+        DatasetSettings {
+            refresh_interval_seconds: 0,
+            loader: SelectorSettings::Python(PythonHookSettings {
+                kind: PythonHookKind::Python,
+                path: "".into(),
+                callback: String::new(),
+                params: serde_json::Map::new(),
+            }),
+        },
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidValue(_))
+    ));
+}
+
+#[test]
 fn example_is_loadable_without_secrets_or_database_access() {
     let config =
         FileConfig::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"))

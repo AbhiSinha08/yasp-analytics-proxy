@@ -3,9 +3,12 @@
 mod config;
 mod hooks;
 
+#[path = "../../hooks/examples/datasets.rs"]
+mod datasets_example;
+
 use std::{env, io, path::PathBuf, sync::Arc};
 use tokio::{net::TcpListener, runtime::Runtime};
-use yasp::{backend::PostgresBackends, cache::RedisCache, gateway, logger};
+use yasp::{backend::PostgresBackends, cache::RedisCache, datasets::Datasets, gateway, logger};
 
 use config::load_config;
 use hooks::load_hooks;
@@ -24,42 +27,60 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let (selector, eligibility, context) = load_hooks(&host.file, &path).await?;
-        let gateway = if let Some(url) = &host.cache_url {
-            host.gateway.with_cache(Arc::new(RedisCache::new(
-                host.file.cache.clone(),
-                url,
-                eligibility,
-            )?))
-        } else {
-            host.gateway
-        };
-        let gateway = if let Some(context) = context {
-            gateway.with_context_hook(context)
-        } else {
-            gateway
-        };
-        let backends = Arc::new(PostgresBackends::with_bindings(
-            host.backends,
-            host.file.backend,
-        )?);
-        let listener = TcpListener::bind(gateway.settings().listen).await?;
-        tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-        gateway::serve_routed(listener, gateway, backends, selector, async {
-            #[cfg(unix)]
-            {
-                let mut terminate =
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                        .expect("cannot register SIGTERM handler");
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {},
-                    _ = terminate.recv() => {},
-                }
+        let (selector, eligibility, context, loaders) = load_hooks(&host.file, &path).await?;
+        let datasets = match &host.application_contexts_url {
+            Some(url) => {
+                Some(Datasets::start(host.file.application_contexts.clone(), url, loaders).await?)
             }
-            #[cfg(not(unix))]
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+            None => None,
+        };
+        let result = async {
+            let gateway = if let Some(url) = &host.cache_url {
+                host.gateway.with_cache(Arc::new(RedisCache::new(
+                    host.file.cache.clone(),
+                    url,
+                    eligibility,
+                )?))
+            } else {
+                host.gateway
+            };
+            let gateway = if let Some(context) = context {
+                gateway.with_context_hook(context)
+            } else {
+                gateway
+            };
+            let gateway = match &datasets {
+                Some(datasets) => gateway.with_datasets(datasets.reader()),
+                None => gateway,
+            };
+            let backends = Arc::new(PostgresBackends::with_bindings(
+                host.backends,
+                host.file.backend,
+            )?);
+            let listener = TcpListener::bind(gateway.settings().listen).await?;
+            tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
+            gateway::serve_routed(listener, gateway, backends, selector, async {
+                #[cfg(unix)]
+                {
+                    let mut terminate =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                            .expect("cannot register SIGTERM handler");
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {},
+                        _ = terminate.recv() => {},
+                    }
+                }
+                #[cfg(not(unix))]
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        }
+        .await;
+        if let Some(datasets) = datasets {
+            datasets.shutdown().await;
+        }
+        result?;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
     Ok(())

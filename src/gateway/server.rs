@@ -1,7 +1,9 @@
 //! Listener admission, shared authentication material, and bounded shutdown.
 
 use super::{protocol_error, routing::Execution, session::connection};
-use crate::{cache::RedisCache, config::GatewayConfig, hooks::ContextHook, logger};
+use crate::{
+    cache::RedisCache, config::GatewayConfig, datasets::DatasetReader, hooks::ContextHook, logger,
+};
 use async_trait::async_trait;
 use pgwire::{
     api::{
@@ -46,6 +48,7 @@ pub(super) async fn serve_sessions(
     drop(config.password);
     let cache = config.cache;
     let context_hook = config.context_hook;
+    let datasets = config.datasets;
     let (stopping, stopped) = watch::channel(false);
     let source = Arc::new(Credentials {
         username: config.username,
@@ -53,6 +56,7 @@ pub(super) async fn serve_sessions(
         password,
         cache: cache.clone(),
         context_hook: context_hook.clone(),
+        datasets,
         stopped,
         server_version,
     });
@@ -135,6 +139,7 @@ pub(super) struct Credentials {
     pub(super) password: Password,
     pub(super) cache: Option<Arc<RedisCache>>,
     pub(super) context_hook: Option<Arc<ContextHook>>,
+    pub(super) datasets: Option<DatasetReader>,
     pub(super) stopped: watch::Receiver<bool>,
     pub(super) server_version: String,
 }

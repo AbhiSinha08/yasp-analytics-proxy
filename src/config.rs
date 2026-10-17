@@ -10,8 +10,9 @@ pub use file::{
 };
 pub use runtime::{BackendConfig, GatewayConfig};
 pub use settings::{
-    BackendSettings, CacheSettings, GatewaySettings, GatewayTls, HooksSettings, PythonHookKind,
-    PythonHookSettings, PythonSettings, RustHookKind, RustHookSettings, SelectorSettings,
+    ApplicationContextsSettings, BackendSettings, CacheSettings, DatasetSettings, GatewaySettings,
+    GatewayTls, HooksSettings, PythonHookKind, PythonHookSettings, PythonSettings, RustHookKind,
+    RustHookSettings, SelectorSettings,
 };
 
 use std::io;
@@ -29,6 +30,8 @@ pub enum ConfigError {
     InvalidComputeTopology,
     #[error("cache requires positive row, byte-budget, and TTL limits")]
     InvalidCache,
+    #[error("application context dataset limits or names are invalid")]
+    InvalidApplicationContexts,
     #[error(
         "Python limits must be positive, the payload must fit the byte budget, and queue bounds must fit their counters"
     )]
@@ -61,7 +64,7 @@ pub enum ConfigError {
     UnsupportedGateway,
     #[error("gateway.listen must be a loopback IP address with a nonzero port")]
     InvalidListener,
-    #[error("gateway session, SQL, context, and timeout limits must be positive")]
+    #[error("gateway session, SQL, context, hook, and timeout limits must be positive")]
     InvalidGatewayLimit,
     #[error("gateway query/write timeouts must not exceed 2147483647 milliseconds")]
     InvalidExecutionTimeout,

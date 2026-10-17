@@ -1,0 +1,4 @@
+{
+  "alice": {"department": "finance", "email": "alice@example.test"},
+  "bob": {"department": "operations", "email": "bob@example.test"}
+}

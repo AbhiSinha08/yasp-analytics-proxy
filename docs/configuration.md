@@ -24,7 +24,8 @@ secret values out of YAML and logs.
 | Frontend username/password/database label | `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, `YASP_GATEWAY_DATABASE`. |
 | Backend endpoint/database | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls_mode: disable`. |
 | Backend login | `targets.<name>.logins.<name>.username` and a `password_env` variable name. |
-| Redis URL | The variable named by `cache.url_env`, required only when caching is enabled. |
+| Result-cache Redis URL | The variable named by `cache.url_env`, required only when caching is enabled. |
+| Dataset Redis URL | The variable named by `application_contexts.url_env`, required when datasets are configured. |
 | Log level | `LOG_LEVEL`: DEBUG, INFO, WARN, ERROR; defaults to INFO. Logs go to stdout. |
 
 The frontend database is a connection label; each target names its actual source
@@ -131,7 +132,8 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `max_message_bytes` | 8,388,608 | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound. |
 | `max_sql_bytes` | 1,048,576 | SQL input size. |
 | `max_context_bytes` | 65,536 | Encoded derived-context bound; nesting is limited to 64. |
-| `context_timeout_ms` | 2,000 | Context derivation wait; failure supplies empty context. |
+| `context_timeout_ms` | 2,000 | Query-context derivation wait; failure supplies empty context. |
+| `async_hook_timeout_ms` | 2,000 | Async Rust selection and cache-eligibility wait. |
 | `query_timeout_ms` | 60,000 | Database query wait and PostgreSQL statement timeout. |
 | `read_timeout_ms` | 600,000 | Next complete authenticated message, including idle/partial reads; not query execution. |
 | `write_timeout_ms` | 60,000 | Each frontend response write. |
@@ -145,6 +147,56 @@ Backend connection and cleanup deadlines are fixed at 10 seconds. Acquisition
 uses `backend.acquire_timeout_ms`, which defaults to 60,000 ms. PostgreSQL
 transaction-local idle timeout uses the larger query/write budget.
 Prepared-statement and portal settings remain future configuration.
+
+## Shared application datasets
+
+`application_contexts` configures host-owned JSON datasets shared with callbacks.
+It is optional; an empty `datasets` mapping loads nothing. Each configured name maps
+to a registered Rust or Python loader. Loaders return a JSON object whose fields are
+stored directly as Redis hash fields; there is no customer wrapper. Field values may
+be any JSON value, including arrays, scalars, and `null`.
+
+```yaml
+application_contexts:
+  url_env: YASP_CONTEXT_REDIS_URL
+  namespace: "yasp::datasets"
+  refresh_timeout_ms: 30000
+  max_dataset_bytes: 16777216
+  max_lookup_bytes: 65536
+  datasets:
+    users:
+      refresh_interval_seconds: 0
+      loader:
+        type: python
+        path: ../hooks/examples/datasets.py
+        callback: load_json
+        params: {file: users.json}
+```
+
+Each dataset's refresh interval defaults to zero, which loads at startup only. A
+positive value, such as `900`, schedules refreshes for that dataset. Startup always
+loads fresh data even when Redis already contains a prior value. Concurrent starts share the load; a failed startup
+load prevents serving. Scheduled refreshes use a Redis lease and revision check so
+stale work cannot overwrite newer data. Lookups see the latest Redis value rather
+than a process-local copy. Failed refreshes keep the previous value and retry at the
+next interval. Manual refresh/invalidation controls are Phase 2 management work.
+
+For example, dataset `users` stores field `42` as JSON object data at Redis
+hash key `yasp::datasets::users::data`; the separate `email_locations` dataset stores
+field `columns` as a JSON array at `yasp::datasets::email_locations::data`. Registry
+state records `format_version`, `revision`, `loaded_at_ms`, and
+`next_refresh_at_ms`; its internal empty marker is hidden from callbacks.
+
+The core accepts at most 64 nesting levels, 100,000 nonempty fields with names up to 256 bytes,
+and `max_dataset_bytes` per dataset. Each value is limited by `max_lookup_bytes`.
+Full reads and `get_many` are limited to 64 fields and the same reply-byte bound.
+Python callbacks use `request["datasets"].get(name, key)`, `get_many(name, keys)`,
+and `read(name)`; these synchronous helpers call the async registry and return ordinary
+Python values. Python loaders use a dedicated loader worker and share one interpreter
+and its GIL with the callback runtime. Keep loader work bounded and avoid expensive
+CPU work. `refresh_timeout_ms` bounds each load. Dataset Redis uses separate
+connections for reads and refresh coordination/uploads. Its initial transport is
+loopback TCP. Keep its namespace separate from `cache.namespace`.
 
 ## Discovery and client setup
 

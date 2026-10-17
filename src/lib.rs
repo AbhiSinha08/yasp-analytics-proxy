@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod cache;
 pub mod config;
+pub mod datasets;
 pub mod discovery;
 pub mod gateway;
 pub mod hooks;

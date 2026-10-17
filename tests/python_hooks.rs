@@ -60,6 +60,7 @@ fn context_request(query: &ParsedQuery) -> ContextRequest<'_> {
         client_id: 1,
         query_id: query.query_id(),
         query,
+        datasets: None,
     }
 }
 
@@ -317,6 +318,8 @@ def eligible(request, params):
         query_id: query.query_id(),
         query: &query,
         context: &derived,
+        datasets: None,
+        async_hook_timeout_ms: 2000,
     };
     let selector: RoutedSelector = runtime
         .register(&context_script, "select", Default::default())

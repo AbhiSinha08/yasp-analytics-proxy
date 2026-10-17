@@ -2,7 +2,8 @@
 
 YASP is a reusable SQL proxy library and a local host application. The current
 runtime supports a bounded PostgreSQL simple-query subset, configured source-role
-routing, application context hooks, metadata discovery, and an optional Redis cache.
+routing, application context hooks, shared JSON datasets, metadata discovery, and an
+optional Redis cache.
 
 | Read | For |
 | --- | --- |

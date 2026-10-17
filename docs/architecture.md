@@ -7,30 +7,34 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 
 ## Component ownership
 
-| Component | Code | Responsibility |
-| --- | --- | --- |
-| Host | [main.rs](../src/main.rs), [host/](../src/host) | CLI, environment resources, logging, compiled callback registration, and process lifecycle. |
-| Configuration | [config.rs](../src/config.rs), [config/](../src/config) | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs. |
-| PostgreSQL frontend | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway) | Listener and shutdown in `server`, authentication/session/cancellation in `session`, ordered stages in `query`, and route validation in `routing`. |
-| SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery) | Bounded immutable PostgreSQL AST; separate catalog allowlists, metadata classification, and frontend setup state. |
-| Extension contracts | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks) | Separate context, selection, and cache-eligibility contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code. |
-| Backend boundary | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs) | Public PostgreSQL exports and concrete source-engine metadata dispatch. |
-| PostgreSQL adapter | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres) | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and cached PostgreSQL response validation. |
-| Shared cache | [cache.rs](../src/cache.rs) | Bounded opaque Redis storage, expiry, connection reuse, eligibility invocation, and miss-on-error behavior. |
-| Support | [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs) | Frame bounds before payload allocation and shared redacted logging setup. `policy.rs` is a future component placeholder. |
+| Component                       | Code                                                                                             | Responsibility                                                                                                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host                            | [main.rs](../src/main.rs), [host/](../src/host)                                                  | CLI, environment resources, logging, compiled callback registration, and process lifecycle.                                                                        |
+| Configuration                   | [config.rs](../src/config.rs), [config/](../src/config)                                          | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs.                                                            |
+| PostgreSQL frontend             | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                      | Listener and shutdown in `server`, authentication/session/cancellation in `session`, ordered stages in `query`, and route validation in `routing`.                 |
+| SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery) | Bounded immutable PostgreSQL AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                  |
+| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                              | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code. |
+| Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                           |
+| Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports and concrete source-engine metadata dispatch.                                                                                            |
+| PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and cached PostgreSQL response validation.                                       |
+| Shared cache                    | [cache.rs](../src/cache.rs)                                                                      | Bounded opaque Redis storage, expiry, connection reuse, eligibility invocation, and miss-on-error behavior.                                                        |
+| Support                         | [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                               | Frame bounds before payload allocation and shared redacted logging setup. `policy.rs` is a future component placeholder.                                           |
 
 ```mermaid
 flowchart LR
     Host[Host application] --> Config[Validated configuration]
+    Host --> Datasets[Shared application datasets]
     Host --> Gateway[PostgreSQL frontend]
     Host --> Hooks[Registered application callbacks]
     Client[BI client or psql] --> Gateway
     Gateway --> SQL[Query and metadata inspection]
     Gateway --> Hooks
+    Gateway --> Datasets
     Gateway --> Adapter[PostgreSQL adapter]
     Gateway --> Cache[Opaque cache storage]
+    Datasets --> Redis[(Redis)]
     Adapter --> PG[(PostgreSQL)]
-    Cache --> Redis[(Redis)]
+    Cache --> Redis
 ```
 
 These are concrete modules within one package. Backend execution and the frontend
@@ -48,7 +52,8 @@ flowchart TD
     Setup -->|no| ReadOnly[Validate read-only statement]
     ReadOnly --> Metadata{Recognized metadata query?}
     Metadata -->|yes| Discovery[Configured discovery source]
-    Metadata -->|no| Context[Derive optional bounded context]
+    Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
+    DatasetRead --> Context[Derive optional bounded context]
     Context --> Route[Resolve target, login, and optional compute type]
     Route --> Eligible{Cache enabled and eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
@@ -79,6 +84,33 @@ PostgreSQL read-only transactions and source grants remain necessary.
 Context runs once for each ordinary query, including cache hits. It cannot replace
 authenticated frontend identity. Context errors supply an empty mapping; selector
 errors stop the query; eligibility errors bypass caching. See [extensions](extensions.md).
+
+The host loads registered application datasets before it serves clients. Rust and
+Python callbacks receive an optional `DatasetReader`; each lookup reads the latest
+Redis value and is bounded by configured byte and field limits. Startup load failures
+prevent service. Scheduled refreshes retain the last successful values while a new
+load runs and leave them in place after a failed refresh. Dataset storage uses a Redis
+namespace separate from the result cache; see [configuration](configuration.md#shared-application-datasets).
+
+```mermaid
+flowchart TD
+    Config[Register configured dataset loaders] --> Startup[Acquire or join fresh startup load]
+    Startup --> Load[Fetch and validate complete JSON object]
+    Timer[Optional refresh timer] --> Lease[Acquire Redis lease when due]
+    Lease --> Load
+    Load --> Stage[Upload temporary hash]
+    Stage --> Check{Lease and starting revision still match?}
+    Check -->|yes| Publish[Atomically replace live data and advance revision]
+    Check -->|no| Discard[Discard late publication]
+    Publish --> Ready[Startup can accept queries]
+    Hooks[Query context, selection, and eligibility] --> Read[Bounded reads from current Redis dataset]
+    Read --> Live[(Live dataset)]
+    Publish --> Live
+```
+
+The timer is absent when every refresh interval is zero. Refresh errors leave the
+live dataset available. Staging keys expire; live data has no TTL. The library does
+not provide manual refresh or invalidation controls in this phase.
 
 ## Compute and connection ownership
 
@@ -129,7 +161,7 @@ sequenceDiagram
     end
     PG-->>Adapter: Rows, completion, or query error
     Adapter->>PG: Rollback and reset when protocol state permits
-    Adapter-->>Session: Completion or error; release only a verified idle lease
+    Adapter-->>Session: Completion or error - release only a verified idle lease
     Session-->>Client: Response and ReadyForQuery
 ```
 

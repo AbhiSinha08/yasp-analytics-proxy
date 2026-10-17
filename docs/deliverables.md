@@ -37,6 +37,11 @@
 - [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only PostgreSQL results.
   - [x] **Cache settings and bounds** — Keeps caching disabled by default and limits cached rows and aggregate in-process buffers.
   - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes and configured target/login names identify cache entries.
+- [x] **Shared application datasets** — Loads bounded JSON datasets for consuming-host callbacks.
+  - [x] **Loader registration and startup lifecycle** — Bind Rust/Python loaders, share concurrent loads, and fail startup when initial loading fails.
+  - [x] **Separate Redis registry and bounded lookup API** — Read current shared values with bounded `get`, `get_many`, and full-dataset operations.
+  - [x] **Scheduled refresh and recovery** — Use lease/revision protection and retain prior values after refresh errors.
+  - [x] **Examples and documentation** — Provide JSON, Python, and Rust loader examples plus dataset-aware context and selection examples.
 - [ ] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
   - [x] **Context hook platform** — Derives bounded application context once per validated query with async Rust or external Python callbacks.
   - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
@@ -49,7 +54,7 @@
   - [x] **Routing and protocol checks** — Tests metadata/data separation, native results, settings, callback bypass, and pool cleanup with real PostgreSQL clients.
   - [x] **Live desktop-client browsing** — Verify VS Code Database Client and DBeaver UI refresh with autocommit and JDBC simple-query mode.
 - [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
-  - [ ] **Application policy and identity contract** — Map required BI context to configured source logins, deny missing required identity, and verify source grants.
+  - [ ] **Application identity and routing policy** — Map required BI context to configured source logins, deny missing required identity, and verify source grants.
   - [x] **Partial selector decisions** — Let the single selector omit unambiguous target/login fields and request an optional target-scoped compute type.
   - [ ] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended client.
 - [x] **Optional compute-type routing and overflow** — Uses [target-scoped compute routing](source-access-routing-plan.md) and bounded shared allocation.
@@ -68,6 +73,7 @@
 - [ ] **AST Based Dynamic Masking**
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls.
+  - [ ] **Dataset management** — Inspect, atomically update, refresh, and invalidate named datasets through authenticated management operations.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.
 - [ ] **Backend Database Schema Caching**

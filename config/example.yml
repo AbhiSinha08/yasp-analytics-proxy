@@ -18,7 +18,7 @@ gateway:
   write_timeout_ms: 60000
   startup_timeout_ms: 120000
   shutdown_timeout_ms: 10000
-  context_timeout_ms: 2000
+  async_hook_timeout_ms: 2000
   max_context_bytes: 65536
   tls:
     mode: local_development # Non-local deployments require certificates.
@@ -116,7 +116,7 @@ backend:
 cache:
   enabled: false
   url_env: YASP_REDIS_URL
-  namespace: "yasp:dev:v1"
+  namespace: "yasp::cache"
   ttl_seconds: 3600 # Hits do not extend expiry.
   max_rows_per_query: 10000
   max_buffered_bytes_total: 33554432 # Aggregate in-process cache buffer budget.
@@ -158,7 +158,6 @@ hooks:
     max_payload_bytes: 2097152
     execution_timeout_ms: 2000 # Stops waiting; executing Python retains its worker.
 
-
   # Optional context provider runs after validation, before selection/cache checks.
   # Errors produce an empty context; they do not deny the query.
   # context:
@@ -175,9 +174,9 @@ hooks:
   #   callback: select_backend
   #   params:
   #     target_by_workload: {realtime: primary, reporting: warehouse_analytics}
-  #     login_by_user:
-  #       alice: {primary: restricted, warehouse_analytics: restricted}
-  #       bob: {primary: analyst, warehouse_analytics: analyst}
+  #     login_by_department:
+  #       finance: {primary: restricted, warehouse_analytics: restricted}
+  #       operations: {primary: analyst, warehouse_analytics: analyst}
   #     type_by_report: {realtime: null, dashboard: small, monthly_export: large}
 
   # Future ordered result callbacks; stage contracts are not implemented yet.
@@ -190,6 +189,27 @@ hooks:
   #       params: {}
   #   result_batch_rows: 256
   #   result_batch_max_bytes: 1048576
+
+application_contexts:
+  url_env: YASP_REDIS_URL
+  namespace: "yasp::datasets"
+  refresh_timeout_ms: 30000
+  max_dataset_bytes: 16777216
+  max_lookup_bytes: 65536
+  datasets:
+    users:
+      refresh_interval_seconds: 0
+      loader:
+        type: python
+        path: ../hooks/examples/datasets.py
+        callback: load_json
+        params: { file: users.json }
+    email_locations:
+      refresh_interval_seconds: 900
+      loader:
+        type: rust
+        callback: example.datasets.email_locations
+        params: {}
 
 # Future engine-applied masks, independent of optional result callbacks:
 # policy:

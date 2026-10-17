@@ -12,6 +12,7 @@ pub struct GatewayConfig {
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
     pub(crate) schema_discovery_compute: Option<String>,
+    pub(crate) datasets: Option<crate::datasets::DatasetReader>,
 }
 
 impl GatewayConfig {
@@ -34,6 +35,7 @@ impl GatewayConfig {
             context_hook: None,
             schema_discovery: None,
             schema_discovery_compute: None,
+            datasets: None,
         })
     }
 
@@ -67,6 +69,11 @@ impl GatewayConfig {
     /// Derive application-owned context once per ordinary query before downstream hooks.
     pub fn with_context_hook(mut self, hook: impl Into<crate::hooks::ContextHook>) -> Self {
         self.context_hook = Some(std::sync::Arc::new(hook.into()));
+        self
+    }
+
+    pub fn with_datasets(mut self, reader: crate::datasets::DatasetReader) -> Self {
+        self.datasets = Some(reader);
         self
     }
 }

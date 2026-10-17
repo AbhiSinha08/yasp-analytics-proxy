@@ -5,9 +5,9 @@ use std::io::{self, Write};
 
 pub(super) const MAX_DEPTH: usize = 64;
 
-pub(super) struct PayloadError;
+pub(crate) struct PayloadError;
 
-pub(super) fn payload_size(value: &Value, limit: usize) -> Result<usize, PayloadError> {
+pub(crate) fn payload_size(value: &Value, limit: usize) -> Result<usize, PayloadError> {
     fn check_depth(value: &Value, depth: usize) -> Result<(), PayloadError> {
         if depth > MAX_DEPTH {
             return Err(PayloadError);

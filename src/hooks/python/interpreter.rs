@@ -1,10 +1,12 @@
-//! Isolated interpreter setup and the dedicated registration/invocation worker.
-//! Application imports and Python objects stay on this thread.
+//! Isolated interpreter setup and bounded query and dataset-loader workers.
+//! Each worker owns its registered callback handles; imports share one interpreter.
 
 use super::{
     Job, Operation, PythonHookError, Reply,
     conversion::{from_python, to_python},
+    datasets::to_python as datasets_to_python,
 };
+use crate::datasets::DatasetReader;
 use crate::hooks::payload::{Counter, payload_size};
 use pyo3::{
     ffi,
@@ -17,7 +19,10 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 use tokio::{
     sync::{mpsc, watch},
@@ -29,6 +34,17 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 struct Registered {
     function: Py<PyAny>,
     params: Value,
+    limit: usize,
+}
+
+struct CloseDatasets(Option<DatasetReader>);
+
+impl Drop for CloseDatasets {
+    fn drop(&mut self) {
+        if let Some(reader) = &self.0 {
+            reader.close_invocation();
+        }
+    }
 }
 
 pub(super) fn initialize(paths: &[PathBuf]) -> Result<(), PythonHookError> {
@@ -106,12 +122,29 @@ pub(super) fn initialize(paths: &[PathBuf]) -> Result<(), PythonHookError> {
 }
 
 pub(super) fn worker(
+    receiver: mpsc::Receiver<Job>,
+    stopped: watch::Receiver<bool>,
+    limit: usize,
+    module_ids: Arc<AtomicUsize>,
+) {
+    worker_loop(receiver, stopped, limit, module_ids);
+}
+
+pub(super) fn loader_worker(
+    receiver: mpsc::Receiver<Job>,
+    stopped: watch::Receiver<bool>,
+    module_ids: Arc<AtomicUsize>,
+) {
+    worker_loop(receiver, stopped, usize::MAX, module_ids);
+}
+
+fn worker_loop(
     mut receiver: mpsc::Receiver<Job>,
     stopped: watch::Receiver<bool>,
     limit: usize,
+    module_ids: Arc<AtomicUsize>,
 ) {
     let mut callbacks = Vec::<Registered>::new();
-    let mut next_module = 0;
     while let Some(job) = receiver.blocking_recv() {
         if *stopped.borrow() {
             break;
@@ -128,18 +161,39 @@ pub(super) fn worker(
                     path,
                     callback,
                     params,
+                    limit: callback_limit,
+                    script_limit,
                 } => {
-                    let module_id = next_module;
-                    next_module += 1;
-                    let function = load(py, &path, &callback, module_id, limit, &params)?;
+                    let module_id = module_ids.fetch_add(1, Ordering::Relaxed);
+                    let callback_limit = callback_limit.min(limit);
+                    let function = load(py, &path, &callback, module_id, script_limit, &params)?;
                     let id = callbacks.len();
-                    callbacks.push(Registered { function, params });
+                    callbacks.push(Registered {
+                        function,
+                        params,
+                        limit: callback_limit,
+                    });
                     Ok(Reply::Registered(id))
                 }
-                Operation::Call { id, request } => {
+                Operation::Call {
+                    id,
+                    request,
+                    datasets,
+                    runtime,
+                } => {
+                    let _close_datasets = CloseDatasets(datasets.clone());
                     let registered = &callbacks[id];
                     let request =
                         to_python(py, &request).map_err(|_| PythonHookError::Execution)?;
+                    if let Some(datasets) = datasets {
+                        request
+                            .bind(py)
+                            .clone()
+                            .cast_into::<pyo3::types::PyDict>()
+                            .map_err(|_| PythonHookError::Execution)?
+                            .set_item("datasets", datasets_to_python(py, datasets, runtime)?)
+                            .map_err(|_| PythonHookError::Execution)?;
+                    }
                     let params = to_python(py, &registered.params)
                         .map_err(|_| PythonHookError::Execution)?;
                     let result = registered
@@ -158,7 +212,15 @@ pub(super) fn worker(
                         let _ = result.call_method0("close");
                         return Err(PythonHookError::InvalidOutput);
                     }
-                    from_python(result, 0, &mut Counter { bytes: 0, limit }).map(Reply::Value)
+                    from_python(
+                        result,
+                        0,
+                        &mut Counter {
+                            bytes: 0,
+                            limit: registered.limit,
+                        },
+                    )
+                    .map(Reply::Value)
                 }
             }
         });

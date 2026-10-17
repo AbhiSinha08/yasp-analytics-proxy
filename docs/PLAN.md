@@ -116,8 +116,8 @@ core modules; consuming projects keep their custom Rust code in their own crates
 ## Current implementation
 
 The runtime supports a bounded PostgreSQL simple-query subset over loopback,
-configured source-role routing, optional application context, separate metadata
-discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
+configured source-role routing, optional query context, shared application datasets,
+separate metadata discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
 access. It preserves native text values and metadata with verified pool cleanup.
 Prepared statements, client transactions, general query/result/lifecycle hooks,
 engine RBAC interpretation, masking, TLS, and management UI remain planned.

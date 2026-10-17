@@ -272,7 +272,7 @@ fn saturated_shared_budget_waits_then_reports_capacity_and_recovers() {
             BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 1,
-                acquire_timeout_ms: 60_000,
+                acquire_timeout_ms: 10_000,
             },
         )
         .unwrap(),

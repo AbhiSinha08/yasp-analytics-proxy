@@ -9,7 +9,8 @@ fn gateway_contract() {
     use std::{io::Write, process::Stdio};
     use yasp::config::{BackendConfig, GatewayConfig};
 
-    let environment = support::TestEnvironment::load();
+    let mut environment = support::TestEnvironment::load();
+    environment.config.backend.acquire_timeout_ms = 10_000;
     let config = &environment.config;
     let route = config
         .default_backend()
