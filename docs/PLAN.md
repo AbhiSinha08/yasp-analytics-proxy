@@ -30,16 +30,16 @@ Start with one Rust package containing a binary and a library. Each component ha
 one clear responsibility. Keep database-specific behavior inside adapters, and
 introduce only the contracts needed by the current phase.
 
-| Component | Responsibility | Extension boundary |
-| --- | --- | --- |
-| Client gateway | Authenticate connections, manage client sessions, decode requests, and encode responses. | Client protocol adapters own wire messages, authentication exchanges, and response encoding. PostgreSQL is first. |
-| Query processing | Preserve SQL, expose raw query metadata to the registered context provider, inspect statements, and validate rewrites. | Dialect-specific parsing and validation stay separate from routing and policy. |
-| Backend execution | Acquire a connection, execute a request, stream results, cancel work, and clean up sessions. | Database adapters own drivers, pools, bind conversion, native types, session behavior, and error mapping. |
-| Routing | Invoke the registered selector with available request context, validate its configured target/login pair, and acquire that connection. | Application-specific context and policy remain outside the engine. |
-| Policy | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks. | Database access controls remain authoritative; masking preserves the result schema. |
-| Extensions | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks. | Contracts belong to the library; organization implementations live outside core engine code. |
-| Result cache | Store source results for a limited time, then apply current engine processing. | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
-| Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance. | Shared configuration names the client protocol and each target's engine explicitly. |
+| Component                    | Responsibility                                                                                                                         | Extension boundary                                                                                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client gateway               | Authenticate connections, manage client sessions, decode requests, and encode responses.                                               | Client protocol adapters own wire messages, authentication exchanges, and response encoding. PostgreSQL is first.                                                 |
+| Query processing             | Preserve SQL, expose raw query metadata to the registered context provider, inspect statements, and validate rewrites.                 | Dialect-specific parsing and validation stay separate from routing and policy.                                                                                    |
+| Backend execution            | Acquire a connection, execute a request, stream results, cancel work, and clean up sessions.                                           | Database adapters own drivers, pools, bind conversion, native types, session behavior, and error mapping.                                                         |
+| Routing                      | Invoke the registered selector with available request context, validate its configured target/login pair, and acquire that connection. | Application-specific context and policy remain outside the engine.                                                                                                |
+| Policy                       | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks.                           | Database access controls remain authoritative; masking preserves the result schema.                                                                               |
+| Extensions                   | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks.                                                | Contracts belong to the library; organization implementations live outside core engine code.                                                                      |
+| Result cache                 | Store source results for a limited time, then apply current engine processing.                                                         | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
+| Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance.                                                 | Shared configuration names the client protocol and each target's engine explicitly.                                                                               |
 
 The gateway passes execution requests to the backend boundary rather than opening
 backend-driver connections itself. An execution request carries SQL and its dialect,
@@ -504,16 +504,16 @@ an item when a concrete BI compatibility requirement needs it.
 **Outcome:** additional backend support through localized adapters, dynamic masking
 through a System 1 decision model, and authenticated management tools.
 
-| Component | Capability |
-| --- | --- |
-| Backend adapters | Add a selected warehouse engine, such as Redshift or Snowflake, with its own execution, metadata, type, and session rules. |
-| Gateway and dialect handling | Publish which frontend/backend combinations work. Add explicit translation for a supported SQL subset where needed; reject unsupported combinations. |
-| Shared execution contract | Introduce adapter dispatch when the second engine is implemented. Keep routing, policies, hooks, and cache logic independent of its driver. |
-| Decision model and masking | Classify result data and apply dynamic, policy-driven masks before forwarding results. |
-| Management service | Add authenticated APIs for configuration inspection, health, and cache clearing; use Axum if an embedded HTTP service fits. |
-| Admin UI and SQL Studio | Manage routing/access mappings and inspect query results through the same authorized execution path. |
-| Configuration lifecycle | Validate replacement settings and hook versions, then activate a consistent generation without exposing mixed policies. |
-| Redis query queue | Bound burst admission with deadlines, cancellation, worker ownership, and recovery. Current local acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns a capacity error. |
+| Component                    | Capability                                                                                                                                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend adapters             | Add a selected warehouse engine, such as Redshift or Snowflake, with its own execution, metadata, type, and session rules.                                                                                                  |
+| Gateway and dialect handling | Publish which frontend/backend combinations work. Add explicit translation for a supported SQL subset where needed; reject unsupported combinations.                                                                        |
+| Shared execution contract    | Introduce adapter dispatch when the second engine is implemented. Keep routing, policies, hooks, and cache logic independent of its driver.                                                                                 |
+| Decision model and masking   | Classify result data and apply dynamic, policy-driven masks before forwarding results.                                                                                                                                      |
+| Management service           | Add authenticated APIs for configuration inspection, health, and cache clearing; use Axum if an embedded HTTP service fits.                                                                                                 |
+| Admin UI and SQL Studio      | Manage routing/access mappings and inspect query results through the same authorized execution path.                                                                                                                        |
+| Configuration lifecycle      | Validate replacement settings and hook versions, then activate a consistent generation without exposing mixed policies.                                                                                                     |
+| Redis query queue            | Bound burst admission with deadlines, cancellation, worker ownership, and recovery. Current local acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns a capacity error. |
 
 Choose the second engine when this phase starts. Do not install its SDK or implement
 its adapter in Phase 1. Adding another native client protocol is a separate gateway
@@ -595,15 +595,15 @@ processing, and cache isolation across roles and model/policy versions.
 
 **Outcome:** independently scoped capabilities built on validated execution boundaries.
 
-| Component | Capability and design requirement |
-| --- | --- |
-| Compute lifecycle | Provider-specific provisioning/suspension with coordination, readiness checks, and failure recovery. |
-| Load distribution | Add round-robin and least-busy allocation within the authorized compute type, preserving shared limits and cancellation. Overflow is the current default. |
-| Governance integration | Verified end-user context and external governance rules, with privacy controls for classification inputs. |
-| Cache evolution | Metadata caching, explicit cross-target equivalence, and reliable data-version invalidation. |
-| Semantic caching | Reuse compatible supersets through a local execution engine with correct ordering, NULLs, limits, filters, and aggregates. |
-| Federation | Plan and execute across engines with explicit type, consistency, and failure semantics. |
-| Natural-language queries | Model-provider integrations using the same authorized query execution path. |
+| Component                | Capability and design requirement                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compute lifecycle        | Provider-specific provisioning/suspension with coordination, readiness checks, and failure recovery.                                                      |
+| Load distribution        | Add round-robin and least-busy allocation within the authorized compute type, preserving shared limits and cancellation. Overflow is the current default. |
+| Governance integration   | Verified end-user context and external governance rules, with privacy controls for classification inputs.                                                 |
+| Cache evolution          | Metadata caching, explicit cross-target equivalence, and reliable data-version invalidation.                                                              |
+| Semantic caching         | Reuse compatible supersets through a local execution engine with correct ordering, NULLs, limits, filters, and aggregates.                                |
+| Federation               | Plan and execute across engines with explicit type, consistency, and failure semantics.                                                                   |
+| Natural-language queries | Model-provider integrations using the same authorized query execution path.                                                                               |
 
 Each capability needs its own bounded scope and acceptance criteria before work
 begins. SQL parsing alone does not establish translation or semantic equivalence.

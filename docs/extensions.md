@@ -18,12 +18,12 @@ Query-hook names remain under [yasp::hooks](../src/hooks.rs); dataset APIs are u
 Reusable repository callbacks are under [hooks/builtin](../hooks/builtin),
 and Python examples are under [hooks/examples](../hooks/examples).
 
-| Stage | Binding and data | Result/failure policy |
-| --- | --- | --- |
-| Context | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query. | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query. |
-| Selection | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
-| Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request. | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits. |
-| Dataset loading | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason. | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value. |
+| Stage             | Binding and data                                                                                                                              | Result/failure policy                                                                                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Context           | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query.                   | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query.                                                                                      |
+| Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
+| Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
+| Dataset loading   | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                            | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
 
 The router resolves and validates every selection, including cache hits, and delegates execution; the backend owns
 credentials and connection acquisition. Callbacks receive no backend passwords or
@@ -110,8 +110,7 @@ or `None` to deny; context returns a dictionary
 or `None`; eligibility returns a boolean.
 
 The boundary accepts exact built-in null/bool/string/list/string-keyed dictionary,
-signed/unsigned 64-bit integers, and finite float values, with nesting limited to
-64. It is not a database value codec. Unsupported values/coroutines fail. Python
+signed/unsigned 64-bit integers, and finite float values, with nesting limited to 64. It is not a database value codec. Unsupported values/coroutines fail. Python
 errors are redacted; callbacks remain responsible for their own logs and side effects.
 
 One dedicated worker runs registration and invocation outside Tokio. Defaults admit
@@ -168,14 +167,14 @@ to that future contract. See [Phase 2](PLAN.md#phase-2--additional-engines-dynam
 
 ## Adding capabilities when their phase is active
 
-| Capability | Local ownership and required proof |
-| --- | --- |
-| Another backend | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and cache encoding/scope before declaring support. |
-| Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders. |
-| RBAC and identity mapping | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output. |
-| Query/result/lifecycle hooks | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry. |
-| Load balancing | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and transaction/prepared-state pinning are later milestones. |
-| Management or UI | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet. |
+| Capability                                | Local ownership and required proof                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Another backend                           | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and cache encoding/scope before declaring support. |
+| Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders.             |
+| RBAC and identity mapping                 | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output.                                                                                                                    |
+| Query/result/lifecycle hooks              | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry.                                                                                                                                    |
+| Load balancing                            | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and transaction/prepared-state pinning are later milestones.                                                       |
+| Management or UI                          | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet.                                                                           |
 
 Keep PostgreSQL-specific response types and parsing inside the relevant adapters
 as new implementations arrive. The present concrete APIs do not promise arbitrary

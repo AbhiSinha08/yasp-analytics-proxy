@@ -10,12 +10,12 @@ still control access.
 Each connection has its own setting. An entirely private VPC deployment can use
 plaintext throughout, or enable TLS only on selected links.
 
-| Connection | Plaintext | Encrypted |
-| --- | --- | --- |
-| BI client → YASP | `gateway.tls.mode: disable` | `gateway.tls.mode: enable`, plus server certificate/key |
-| YASP → PostgreSQL | `targets.<name>.tls.mode: disable` | `tls.mode: enable` |
-| YASP → Redis result cache | `redis://` in the cache URL | `rediss://` in the cache URL |
-| YASP → Redis datasets | `redis://` in the dataset URL | `rediss://` in the dataset URL |
+| Connection                | Plaintext                          | Encrypted                                               |
+| ------------------------- | ---------------------------------- | ------------------------------------------------------- |
+| BI client → YASP          | `gateway.tls.mode: disable`        | `gateway.tls.mode: enable`, plus server certificate/key |
+| YASP → PostgreSQL         | `targets.<name>.tls.mode: disable` | `tls.mode: enable`                                      |
+| YASP → Redis result cache | `redis://` in the cache URL        | `rediss://` in the cache URL                            |
+| YASP → Redis datasets     | `redis://` in the dataset URL      | `rediss://` in the dataset URL                          |
 
 Gateway and target TLS modes accept only `enable` and `disable`, defaulting to
 `disable` when omitted. Plaintext listeners and backend endpoints may use private

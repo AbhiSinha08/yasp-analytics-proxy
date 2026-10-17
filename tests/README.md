@@ -47,17 +47,17 @@ including remaining gateway children, and removes its PostgreSQL/Redis data on
 success, test failure, or interruption. `fixtures_lifecycle` deliberately unwinds a
 scenario and verifies resource removal.
 
-| Scenario | Observable contract |
-| --- | --- |
-| `gateway` | Compiled host startup, authentication, simple-query forwarding, native values/metadata, read-only enforcement, protocol limits, pools, timeouts, cleanup, and config validation. |
-| `routing` | Metadata classification/replay, selected credentials and source ACLs, errors and same-session recovery, separate pools, cancellation, and discarded cancelled leases. |
-| `tls` | Verified frontend/source/Redis connections, outbound client certificates, SCRAM channel binding, encrypted cancellation, disconnect/bounds recovery, relative certificate paths, compute/discovery, cache replay, and dataset refresh. |
-| `cache` | Normalized hits, expiry, selected-login scope, current selector denial, context order, metadata bypass, malformed entries, row/byte bounds, lossless values, cancelled fills, eligibility failures, and Redis outages. |
-| `context_gateway` | Fixed-backend context fallback, cancellation, disconnect, and shutdown. |
-| `context`, `python_hooks` | Database-free hook contracts, bounds, worker capacity, failure defaults, and shutdown. |
-| `datasets` | Redis dataset startup/replacement, JSON fidelity, lookup limits, refresh coordination, failure recovery, and lease/revision fencing. |
-| `datasets_gateway` | Compiled-host startup loading, Rust dataset reads through context/selection/eligibility, current policy before cache hits, and invocation expiry. |
-| `datasets_python` | Python loader callbacks, bounded lookup helpers, cancellation/expiry, and independent loader/query workers. Requires the Python feature. |
+| Scenario                  | Observable contract                                                                                                                                                                                                                    |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gateway`                 | Compiled host startup, authentication, simple-query forwarding, native values/metadata, read-only enforcement, protocol limits, pools, timeouts, cleanup, and config validation.                                                       |
+| `routing`                 | Metadata classification/replay, selected credentials and source ACLs, errors and same-session recovery, separate pools, cancellation, and discarded cancelled leases.                                                                  |
+| `tls`                     | Verified frontend/source/Redis connections, outbound client certificates, SCRAM channel binding, encrypted cancellation, disconnect/bounds recovery, relative certificate paths, compute/discovery, cache replay, and dataset refresh. |
+| `cache`                   | Normalized hits, expiry, selected-login scope, current selector denial, context order, metadata bypass, malformed entries, row/byte bounds, lossless values, cancelled fills, eligibility failures, and Redis outages.                 |
+| `context_gateway`         | Fixed-backend context fallback, cancellation, disconnect, and shutdown.                                                                                                                                                                |
+| `context`, `python_hooks` | Database-free hook contracts, bounds, worker capacity, failure defaults, and shutdown.                                                                                                                                                 |
+| `datasets`                | Redis dataset startup/replacement, JSON fidelity, lookup limits, refresh coordination, failure recovery, and lease/revision fencing.                                                                                                   |
+| `datasets_gateway`        | Compiled-host startup loading, Rust dataset reads through context/selection/eligibility, current policy before cache hits, and invocation expiry.                                                                                      |
+| `datasets_python`         | Python loader callbacks, bounded lookup helpers, cancellation/expiry, and independent loader/query workers. Requires the Python feature.                                                                                               |
 
 Routing and cache scenarios live under their matching subdirectories. Shared fixture
 ownership is under `support/`; PostgreSQL drivers remain in the real engine adapters.

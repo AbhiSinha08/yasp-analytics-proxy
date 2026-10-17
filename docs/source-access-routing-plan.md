@@ -17,13 +17,13 @@ type. Ambiguous omissions and invalid values deny the query. Python `None` is an
 explicit denial; `{}` requests configured resolution. Ordinary targets require no
 compute configuration and reject an explicit compute type.
 
-| Decision | Owner |
-| --- | --- |
-| Source, access profile, workload class | Application `select_backend` callback |
-| Omission resolution and configured eligibility | Engine |
-| Available instance within the selected type | Engine overflow allocator |
-| Credentials, native sessions, cleanup, cancellation | Backend adapter |
-| User metadata meanings and source-role mappings | Consuming application |
+| Decision                                            | Owner                                 |
+| --------------------------------------------------- | ------------------------------------- |
+| Source, access profile, workload class              | Application `select_backend` callback |
+| Omission resolution and configured eligibility      | Engine                                |
+| Available instance within the selected type         | Engine overflow allocator             |
+| Credentials, native sessions, cleanup, cancellation | Backend adapter                       |
+| User metadata meanings and source-role mappings     | Consuming application                 |
 
 Workload labels such as `small` and `large` do not imply machine sizes or automatic
 SQL cost estimates. If OLTP and OLAP expose the same tables, the application supplies
@@ -43,14 +43,14 @@ compute:
       max_in_flight: 4
       max_connections: 8
       instances:
-        - {id: small_a, host: "127.0.0.1", port: 5433}
-        - {id: small_b, host: "127.0.0.1", port: 5434}
+        - { id: small_a, host: "127.0.0.1", port: 5433 }
+        - { id: small_b, host: "127.0.0.1", port: 5434 }
     large:
       max_in_flight: 8
       max_connections: 12
       instances:
-        - {id: large_a, host: "127.0.0.1", port: 5435}
-        - {id: large_b, host: "127.0.0.1", port: 5436}
+        - { id: large_a, host: "127.0.0.1", port: 5435 }
+        - { id: large_b, host: "127.0.0.1", port: 5436 }
 ```
 
 Logins are defined once per target. Optional `allowed_computes` and complete
