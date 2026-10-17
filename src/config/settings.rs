@@ -141,6 +141,7 @@ impl Default for BackendSettings {
 pub struct CacheSettings {
     pub enabled: bool,
     pub url_env: String,
+    pub tls: super::ClientTlsSettings,
     pub namespace: String,
     pub ttl_seconds: u32,
     pub max_rows_per_query: usize,
@@ -153,6 +154,7 @@ impl Default for CacheSettings {
         Self {
             enabled: false,
             url_env: "YASP_REDIS_URL".into(),
+            tls: Default::default(),
             namespace: "yasp:dev:v1".into(),
             ttl_seconds: 3600,
             max_rows_per_query: 10_000,
@@ -167,6 +169,7 @@ impl Default for CacheSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct ApplicationContextsSettings {
     pub url_env: String,
+    pub tls: super::ClientTlsSettings,
     pub namespace: String,
     pub refresh_timeout_ms: u32,
     pub max_dataset_bytes: usize,
@@ -178,6 +181,7 @@ impl Default for ApplicationContextsSettings {
     fn default() -> Self {
         Self {
             url_env: "YASP_CONTEXT_REDIS_URL".into(),
+            tls: Default::default(),
             namespace: "yasp:datasets".into(),
             refresh_timeout_ms: 30_000,
             max_dataset_bytes: 16_777_216,
@@ -205,6 +209,7 @@ impl Default for DatasetSettings {
 
 impl ApplicationContextsSettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.tls.validate()?;
         validate_value("application_contexts.namespace", &self.namespace)?;
         validate_value("application_contexts.url_env", &self.url_env)?;
         if self.url_env.contains('=')
@@ -248,6 +253,7 @@ impl ApplicationContextsSettings {
 
 impl CacheSettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.tls.validate()?;
         validate_value("cache.namespace", &self.namespace)?;
         validate_value("cache.url_env", &self.url_env)?;
         if self.url_env.contains('=')
@@ -299,12 +305,16 @@ pub struct GatewaySettings {
 #[serde(default, deny_unknown_fields)]
 pub struct GatewayTls {
     pub mode: String,
+    pub cert_file: Option<std::path::PathBuf>,
+    pub key_file: Option<std::path::PathBuf>,
 }
 
 impl Default for GatewayTls {
     fn default() -> Self {
         Self {
-            mode: "local_development".into(),
+            mode: "disable".into(),
+            cert_file: None,
+            key_file: None,
         }
     }
 }
@@ -332,10 +342,11 @@ impl Default for GatewaySettings {
 
 impl GatewaySettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.protocol != "postgresql" || self.tls.mode != "local_development" {
+        self.tls.validate()?;
+        if self.protocol != "postgresql" {
             return Err(ConfigError::UnsupportedGateway);
         }
-        if !self.listen.ip().is_loopback() || self.listen.port() == 0 {
+        if self.listen.port() == 0 {
             return Err(ConfigError::InvalidListener);
         }
         if self.max_sessions == 0

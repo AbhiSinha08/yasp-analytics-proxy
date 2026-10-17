@@ -26,12 +26,6 @@ pub(super) async fn serve_sessions(
     execution: Execution,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
-    if !listener.local_addr()?.ip().is_loopback() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "gateway requires a loopback listener",
-        ));
-    }
     let server_version = execution
         .discovery()
         .server_version()
@@ -51,6 +45,7 @@ pub(super) async fn serve_sessions(
     let datasets = config.datasets;
     let (stopping, stopped) = watch::channel(false);
     let source = Arc::new(Credentials {
+        tls: config.tls,
         username: config.username,
         database: config.database,
         password,
@@ -134,6 +129,7 @@ pub(super) async fn serve_sessions(
 }
 
 pub(super) struct Credentials {
+    pub(super) tls: Option<Arc<crate::tls::ServerTls>>,
     pub(super) username: String,
     pub(super) database: String,
     pub(super) password: Password,

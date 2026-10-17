@@ -12,4 +12,5 @@ pub mod logger;
 pub mod policy;
 pub mod query;
 
+mod tls;
 mod transport;

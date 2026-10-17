@@ -17,7 +17,8 @@ pub(super) struct HostConfig {
 }
 
 pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error::Error>> {
-    let file = FileConfig::read(path)?;
+    let mut file = FileConfig::read(path)?;
+    file.resolve_tls_paths(path.parent().unwrap_or_else(|| Path::new(".")));
     super::hooks::validate_names(&file)?;
     // dotenv errors can contain source text, so expose a fixed diagnostic.
     let mut values = HashMap::new();
@@ -80,6 +81,20 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         .transpose()?;
     let mut backends = Vec::new();
     for (target_name, target) in &file.targets {
+        let make_backend = |host, port, username, password| {
+            if target.tls.mode == "enable" {
+                BackendConfig::new_with_tls(
+                    host,
+                    port,
+                    username,
+                    password,
+                    target.database.clone(),
+                    target.tls.client.clone(),
+                )
+            } else {
+                BackendConfig::new(host, port, username, password, target.database.clone())
+            }
+        };
         for (login_name, login) in &target.logins {
             let route = BackendSelection {
                 target: target_name.clone(),
@@ -98,12 +113,11 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                                 (override_.username.as_str(), override_.password_env.as_str())
                             })
                             .unwrap_or((&login.username, &login.password_env));
-                        let config = BackendConfig::new(
+                        let config = make_backend(
                             instance.host.clone(),
                             instance.port,
                             username.to_owned(),
                             required(password_env, "target login password environment variable")?,
-                            target.database.clone(),
                         )?;
                         let default_compute_type = compute.default_type.as_deref()
                             == Some(compute_type.as_str())
@@ -120,7 +134,7 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                     }
                 }
             } else {
-                let config = BackendConfig::new(
+                let config = make_backend(
                     target.host.clone(),
                     target.port,
                     login.username.clone(),
@@ -128,7 +142,6 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                         &login.password_env,
                         "target login password environment variable",
                     )?,
-                    target.database.clone(),
                 )?;
                 backends.push(PostgresBinding {
                     selection: route,

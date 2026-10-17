@@ -71,6 +71,7 @@ pub(super) fn settings(
     budget: usize,
 ) -> yasp::config::CacheSettings {
     yasp::config::CacheSettings {
+        tls: Default::default(),
         enabled: true,
         url_env: "YASP_TEST_REDIS_URL".into(),
         namespace: namespace.into(),

@@ -130,7 +130,8 @@ pub struct TargetSettings {
     #[serde(default)]
     pub port: u16,
     pub database: String,
-    pub tls_mode: String,
+    #[serde(default)]
+    pub tls: super::TargetTls,
     pub logins: Logins,
     pub compute: Option<ComputeSettings>,
 }
@@ -171,6 +172,26 @@ impl FileConfig {
         let config: Self = serde_saphyr::from_str(&input).map_err(|_| ConfigError::InvalidYaml)?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Resolve host-provided TLS file references against the configuration directory.
+    pub fn resolve_tls_paths(&mut self, base: &Path) {
+        for path in [
+            &mut self.gateway.tls.cert_file,
+            &mut self.gateway.tls.key_file,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
+        for target in self.targets.values_mut() {
+            target.tls.client.resolve(base);
+        }
+        self.cache.tls.resolve(base);
+        self.application_contexts.tls.resolve(base);
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -215,13 +236,13 @@ impl FileConfig {
             for (name, value) in [
                 ("target.engine", &target.engine),
                 ("target.database", &target.database),
-                ("target.tls_mode", &target.tls_mode),
             ] {
                 validate_value(name, value)?;
             }
-            if target.engine != "postgresql" || target.tls_mode != "disable" {
+            if target.engine != "postgresql" {
                 return Err(ConfigError::UnsupportedTarget);
             }
+            target.tls.validate()?;
             match (&target.compute, target.host.is_empty(), target.port) {
                 (None, false, port) if port != 0 => validate_endpoint(&target.host, port)?,
                 (Some(_), true, 0) => {}
@@ -511,9 +532,10 @@ impl FileConfig {
         if target.logins.len() != 1 {
             return Err(ConfigError::UnsupportedTopology);
         }
-        if target.engine != "postgresql" || target.tls_mode != "disable" {
+        if target.engine != "postgresql" {
             return Err(ConfigError::UnsupportedTarget);
         }
+        target.tls.validate()?;
         Ok((target, target.logins.values().next().unwrap()))
     }
 }
@@ -522,13 +544,6 @@ fn validate_endpoint(host: &str, port: u16) -> Result<(), ConfigError> {
     validate_value("target.host", host)?;
     if port == 0 {
         return Err(ConfigError::InvalidPort);
-    }
-    if host != "localhost"
-        && !host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
-    {
-        return Err(ConfigError::NonLocalBackend);
     }
     Ok(())
 }

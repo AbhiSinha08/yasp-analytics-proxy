@@ -5,6 +5,7 @@ mod query;
 mod routing;
 mod server;
 mod session;
+mod transport;
 
 use crate::transport::FrameGuard;
 use crate::{
@@ -22,7 +23,7 @@ use std::{future::Future, io, sync::Arc};
 use tokio::net::TcpListener;
 use tokio_util::codec::Framed;
 
-/// Serve on a host-owned loopback listener (port 0 is useful in tests).
+/// Serve on a host-owned listener with the configured TLS policy.
 /// Stop accepting on shutdown, then close sessions after the configured drain timeout.
 pub async fn serve(
     listener: TcpListener,

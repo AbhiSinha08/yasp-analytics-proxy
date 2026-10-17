@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn dataset_loaders_must_be_registered_by_the_host() {
         let config: FileConfig = serde_saphyr::from_str(
-            "version: 1\ntargets:\n  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\napplication_contexts:\n  datasets:\n    locations:\n      loader: {type: rust, callback: unknown.loader}\n",
+            "version: 1\ntargets:\n  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\napplication_contexts:\n  datasets:\n    locations:\n      loader: {type: rust, callback: unknown.loader}\n",
         )
         .unwrap();
         assert!(validate_names(&config).is_err());
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn python_dataset_loader_requires_the_python_feature() {
         let config: FileConfig = serde_saphyr::from_str(
-            "version: 1\ntargets:\n  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\napplication_contexts:\n  datasets:\n    locations:\n      loader: {type: python, path: loader.py, callback: load}\n",
+            "version: 1\ntargets:\n  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\napplication_contexts:\n  datasets:\n    locations:\n      loader: {type: python, path: loader.py, callback: load}\n",
         )
         .unwrap();
         assert!(validate_names(&config).is_err());

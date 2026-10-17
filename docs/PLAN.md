@@ -115,12 +115,14 @@ core modules; consuming projects keep their custom Rust code in their own crates
 
 ## Current implementation
 
-The runtime supports a bounded PostgreSQL simple-query subset over loopback,
+The runtime supports a bounded PostgreSQL simple-query subset over independently configured TLS or plaintext connections,
 configured source-role routing, optional query context, shared application datasets,
 separate metadata discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
 access. It preserves native text values and metadata with verified pool cleanup.
 Prepared statements, client transactions, general query/result/lifecycle hooks,
-engine RBAC interpretation, masking, TLS, and management UI remain planned.
+engine RBAC interpretation, masking, and management UI remain planned.
+Verified TLS covers PostgreSQL clients, source/cancellation connections, and both
+Redis consumers; see [TLS setup](tls.md).
 
 Use the [documentation index](README.md) for verified current
 [architecture and flows](architecture.md), [configuration](configuration.md),
@@ -447,8 +449,8 @@ organization RBAC policy.
   extend TTL.
 - The library exposes `config::CacheSettings`, `cache::RedisCache`, and
   `GatewayConfig::with_cache`; eligibility uses `hooks::bind_cache_eligibility`.
-  Python registrations share the process's existing `PythonRuntime`. The initial
-  Redis transport supports loopback TCP only; verified remote TLS remains deferred.
+  Python registrations share the process's existing `PythonRuntime`.
+  Redis transport supports plaintext TCP and verified TLS.
 - Future application RBAC and Phase 2 masking must also apply to cached results.
   Current hits validate frontend and selected-backend scope; source authorization is
   checked when PostgreSQL executes a query.
@@ -459,16 +461,16 @@ Redis is sufficient for this shared TTL cache. Use a dedicated deployment with
 [a memory cap and eviction policy](https://redis.io/docs/latest/develop/reference/eviction/).
 [Valkey](https://valkey.io/) is an alternative to evaluate; an in-process cache is
 simpler when only one proxy instance needs the data. Restrict cache access and do not
-log payloads. The current transport supports loopback TCP only.
+log payloads. The current transport supports plaintext TCP and verified TLS.
 
 ### Configuration and operations
 
-- Future full-deployment configuration may include TLS and additional operational
-  settings. The current loader accepts connection pairs, selector registration,
+- The current loader accepts TLS certificates and trust settings, connection pairs, selector registration,
   pool bounds, and supported gateway limits; application policy data remains owned
   by the consuming host.
-- Resolve secrets through environment references. Local development binds localhost;
-  non-local use requires encrypted frontend connections and verified backend TLS.
+- Resolve secrets through environment references. The default gateway binds
+  localhost. Deployments independently select plaintext or verified TLS for
+  frontend, source, and Redis connections; plaintext supports private VPC endpoints.
 - Emit redacted logs and counters for latency, routing, pool waits, hooks, and cache
   behavior. Do not log credentials, bound values, or result values by default.
 - Support graceful shutdown and resource cleanup.
@@ -490,8 +492,8 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next validate client context and compatibility, then implement result processing and
-TLS/operations. Validate the result cache with the intended BI client before enabling
+Next validate client context and compatibility. General result processing remains
+a later milestone. Validate the result cache with the intended BI client before enabling
 it in that deployment. Add basic
 prepared statements and portals, limited `SET` and transactions, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote

@@ -10,14 +10,14 @@
 
 ## Phase 1 — PostgreSQL analytics proxy (in progress)
 
-- [x] **Simple-query PostgreSQL gateway** — Accepts loopback clients, authenticates with SCRAM, streams backend results, and reports PostgreSQL metadata.
+- [x] **Simple-query PostgreSQL gateway** — Accepts encrypted or configured plaintext client sessions, authenticates with SCRAM, streams backend results, and reports PostgreSQL metadata.
   - [x] **Supported read-only SQL subset** — Handles SELECT, read-only WITH, subqueries, joins, aggregates, unions, catalog queries, and SHOW variable/ALL requests.
   - [x] **Parsed-query inspection** — Keeps the original SQL and its parsed form available to routing code.
   - [x] **Bounded protocol and SQL input** — Enforces the configurable frontend frame bound before payload allocation (8 MiB by default), the fixed 8 MiB backend frame bound, and SQL/token/parser recursion limits.
 - [x] **PostgreSQL connections and pools** — Connects to configured databases and logins, with limits on open connections.
   - [x] **Read-only execution and lease cleanup** — Runs each query in a read-only transaction, verifies rollback and DISCARD ALL cleanup, and discards interrupted or unhealthy connections and connections with changed protected text parameters.
   - [x] **Runtime YAML connection configuration** — Loads database connections and logins from `config/local.yml` or the file named with `--config`; passwords come from environment variables.
-  - [x] **Configurable gateway limits and listener** — Supports the optional PostgreSQL-only gateway block for a loopback listener and session/frame/SQL/write limits; omitted values use defaults. `local_development` is plaintext; real TLS is deferred.
+  - [x] **Configurable gateway limits and listener** — Supports the optional PostgreSQL-only gateway block and session/frame/SQL/write limits; omitted values use defaults. Gateway and target `tls.mode` accept `enable` or `disable`, defaulting to plaintext.
   - [x] **Gateway timeout policy** — Configures query, client-message read, write, startup, and shutdown deadlines. PostgreSQL enforces transaction-local query timers; pool lifecycle limits remain separate.
   - [x] **Isolated database test fixture** — Creates a fresh database from `template0`, loads synthetic test data, and drops the created database during teardown; requires a test login with `CREATEDB`.
 - [x] **Shared stdout logging** — The reusable logger reads `LOG_LEVEL` (`INFO` by default; `DEBUG`, `INFO`, `WARN`, and `ERROR` are accepted). Query receive and backend dispatch logs include query ID, client ID, backend target, database user, and SQL at DEBUG; client connection changes are logged at INFO and failures at ERROR.
@@ -60,7 +60,14 @@
   - [x] **Target-scoped compute configuration** — Define compute types, ordered instances, and supported login bindings without changing ordinary targets.
   - [x] **Shared connection budgets** — Bound actual open connections across pools and reclaim idle sessions when another binding needs capacity.
   - [x] **Type-local overflow and recovery** — Allocate within the selected type and verify shared capacity, cancellation, cleanup, discovery, and cache scope.
-- [ ] **TLS, operations, and end-to-end testing** — Add encrypted connections and verify the full setup works.
+- [x] **TLS** — Supports encrypted PostgreSQL frontend, source, cancellation, cache, and dataset connections; see [TLS setup](tls.md).
+  - [x] **Independent transport modes** — Allows plaintext or verified TLS per frontend, source, cache, and dataset connection, including private VPC endpoints; client certificates remain optional when servers permit them.
+  - [x] **Frontend TLS and authentication** — Requires encryption when enabled, supports SCRAM channel binding, and preserves bounded startup, frame limits, cancellation admission, and disconnect cleanup.
+  - [x] **Verified PostgreSQL transport** — Verifies hostname and CA trust for source/discovery/compute connections and separate cancellation connections, with optional client certificates.
+  - [x] **Verified Redis transport** — Supports rediss URLs, CA overrides and optional client identities for both cache and dataset connections while retaining existing deadlines and failure behavior.
+  - [x] **Library and host setup** — Provides certificate configuration, server/client setup instructions, and a compiling fixed/routed library example.
+  - [x] **Automated transport verification** — Exercises disposable TLS services, certificate rejection, encrypted cancellation, bounds/disconnect recovery, configuration-relative paths, discovery, cache replay, and dataset refresh.
+- [ ] End to End testing with BI tools and Postgres Backend
 
 ## Phase 2 — Additional engines, dynamic masking, and management
 

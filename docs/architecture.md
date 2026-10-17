@@ -1,6 +1,7 @@
 # Current architecture
 
-YASP currently accepts loopback PostgreSQL clients and executes supported read-only
+YASP currently accepts PostgreSQL clients over independently configured TLS or plaintext connections
+and executes supported read-only
 simple queries against configured PostgreSQL target/login pairs. PostgreSQL roles
 enforce source access. Application-specific identity mapping and policy belong to
 the consuming host. See the [plan](PLAN.md) for the multi-engine product direction.
@@ -26,15 +27,15 @@ flowchart LR
     Host --> Datasets[Shared application datasets]
     Host --> Gateway[PostgreSQL frontend]
     Host --> Hooks[Registered application callbacks]
-    Client[BI client or psql] --> Gateway
+    Client[BI client or psql] -->|Configured TLS or plaintext| Gateway
     Gateway --> SQL[Query and metadata inspection]
     Gateway --> Hooks
     Gateway --> Datasets
     Gateway --> Adapter[PostgreSQL adapter]
     Gateway --> Cache[Opaque cache storage]
-    Datasets --> Redis[(Redis)]
-    Adapter --> PG[(PostgreSQL)]
-    Cache --> Redis
+    Datasets -->|Verified TLS or plaintext| Redis[(Redis)]
+    Adapter -->|Verified TLS or plaintext| PG[(PostgreSQL)]
+    Cache -->|Verified TLS or plaintext| Redis
 ```
 
 These are concrete modules within one package. Backend execution and the frontend
@@ -149,21 +150,27 @@ sequenceDiagram
     participant Session as Frontend session
     participant Adapter as PostgreSQL adapter
     participant PG as PostgreSQL
-    Client->>Session: Startup and SCRAM authentication
+    Client->>Session: SSLRequest and TLS handshake when enabled
+    Client->>Session: Startup and SCRAM authentication with TLS channel binding
     Session-->>Client: Backend key and ReadyForQuery
     Client->>Session: Simple query
     Session->>Adapter: Validated query and cancellation receiver
-    Adapter->>PG: BEGIN READ ONLY and query
+    Adapter->>PG: Verified TLS when configured, BEGIN READ ONLY and query
     opt Client cancels on a separate connection
-        Client->>Session: CancelRequest with session key
+        Client->>Session: Encrypted CancelRequest with session key when TLS required
         Session->>Adapter: Cancel active stage
-        Adapter->>PG: Dedicated backend CancelRequest if executing
+        Adapter->>PG: Dedicated CancelRequest with source TLS policy if executing
     end
     PG-->>Adapter: Rows, completion, or query error
     Adapter->>PG: Rollback and reset when protocol state permits
     Adapter-->>Session: Completion or error - release only a verified idle lease
     Session-->>Client: Response and ReadyForQuery
 ```
+
+TLS material loads before session admission. Frame bounds apply to decrypted
+PostgreSQL messages. A bounded TLS bridge observes decrypted Terminate messages,
+TLS closure, and EOF while a query executes. TLS negotiation shares the startup
+deadline; no verification failure falls back to plaintext. See [TLS setup](tls.md).
 
 The gateway admits bounded extra cancel-only connections even when normal session
 slots are occupied. Cancellation can stop context, selection, cache waits, or active

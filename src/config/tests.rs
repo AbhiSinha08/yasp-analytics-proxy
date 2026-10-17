@@ -8,7 +8,67 @@ fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
     .unwrap()
 }
 
-const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
+const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
+
+#[test]
+fn plaintext_remote_connections_require_no_certificate_material() {
+    let mut gateway = GatewaySettings {
+        listen: "0.0.0.0:6432".parse().unwrap(),
+        ..Default::default()
+    };
+    assert_eq!(gateway.tls.mode, "disable");
+    gateway.validate().unwrap();
+    GatewayConfig::new("bi".into(), "password".into(), "analytics".into())
+        .unwrap()
+        .with_settings(gateway.clone())
+        .unwrap();
+    gateway.tls.cert_file = Some("unused.pem".into());
+    assert!(
+        gateway.validate().is_err(),
+        "disabled TLS rejects ignored certificate fields"
+    );
+    for host in ["10.0.1.20", "postgres.internal"] {
+        let config = make_config(
+            "app.selector",
+            &ONE_TARGET.replace("localhost", host),
+            "  {}",
+        );
+        config.validate().unwrap();
+        BackendConfig::new(
+            host.into(),
+            5432,
+            "reader".into(),
+            "password".into(),
+            "analytics".into(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn tls_modes_and_target_certificate_fields_use_one_nested_schema() {
+    let mut config = make_config("app.selector", ONE_TARGET, "  {}");
+    let tls: TargetTls = serde_saphyr::from_str(
+        "mode: enable\nca_file: ca.pem\ncert_file: client.pem\nkey_file: client-key.pem",
+    )
+    .unwrap();
+    config.targets.get_mut("primary").unwrap().tls = tls;
+    config.validate().unwrap();
+    let value = serde_json::to_value(&config).unwrap();
+    let tls = &value["targets"]["primary"]["tls"];
+    assert_eq!(tls["mode"], "enable");
+    assert_eq!(tls["ca_file"], "ca.pem");
+    assert_eq!(tls["cert_file"], "client.pem");
+    assert_eq!(tls["key_file"], "client-key.pem");
+    let round_trip: FileConfig = serde_json::from_value(value.clone()).unwrap();
+    round_trip.validate().unwrap();
+    let mut old_field = value.clone();
+    old_field["targets"]["primary"]["tls_mode"] = "disable".into();
+    assert!(serde_json::from_value::<FileConfig>(old_field).is_err());
+    let mut unknown_field = value;
+    unknown_field["targets"]["primary"]["tls"]["unknown"] = true.into();
+    assert!(serde_json::from_value::<FileConfig>(unknown_field).is_err());
+}
 
 #[test]
 fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
@@ -36,7 +96,7 @@ fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
         Err(ConfigError::InvalidDiscoveryBackend)
     ));
     config.schema_discovery.backend_login = None;
-    let target: TargetSettings = serde_saphyr::from_str("engine: postgresql\nhost: localhost\nport: 5432\ndatabase: other\ntls_mode: disable\nlogins:\n  reader: {username: reader, password_env: OTHER_PASSWORD}").unwrap();
+    let target: TargetSettings = serde_saphyr::from_str("engine: postgresql\nhost: localhost\nport: 5432\ndatabase: other\ntls:\n  mode: disable\nlogins:\n  reader: {username: reader, password_env: OTHER_PASSWORD}").unwrap();
     config.targets.insert("other".into(), target);
     config.backend.max_connections_total = 24;
     assert!(matches!(
@@ -328,7 +388,7 @@ fn defaults_infer_one_pair_and_shared_cap_may_be_below_pool_maxima() {
 
 #[test]
 fn compute_topology_validates_partial_discovery_scope_and_login_overrides() {
-    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD\n        allowed_computes: [small_a, small_b]\n        overrides:\n          small_b: {username: reader_b, password_env: READER_B_PASSWORD}\n    compute:\n      default_type: small\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
+    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD\n        allowed_computes: [small_a, small_b]\n        overrides:\n          small_b: {username: reader_b, password_env: READER_B_PASSWORD}\n    compute:\n      default_type: small\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
     let ambiguous = make_config("custom.selector", target, "  max_connections_total: 1");
     assert!(matches!(
         ambiguous.validate(),
@@ -400,7 +460,7 @@ fn compute_topology_validates_partial_discovery_scope_and_login_overrides() {
 
 #[test]
 fn passthrough_partial_fields_resolve_and_validate_after_inference() {
-    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls_mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\n    compute:\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
+    let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\n    compute:\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
     let config_text = |params: &str| {
         format!(
             "version: 1\nschema_discovery: {{target: primary, compute: small_a}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}\ntargets:\n{target}"
@@ -434,7 +494,7 @@ fn passthrough_partial_fields_resolve_and_validate_after_inference() {
 #[test]
 fn passthrough_requires_unambiguous_or_explicit_default() {
     let two_targets = format!(
-        "{ONE_TARGET}\n  reporting:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: reports\n    tls_mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: REPORTS_PASSWORD"
+        "{ONE_TARGET}\n  reporting:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: reports\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: REPORTS_PASSWORD"
     );
     let config = make_config(
         "builtin.select_backend.passthrough",

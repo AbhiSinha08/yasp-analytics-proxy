@@ -22,12 +22,15 @@ use std::{
     time::Duration,
 };
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::{Instant, timeout, timeout_at},
 };
 use tokio_util::codec::Framed;
 
 pub(super) struct PgConnection {
+    pub(super) tls: Option<Arc<crate::tls::ClientTls>>,
+    pub(super) host: String,
     pub(super) socket: Framed<FrameGuard, PgWireMessageClientCodec>,
     pub(super) config: Arc<Config>,
     pub(super) info: ServerInformation,
@@ -127,6 +130,8 @@ impl PgConnection {
                     self.cancel_requested = true;
                     send_cancel_request(
                         self.address,
+                        &self.host,
+                        self.tls.as_deref(),
                         self.info.process_id,
                         self.info.secret_key.clone(),
                         remaining.min(CONNECT_TIMEOUT),
@@ -206,8 +211,27 @@ impl PgConnection {
     }
 }
 
+/// Negotiate PostgreSQL encryption before sending any startup or cancel payload.
+pub(super) async fn connect_transport(
+    mut socket: TcpStream,
+    host: &str,
+    tls: Option<&crate::tls::ClientTls>,
+) -> io::Result<crate::transport::Socket> {
+    if let Some(tls) = tls {
+        socket.write_all(&[0, 0, 0, 8, 4, 210, 22, 47]).await?;
+        if socket.read_u8().await? != b'S' {
+            return Err(io::Error::other("PostgreSQL refused TLS"));
+        }
+        tls.connect(socket, host).await
+    } else {
+        Ok(Box::new(socket))
+    }
+}
+
 async fn send_cancel_request(
     address: SocketAddr,
+    host: &str,
+    tls: Option<&crate::tls::ClientTls>,
     process_id: i32,
     secret_key: SecretKey,
     budget: Duration,
@@ -216,6 +240,9 @@ async fn send_cancel_request(
     let socket = timeout_at(deadline, TcpStream::connect(address))
         .await
         .map_err(|_| error_response("08006", "PostgreSQL cancellation connection timed out"))??;
+    let socket = timeout_at(deadline, connect_transport(socket, host, tls))
+        .await
+        .map_err(|_| error_response("08006", "PostgreSQL cancellation TLS timed out"))??;
     let mut socket = Framed::new(socket, PgWireMessageClientCodec::default());
     timeout_at(
         deadline,

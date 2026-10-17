@@ -1,6 +1,6 @@
 //! Physical connection creation, idle checks, and discard-on-drop leases.
 
-use super::connection::PgConnection;
+use super::connection::{PgConnection, connect_transport};
 use super::{CLEANUP_TIMEOUT, CONNECT_TIMEOUT, SESSION_DEFAULTS, error_response};
 use crate::{config::BackendConfig, transport::FrameGuard};
 use deadpool::{
@@ -192,6 +192,7 @@ pub(super) fn new(
         .dbname(config.database);
     wire.protocol_version(ProtocolVersion::PROTOCOL3_0);
     let manager = PgManager {
+        tls: config.tls,
         host: config.host,
         port: config.port,
         config: Arc::new(wire),
@@ -213,6 +214,7 @@ pub(super) fn new(
 }
 
 pub(super) struct PgManager {
+    tls: Option<Arc<crate::tls::ClientTls>>,
     host: String,
     port: u16,
     config: Arc<Config>,
@@ -227,15 +229,12 @@ impl Manager for PgManager {
     async fn create(&self) -> PgWireResult<PgConnection> {
         let physical = self.budget.reserve(&self.instance)?;
         let socket = TcpStream::connect((self.host.as_str(), self.port)).await?;
-        if !socket.peer_addr()?.ip().is_loopback() {
-            return Err(error_response(
-                "08006",
-                "PostgreSQL requires a loopback address",
-            ));
-        }
         socket.set_nodelay(true)?;
         let address = socket.peer_addr()?;
+        let socket = connect_transport(socket, &self.host, self.tls.as_deref()).await?;
         let mut connection = PgConnection {
+            tls: self.tls.clone(),
+            host: self.host.clone(),
             socket: Framed::new(
                 FrameGuard::backend(socket),
                 PgWireMessageClientCodec::default(),

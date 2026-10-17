@@ -7,6 +7,10 @@ the same session handling. Custom compiled code belongs to that application or i
 own crate; external Python files are deployment resources. Core modules invoke
 contracts and validate decisions without interpreting organization policy.
 
+For encrypted deployments, see [TLS setup](tls.md#library-applications) and the
+[standalone library example](../examples/tls_gateway.rs). The application owns
+certificate provisioning and paths; core owns negotiation and verification.
+
 ## Implemented callback stages
 
 Query-hook names remain under [yasp::hooks](../src/hooks.rs); dataset APIs are under

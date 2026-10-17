@@ -21,7 +21,10 @@ gateway:
   async_hook_timeout_ms: 2000
   max_context_bytes: 65536
   tls:
-    mode: local_development # Non-local deployments require certificates.
+    mode: disable # Plaintext on the configured listener; see docs/tls.md.
+    # For encrypted client sessions, set mode: enable and provide both:
+    # cert_file: certs/yasp-chain.pem
+    # key_file: certs/yasp-key.pem
   # NOTE: The Gateway requires setting 'preferQueryMode=simple' for JDBC connections to it.
   # Otherwise JDBC defaults to extended query mode, which is not yet supported by YASP.
 
@@ -31,7 +34,11 @@ targets:
     host: "127.0.0.1"
     port: 5432
     database: yasp_primary
-    tls_mode: disable # Local development only.
+    tls:
+      mode: disable # Plaintext, including private VPC endpoints; use enable for verified TLS.
+      # ca_file: certs/source-ca.pem # Omit to use system roots.
+      # cert_file: certs/source-client.pem # Optional client identity.
+      # key_file: certs/source-client-key.pem
     logins:
       restricted:
         username: yasp_restricted
@@ -44,7 +51,8 @@ targets:
     host: "127.0.0.1"
     port: 5432
     database: yasp_secondary
-    tls_mode: disable
+    tls:
+      mode: disable
     logins:
       restricted:
         username: yasp_restricted
@@ -59,7 +67,8 @@ targets:
 #   warehouse_analytics:
 #     engine: warehouse
 #     database: analytics
-#     tls_mode: verify_full
+#     tls:
+#       mode: enable
 #     logins:
 #       analyst:
 #         username: yasp_analyst
@@ -114,6 +123,11 @@ backend:
 
 # Complete read-only results; source grants are not rechecked on cache hits.
 cache:
+  # Use redis:// for plaintext or rediss:// for verified TLS, independently of other links.
+  # tls:
+  #   ca_file: certs/redis-ca.pem
+  #   cert_file: certs/redis-client.pem
+  #   key_file: certs/redis-client-key.pem
   enabled: false
   url_env: YASP_REDIS_URL
   namespace: "yasp:cache"
@@ -191,6 +205,11 @@ hooks:
   #   result_batch_max_bytes: 1048576
 
 application_contexts:
+  # The URL and optional tls settings are independent of the result cache.
+  # tls:
+  #   ca_file: certs/redis-ca.pem
+  #   cert_file: certs/redis-client.pem
+  #   key_file: certs/redis-client-key.pem
   url_env: YASP_REDIS_URL
   namespace: "yasp:datasets"
   refresh_timeout_ms: 30000

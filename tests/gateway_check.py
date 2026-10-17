@@ -552,7 +552,7 @@ def startup_checks(directory):
         (variant(lambda config: config["targets"][TARGET_NAME].update(port="SECRET_MARKER")), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME].update(password="SECRET_MARKER")), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME].update(engine="SECRET_MARKER")), secret_file),
-        (variant(lambda config: config["targets"][TARGET_NAME].update(tls_mode="require")), secret_file),
+        (variant(lambda config: config["targets"][TARGET_NAME].update(tls={"mode": "invalid"})), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME].update(logins={})), secret_file),
         (variant(lambda config: config["targets"][TARGET_NAME]["logins"][LOGIN_NAME].pop("password_env")), secret_file),
         (variant(lambda config: config["hooks"]["select_backend"].update(params={"target": "missing", "backend_login": LOGIN_NAME})), secret_file),
@@ -583,7 +583,6 @@ def startup_checks(directory):
         (python_reference("not_callable.py"), secret_file),
         (variant(lambda config: config.update(source={"password": "SECRET_MARKER"})), secret_file),
         (variant(lambda config: config["gateway"].update(protocol="SECRET_MARKER")), secret_file),
-        (variant(lambda config: config["gateway"].update(listen="0.0.0.0:6432")), secret_file),
         (variant(lambda config: config["gateway"].update(listen="127.0.0.1:0")), secret_file),
         (variant(lambda config: config["gateway"].update(max_sessions=0)), secret_file),
         (variant(lambda config: config["gateway"].update(max_message_bytes=7)), secret_file),
@@ -603,7 +602,7 @@ def startup_checks(directory):
         (variant(lambda config: config["gateway"].update(shutdown_timeout_ms=0)), secret_file),
         (variant(lambda config: config["gateway"].update(shutdown_timeout_ms=4294967296)), secret_file),
         (variant(lambda config: config["gateway"].update(max_sessions="SECRET_MARKER")), secret_file),
-        (variant(lambda config: config["gateway"].update(tls={"mode": "require"})), secret_file),
+        (variant(lambda config: config["gateway"].update(tls={"mode": "enable"})), secret_file),
         (variant(lambda config: config["gateway"].update(max_prepared_statements_per_session=1)), secret_file),
         (variant(lambda config: config["gateway"].update(max_portals_per_session=1)), secret_file),
         (config_text[:-1] + ', "gateway": ' + json.dumps(CONFIG["gateway"]) + '}', secret_file),
@@ -794,7 +793,7 @@ def gateway_settings_checks(directory):
         available.bind(("127.0.0.1", 0))
         ADDRESS = available.getsockname()
     custom = json.loads(json.dumps(CONFIG))
-    # Protocol and TLS are omitted to exercise their local development defaults.
+    # Protocol and TLS are omitted to exercise their plaintext defaults.
     custom["gateway"] = {"listen": f"{ADDRESS[0]}:{ADDRESS[1]}", "max_sessions": 2,
                          "max_message_bytes": 4096, "max_sql_bytes": 256,
                          "query_timeout_ms": 1000, "read_timeout_ms": 100,

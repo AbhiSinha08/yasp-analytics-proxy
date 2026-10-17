@@ -8,6 +8,7 @@ pub struct GatewayConfig {
     pub(crate) password: String,
     pub(crate) database: String,
     pub(crate) settings: GatewaySettings,
+    pub(crate) tls: Option<std::sync::Arc<crate::tls::ServerTls>>,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
@@ -31,6 +32,7 @@ impl GatewayConfig {
             password,
             database,
             settings: GatewaySettings::default(),
+            tls: None,
             cache: None,
             context_hook: None,
             schema_discovery: None,
@@ -41,6 +43,7 @@ impl GatewayConfig {
 
     pub fn with_settings(mut self, settings: GatewaySettings) -> Result<Self, ConfigError> {
         settings.validate()?;
+        self.tls = crate::tls::ServerTls::load(&settings.tls)?;
         self.settings = settings;
         Ok(self)
     }
@@ -78,9 +81,9 @@ impl GatewayConfig {
     }
 }
 
-/// One local PostgreSQL login. The host owns secret loading; library consumers
-/// supply these settings directly. This development adapter has no TLS yet.
+/// One PostgreSQL login. The host owns secret loading and certificate paths.
 pub struct BackendConfig {
+    pub(crate) tls: Option<std::sync::Arc<crate::tls::ClientTls>>,
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) username: String,
@@ -89,12 +92,37 @@ pub struct BackendConfig {
 }
 
 impl BackendConfig {
+    /// Connect without TLS to the configured endpoint, including private-network hosts.
     pub fn new(
         host: String,
         port: u16,
         username: String,
         password: String,
         database: String,
+    ) -> Result<Self, ConfigError> {
+        Self::build(host, port, username, password, database, None)
+    }
+
+    /// Connect with certificate and hostname verification, optionally using a client identity.
+    pub fn new_with_tls(
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+        database: String,
+        tls: super::ClientTlsSettings,
+    ) -> Result<Self, ConfigError> {
+        let tls = std::sync::Arc::new(crate::tls::ClientTls::load(&tls)?);
+        Self::build(host, port, username, password, database, Some(tls))
+    }
+
+    fn build(
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+        database: String,
+        tls: Option<std::sync::Arc<crate::tls::ClientTls>>,
     ) -> Result<Self, ConfigError> {
         for (name, value) in [
             ("target.host", &host),
@@ -109,14 +137,12 @@ impl BackendConfig {
         if port == 0 {
             return Err(ConfigError::InvalidPort);
         }
-        if host != "localhost"
-            && !host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-        {
-            return Err(ConfigError::NonLocalBackend);
+        if tls.is_some() {
+            rustls::pki_types::ServerName::try_from(host.as_str())
+                .map_err(|_| ConfigError::InvalidTls)?;
         }
         Ok(Self {
+            tls,
             host,
             port,
             username,

@@ -2,10 +2,8 @@
 
 use super::DatasetError;
 use crate::config::ApplicationContextsSettings;
-use redis::{
-    AsyncConnectionConfig, Client, Cmd, ConnectionAddr, Value, aio::MultiplexedConnection,
-};
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use redis::{AsyncConnectionConfig, Client, Cmd, Value, aio::MultiplexedConnection};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, Semaphore},
     time::timeout,
@@ -68,13 +66,8 @@ impl Connection {
 
 impl Store {
     pub fn new(settings: ApplicationContextsSettings, url: &str) -> Result<Self, DatasetError> {
-        let client = Client::open(url).map_err(|_| DatasetError::InvalidSettings)?;
-        match client.get_connection_info().addr() {
-            ConnectionAddr::Tcp(host, _)
-                if host == "localhost"
-                    || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) => {}
-            _ => return Err(DatasetError::InvalidSettings),
-        }
+        let client = crate::tls::redis_client(url, &settings.tls)
+            .map_err(|_| DatasetError::InvalidSettings)?;
         // Large explicit lookup limits need enough room for Redis, decoded JSON,
         // and response copies; one lookup must fit the aggregate budget.
         let budget = BUFFER_BUDGET.max(settings.max_lookup_bytes.saturating_mul(3));

@@ -5,10 +5,8 @@ use crate::{
     hooks::{CacheEligibility, SelectionRequest},
 };
 use bytes::{Buf, Bytes, BytesMut};
-use redis::{
-    AsyncConnectionConfig, Client, Cmd, ConnectionAddr, Value, aio::MultiplexedConnection,
-};
-use std::{io, net::IpAddr, sync::Arc, time::Duration};
+use redis::{AsyncConnectionConfig, Client, Cmd, Value, aio::MultiplexedConnection};
+use std::{io, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     time::timeout,
@@ -33,7 +31,7 @@ pub(crate) struct CacheBuffer {
 }
 
 impl RedisCache {
-    /// Validate local-development configuration without connecting to Redis.
+    /// Validate transport configuration and certificate material without connecting to Redis.
     /// An unavailable cache is retried lazily and never prevents database execution.
     pub fn new(
         settings: CacheSettings,
@@ -43,19 +41,7 @@ impl RedisCache {
         settings
             .validate()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let client = Client::open(url)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid Redis URL"))?;
-        match client.get_connection_info().addr() {
-            ConnectionAddr::Tcp(host, _)
-                if host == "localhost"
-                    || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) => {}
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Redis requires loopback TCP in local development",
-                ));
-            }
-        }
+        let client = crate::tls::redis_client(url, &settings.tls)?;
         Ok(Self {
             budget: Arc::new(Semaphore::new(settings.max_buffered_bytes_total)),
             settings,

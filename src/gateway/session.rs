@@ -43,12 +43,25 @@ pub(super) async fn connection(
     client_id: u64,
 ) -> io::Result<()> {
     let write_timeout = settings.write_timeout();
-    socket.set_nodelay(true)?;
-    // A second descriptor observes disconnects without consuming protocol bytes.
-    let raw_socket = socket.into_std()?;
-    let observer = TcpStream::from_std(raw_socket.try_clone()?)?;
-    let socket = TcpStream::from_std(raw_socket)?;
-    let client = DefaultClient::<String>::new(socket.peer_addr()?, false);
+    let startup_timeout = if cancel_only {
+        CANCEL_CONNECTION_TIMEOUT
+    } else {
+        Duration::from_millis(u64::from(settings.startup_timeout_ms))
+    };
+    let deadline = Instant::now() + startup_timeout;
+    let address = socket.peer_addr()?;
+    let tls = source.tls.as_ref();
+    let secure = tls.is_some();
+    let (socket, mut observer, _bridge) = timeout_at(
+        deadline,
+        super::transport::negotiate(socket, tls, settings.max_message_bytes),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "startup timed out"))??;
+    let mut client = DefaultClient::<String>::new(address, secure);
+    if secure {
+        client.set_state(PgWireConnectionState::AwaitingStartup);
+    }
     let mut socket = Framed::new(
         FrameGuard::frontend(socket, settings.max_message_bytes),
         PgWireMessageServerCodec::new(client),
@@ -61,18 +74,18 @@ pub(super) async fn connection(
     parameters.date_style = "ISO, MDY".into();
     parameters.time_zone = "UTC".into();
     // SASL state belongs to one session; only immutable salted credentials are shared.
+    let mut scram = ScramAuth::new(source.clone());
+    if let Some(tls) = &tls {
+        scram
+            .configure_certificate(&tls.certificate)
+            .map_err(|_| io::Error::other("invalid SCRAM TLS certificate"))?;
+    }
     let auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
-            .with_scram(ScramAuth::new(source.clone()))
+            .with_scram(scram)
             .with_connection_manager(cancel_manager.clone()),
     );
     let noop = Arc::new(NoopHandler);
-    let startup_timeout = if cancel_only {
-        CANCEL_CONNECTION_TIMEOUT
-    } else {
-        Duration::from_millis(u64::from(settings.startup_timeout_ms))
-    };
-    let deadline = Instant::now() + startup_timeout;
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
     let mut session = SessionSettings::default();
@@ -126,7 +139,7 @@ pub(super) async fn connection(
             };
             let result = tokio::select! {
                 result = query_session.execute(&mut socket, &query.query, cancel) => result,
-                _ = disconnected(&observer) => return Ok(()),
+                _ = observer.disconnected() => return Ok(()),
             };
             finish_query(&mut socket, result, write_timeout).await?;
             continue;
@@ -135,6 +148,13 @@ pub(super) async fn connection(
         let operation = async {
             match message {
                 PgWireFrontendMessage::SslNegotiation(negotiation) => {
+                    if secure {
+                        return Err(protocol_error(
+                            "FATAL",
+                            "08P01",
+                            "repeated encryption negotiation",
+                        ));
+                    }
                     match negotiation {
                         SslNegotiationMetaMessage::PostgresSsl(_) => {
                             socket
@@ -230,17 +250,6 @@ pub(super) async fn connection(
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "error response timed out"))??;
         }
         authenticated |= matches!(socket.state(), PgWireConnectionState::ReadyForQuery);
-    }
-}
-
-async fn disconnected(socket: &TcpStream) {
-    let mut byte = [0];
-    match socket.peek(&mut byte).await {
-        Ok(0) | Err(_) => {}
-        Ok(_) if byte[0] == b'X' => {}
-        // Pipelined requests remain in the protocol reader. Query deadlines
-        // bound their wait; this observer never consumes another request.
-        Ok(_) => std::future::pending::<()>().await,
     }
 }
 

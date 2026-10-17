@@ -359,7 +359,7 @@ fn configured_host_resolves_partial_decisions_and_credential_overrides() {
         "backend": {"max_connections_per_pool": 2, "max_connections_total": 1},
         "targets": {"analytics": {
             "engine": "postgresql", "database": database.connection.identity.database,
-            "tls_mode": "disable",
+            "tls": {"mode": "disable"},
             "logins": {
                 "owner": {"username": source.identity.user, "password_env": "YASP_COMPUTE_TEST_OWNER_PASSWORD"},
                 "reader": {

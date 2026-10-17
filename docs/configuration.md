@@ -22,7 +22,7 @@ secret values out of YAML and logs.
 | Resource | Secret/configuration source |
 | --- | --- |
 | Frontend username/password/database label | `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, `YASP_GATEWAY_DATABASE`. |
-| Backend endpoint/database | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls_mode: disable`. |
+| Backend endpoint/database | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls.mode: disable` or `enable`. |
 | Backend login | `targets.<name>.logins.<name>.username` and a `password_env` variable name. |
 | Result-cache Redis URL | The variable named by `cache.url_env`, required only when caching is enabled. |
 | Dataset Redis URL | The variable named by `application_contexts.url_env`, required when datasets are configured. |
@@ -30,8 +30,9 @@ secret values out of YAML and logs.
 
 The frontend database is a connection label; each target names its actual source
 database. Use the same name for browsing because database-alias adaptation is not
-implemented. Target hosts must be `localhost` or loopback IP addresses; ports must
-be nonzero. Frontend and backend transports are plaintext local development only.
+implemented. Ports must be nonzero. Each connection independently selects plaintext
+or verified TLS, including private-network endpoints. See [TLS setup](tls.md) for modes,
+certificate paths, outbound client identities, and library examples.
 Provision source logins with the intended PostgreSQL grants and RLS policy.
 
 ## Routing and pools
@@ -68,7 +69,8 @@ targets:
   analytics:
     engine: postgresql
     database: analytics
-    tls_mode: disable
+    tls:
+      mode: disable
     logins:
       reader:
         username: report_reader
@@ -127,7 +129,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 | Setting under `gateway` | Default | Meaning |
 | --- | --- | --- |
 | `protocol` | `postgresql` | Only supported frontend protocol. |
-| `listen` | `127.0.0.1:6432` | Loopback IP and nonzero port required. |
+| `listen` | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`. |
 | `max_sessions` | 32 | Normal frontend session capacity. |
 | `max_message_bytes` | 8,388,608 | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound. |
 | `max_sql_bytes` | 1,048,576 | SQL input size. |
@@ -137,9 +139,9 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `query_timeout_ms` | 60,000 | Database query wait and PostgreSQL statement timeout. |
 | `read_timeout_ms` | 600,000 | Next complete authenticated message, including idle/partial reads; not query execution. |
 | `write_timeout_ms` | 60,000 | Each frontend response write. |
-| `startup_timeout_ms` | 120,000 | Complete startup/authentication exchange. |
+| `startup_timeout_ms` | 120,000 | Complete TLS negotiation and startup/authentication exchange. |
 | `shutdown_timeout_ms` | 10,000 | Session drain after listener shutdown. |
-| `tls.mode` | `local_development` | Plaintext mode; TLS is not implemented. |
+| `tls.mode` | `disable` | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`. |
 
 Session, SQL, context, and timeout limits must be positive. Frontend frames must be
 between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
@@ -199,8 +201,10 @@ and `read(name)`; these synchronous helpers call the async registry and return o
 Python values. Python loaders use a dedicated loader worker and share one interpreter
 and its GIL with the callback runtime. Keep loader work bounded and avoid expensive
 CPU work. `refresh_timeout_ms` bounds each load. Dataset Redis uses separate
-connections for reads and refresh coordination/uploads. Its initial transport is
-loopback TCP. Keep its namespace separate from `cache.namespace`.
+connections for reads and refresh coordination/uploads. Its transport supports
+plaintext `redis://` or verified `rediss://` TLS. Configure optional CA/client identity
+under `application_contexts.tls`; see [TLS setup](tls.md). Keep its namespace
+separate from `cache.namespace`.
 
 ## Discovery and client setup
 
@@ -257,8 +261,10 @@ current masks before output; masking is not implemented yet.
 
 Hits skip PostgreSQL, so source grants and RLS can remain stale until expiry. Scope
 checks isolate identity, source, and fixed execution context. Redis transport is
-loopback TCP only with a fixed 100 ms operation deadline; runtime failures become
-misses. Invalid URL/configuration fails startup.
+plaintext `redis://` TCP or verified `rediss://` TLS with a fixed 100 ms operation
+deadline, including connection establishment; runtime failures become
+misses. Invalid URL/configuration fails startup. `cache.tls` accepts optional
+`ca_file`, `cert_file`, and `key_file`; see [TLS setup](tls.md).
 
 The byte setting is an aggregate in-process budget, separate from Redis storage.
 The internal serialized-entry guard is one third of it; each active cached query

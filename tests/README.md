@@ -2,7 +2,7 @@
 
 Run the PostgreSQL scenarios in WSL/Linux with Rust 1.89, Python 3,
 PostgreSQL 18 (`initdb`, `pg_ctl`, `postgres`, `psql`/libpq), and
-`redis-server`/`redis-cli` installed:
+TLS-capable `redis-server`/`redis-cli`, and OpenSSL installed:
 
 ```sh
 python3 scripts/test.py
@@ -10,7 +10,9 @@ python3 scripts/test.py -- --doc
 ```
 
 The runner starts a temporary PostgreSQL cluster and Redis server on free loopback
-ports. It creates two non-superuser source logins: a database owner with `CREATEDB`
+ports, with plaintext development and TLS endpoints. It generates a disposable CA,
+server/client certificates, and invalid/expired certificate cases; all keys stay
+in its temporary directory. It creates two non-superuser source logins: a database owner with `CREATEDB`
 and a restricted reader. It supplies generated passwords and a temporary test
 configuration; no development credentials or services are needed. PostgreSQL 18 is
 required by the captured psql metadata queries. Set `YASP_TEST_PG_BIN` if its binaries
@@ -49,6 +51,7 @@ scenario and verifies resource removal.
 | --- | --- |
 | `gateway` | Compiled host startup, authentication, simple-query forwarding, native values/metadata, read-only enforcement, protocol limits, pools, timeouts, cleanup, and config validation. |
 | `routing` | Metadata classification/replay, selected credentials and source ACLs, errors and same-session recovery, separate pools, cancellation, and discarded cancelled leases. |
+| `tls` | Verified frontend/source/Redis connections, outbound client certificates, SCRAM channel binding, encrypted cancellation, disconnect/bounds recovery, relative certificate paths, compute/discovery, cache replay, and dataset refresh. |
 | `cache` | Normalized hits, expiry, selected-login scope, current selector denial, context order, metadata bypass, malformed entries, row/byte bounds, lossless values, cancelled fills, eligibility failures, and Redis outages. |
 | `context_gateway` | Fixed-backend context fallback, cancellation, disconnect, and shutdown. |
 | `context`, `python_hooks` | Database-free hook contracts, bounds, worker capacity, failure defaults, and shutdown. |
@@ -85,3 +88,13 @@ Process environment values take precedence over the optional root `.env`:
   uses a unique namespace and removes only its own keys.
 
 Missing services, credentials, privileges, or fixture setup errors fail the tests.
+
+The `tls` suite additionally requires `YASP_TEST_TLS_DIR` containing `ca.crt`,
+`other-ca.crt`, `server.crt`/`.key`, `client.crt`/`.key`, `wrong.crt`/`.key`
+(hostname mismatch), and `expired.crt`/`.key`. Its source must accept TLS and
+require a client certificate signed by `ca.crt`. Set `YASP_TEST_REDIS_TLS_URL`
+to a `rediss://localhost:PORT/` endpoint using the same CA and requiring client
+certificates. The ordinary Redis URL is used for administrative inspection and must allow
+ACL user creation/deletion and killing that test user's connections. Tests use
+these privileges only for their own temporary users and namespaces.
+Prefer `python3 scripts/test.py -- --test tls` to provision these fixtures.

@@ -4,6 +4,7 @@ mod file;
 mod runtime;
 mod settings;
 
+pub use crate::tls::{ClientTlsSettings, TargetTls};
 pub use file::{
     ComputeInstanceSettings, ComputeSettings, ComputeTypeSettings, CredentialOverride, FileConfig,
     LoginSettings, Logins, SchemaDiscoverySettings, TargetSettings,
@@ -20,6 +21,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("invalid TLS configuration or certificate material")]
+    InvalidTls,
     #[error("schema_discovery.target is required when multiple targets are configured")]
     MissingDiscoveryTarget,
     #[error("schema_discovery must identify a configured target and login")]
@@ -58,11 +61,11 @@ pub enum ConfigError {
     InvalidDefaultBackend,
     #[error("passthrough fields must resolve to one configured target, login, and compute type")]
     MissingDefaultBackend,
-    #[error("target engine must be postgresql and tls_mode must be disable")]
+    #[error("target engine must be postgresql")]
     UnsupportedTarget,
-    #[error("gateway protocol must be postgresql and tls.mode must be local_development")]
+    #[error("gateway protocol must be postgresql")]
     UnsupportedGateway,
-    #[error("gateway.listen must be a loopback IP address with a nonzero port")]
+    #[error("gateway.listen requires a nonzero port")]
     InvalidListener,
     #[error("gateway session, SQL, context, hook, and timeout limits must be positive")]
     InvalidGatewayLimit,

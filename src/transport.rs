@@ -5,16 +5,18 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+pub(crate) trait AsyncSocket: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncSocket for T {}
+pub(crate) type Socket = Box<dyn AsyncSocket>;
+
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// Check the length before delivering a frame header to pgwire. Never read ahead
 /// into another frame: pipelined requests each pass through this same bound.
 pub(crate) struct FrameGuard {
-    socket: TcpStream,
+    socket: Socket,
+    termination: Option<tokio::sync::watch::Sender<bool>>,
     max_frame_bytes: usize,
     startup: bool,
     header: [u8; 8],
@@ -25,9 +27,15 @@ pub(crate) struct FrameGuard {
 }
 
 impl FrameGuard {
-    pub(crate) fn frontend(socket: TcpStream, max_frame_bytes: usize) -> Self {
+    pub(crate) fn observe_termination(mut self, sender: tokio::sync::watch::Sender<bool>) -> Self {
+        self.termination = Some(sender);
+        self
+    }
+
+    pub(crate) fn frontend(socket: Socket, max_frame_bytes: usize) -> Self {
         Self {
             socket,
+            termination: None,
             max_frame_bytes,
             startup: true,
             header: [0; 8],
@@ -40,7 +48,7 @@ impl FrameGuard {
 }
 
 impl FrameGuard {
-    pub(crate) fn backend(socket: TcpStream) -> Self {
+    pub(crate) fn backend(socket: Socket) -> Self {
         let mut guard = Self::frontend(socket, MAX_FRAME_BYTES);
         guard.startup = false;
         guard.header_len = 5;
@@ -96,6 +104,13 @@ impl AsyncRead for FrameGuard {
                 }
                 this.remaining = length + offset - this.header_len;
             }
+        }
+        if !this.startup
+            && this.header[0] == b'X'
+            && this.remaining == 0
+            && let Some(sender) = &this.termination
+        {
+            sender.send_replace(true);
         }
         if this.sent < this.header_len {
             let n = (this.header_len - this.sent).min(buf.remaining());

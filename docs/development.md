@@ -22,7 +22,8 @@ python3 scripts/test.py
 
 The runner provisions disposable PostgreSQL 18 and Redis instances and executes
 `cargo test --locked --all-targets`. It needs an unprivileged Linux/WSL user,
-PostgreSQL 18 server tools plus psql/libpq, Redis server/CLI, and Python 3.
+PostgreSQL 18 server tools plus psql/libpq, a TLS-capable Redis server/CLI,
+OpenSSL, and Python 3.
 `YASP_TEST_PG_BIN` can select the PostgreSQL binary directory. It cleans up its own
 services and files; it does not replace an existing developer service. Full setup,
 configured-service mode, and focused runs are in [tests/README.md](../tests/README.md).
@@ -88,11 +89,12 @@ application's resolved versions. Library consumers resolve their own graph.
 | tracing 0.1, tracing-subscriber 0.3 | Library events and host-installed stdout filtering. |
 | futures 0.3, async-trait 0.1, tokio-util 0.7 | Streaming protocol handlers and framed asynchronous I/O. |
 | dotenvy 0.15 | Host-only `.env` iterator parsing without environment mutation. |
-| Redis 1.7 | Opt-in asynchronous multiplexed cache connection. |
+| Redis 1.7 | Asynchronous multiplexed cache/dataset connections with `tokio-rustls-comp`. |
+| Rustls 0.23 and rustls-native-certs 0.8 | TLS 1.2/1.3, certificate/hostname verification, PEM parsing, and system trust roots; Ring matches pgwire. |
 | sha2 0.11, bytes 1 | Query/cache scope hashes and bounded native protocol buffers. |
 | PyO3 0.29, optional | Trusted embedded Python; Rust-only builds do not link CPython. |
 
-Additional backend/model SDKs, TLS transports, and management frameworks belong to
+Additional backend/model SDKs and management frameworks belong to
 their active milestones. Choose compatible versions/features and prove native type,
 transport, and resource behavior before claiming support. Preserve PostgreSQL numeric
 text instead of introducing a fixed-precision conversion that loses values.
