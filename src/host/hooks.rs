@@ -1,14 +1,33 @@
 //! Startup registration of the host's compiled and external Python callbacks.
 
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 use yasp::{
-    config::{FileConfig, SelectorSettings},
-    datasets::DatasetLoader,
+    config::{FileConfig, RustHookSettings, SelectorSettings},
+    datasets::{DatasetLoader, bind_dataset_loader},
     hooks::{
         CacheEligibility, ContextHook, RoutedSelector, bind_cache_eligibility, bind_select_backend,
         builtin,
     },
 };
+
+const EXAMPLE_DATASET_LOADER: &str = "example.datasets.email_locations";
+const JSON_FILE_DATASET_LOADER: &str = "builtin.dataset.load_json";
+
+fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
+    if hook.params.len() != 1 {
+        return Err(io::Error::other(
+            "builtin.dataset.load_json accepts only the file param",
+        ));
+    }
+    hook.params
+        .get("file")
+        .and_then(serde_json::Value::as_str)
+        .filter(|file| !file.trim().is_empty())
+        .ok_or_else(|| io::Error::other("builtin.dataset.load_json requires a file param"))
+}
 
 pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
     // The host maps names to compiled functions once, before accepting clients.
@@ -52,16 +71,19 @@ pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error
     }
     for dataset in file.application_contexts.datasets.values() {
         match &dataset.loader {
-            SelectorSettings::Rust(name) if name != "example.datasets.email_locations" => {
+            SelectorSettings::Rust(name) if name != EXAMPLE_DATASET_LOADER => {
                 return Err(io::Error::other("unregistered application context loader").into());
             }
-            SelectorSettings::RustReference(hook)
-                if hook.callback != "example.datasets.email_locations" =>
-            {
-                return Err(io::Error::other("unregistered application context loader").into());
+            SelectorSettings::RustReference(hook) if hook.callback == EXAMPLE_DATASET_LOADER => {
+                if !hook.params.is_empty() {
+                    return Err(io::Error::other("example dataset loader accepts no params").into());
+                }
             }
-            SelectorSettings::RustReference(hook) if !hook.params.is_empty() => {
-                return Err(io::Error::other("example dataset loader accepts no params").into());
+            SelectorSettings::RustReference(hook) if hook.callback == JSON_FILE_DATASET_LOADER => {
+                dataset_file(hook)?;
+            }
+            SelectorSettings::RustReference(_) => {
+                return Err(io::Error::other("unregistered application context loader").into());
             }
             _ => {}
         }
@@ -241,8 +263,22 @@ pub(super) async fn load_hooks(
     let mut loaders = std::collections::BTreeMap::new();
     for (name, dataset) in &file.application_contexts.datasets {
         let loader = match &dataset.loader {
-            SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => {
+            SelectorSettings::Rust(name) if name == EXAMPLE_DATASET_LOADER => {
                 super::datasets_example::bind_email_locations()
+            }
+            SelectorSettings::RustReference(hook) if hook.callback == EXAMPLE_DATASET_LOADER => {
+                super::datasets_example::bind_email_locations()
+            }
+            SelectorSettings::RustReference(hook) if hook.callback == JSON_FILE_DATASET_LOADER => {
+                let path = PathBuf::from(dataset_file(hook)?);
+                bind_dataset_loader(
+                    (path, file.application_contexts.max_dataset_bytes),
+                    builtin::dataset::load_json,
+                )
+                .into()
+            }
+            SelectorSettings::Rust(_) | SelectorSettings::RustReference(_) => {
+                return Err(io::Error::other("unregistered application context loader").into());
             }
             SelectorSettings::Python(_hook) => {
                 #[cfg(feature = "python")]

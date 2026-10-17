@@ -54,7 +54,7 @@ scenario and verifies resource removal.
 | `context`, `python_hooks` | Database-free hook contracts, bounds, worker capacity, failure defaults, and shutdown. |
 | `datasets` | Redis dataset startup/replacement, JSON fidelity, lookup limits, refresh coordination, failure recovery, and lease/revision fencing. |
 | `datasets_gateway` | Compiled-host startup loading, Rust dataset reads through context/selection/eligibility, current policy before cache hits, and invocation expiry. |
-| `datasets_python` | Python loaders and supplied examples, bounded lookup helpers, cancellation/expiry, and independent loader/query workers. Requires the Python feature. |
+| `datasets_python` | Python loader callbacks, bounded lookup helpers, cancellation/expiry, and independent loader/query workers. Requires the Python feature. |
 
 Routing and cache scenarios live under their matching subdirectories. Shared fixture
 ownership is under `support/`; PostgreSQL drivers remain in the real engine adapters.

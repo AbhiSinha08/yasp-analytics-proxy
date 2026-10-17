@@ -2,7 +2,10 @@
 
 
 def select_backend(request, params):
-    """Return a configured route or deny when required classifications are absent."""
+    """Show policy-based routing with a secondary route as the demo fallback."""
+    fallback = {"target": "secondary", "backend_login": "restricted"}
+    # return None  # Return None to deny backend selection.
+
     context = request.get("context", {})
     workload = context.get("workload")
     user_id = context.get("user_id")
@@ -12,15 +15,15 @@ def select_backend(request, params):
         isinstance(value, str) and value
         for value in (workload, user_id, department, report_kind)
     ):
-        return None
+        return fallback
 
     # The lookup checks that the supplied context maps to a loaded application row.
     datasets = request.get("datasets")
     if datasets is None:
-        return None
+        return fallback
     user = datasets.get_many("users", [user_id]).get(user_id)
     if not isinstance(user, dict) or user.get("department") != department:
-        return None
+        return fallback
 
     # Read the complete field-location dataset for routing context only; no masking.
     _email_columns = datasets.read("email_locations").get("columns", [])
@@ -28,12 +31,12 @@ def select_backend(request, params):
     target = params["target_by_workload"].get(workload)
     login = params["login_by_department"].get(department, {}).get(target)
     if not isinstance(target, str) or not target or not isinstance(login, str) or not login:
-        return None
+        return fallback
 
     missing = object()
     compute_type = params["type_by_report"].get(report_kind, missing)
     if compute_type is missing or (compute_type is not None and (not isinstance(compute_type, str) or not compute_type)):
-        return None
+        return fallback
 
     decision = {"target": target, "backend_login": login}
     if compute_type is not None:
@@ -67,7 +70,13 @@ if __name__ == "__main__":
         "target": "olap", "backend_login": "restricted", "compute_type": "small"
     }
     wrong_department = {**request["context"], "department": "sales"}
-    assert select_backend({"context": wrong_department, "datasets": Datasets()}, params) is None
+    assert select_backend({"context": wrong_department, "datasets": Datasets()}, params) == {
+        "target": "secondary", "backend_login": "restricted"
+    }
     unknown_user = {**request["context"], "user_id": "eve"}
-    assert select_backend({"context": unknown_user, "datasets": Datasets()}, params) is None
-    assert select_backend({"context": {}}, params) is None
+    assert select_backend({"context": unknown_user, "datasets": Datasets()}, params) == {
+        "target": "secondary", "backend_login": "restricted"
+    }
+    assert select_backend({"context": {}}, params) == {
+        "target": "secondary", "backend_login": "restricted"
+    }

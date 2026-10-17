@@ -197,6 +197,13 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
         "url_env": "YASP_TEST_REDIS_URL",
         "namespace": namespace.name,
         "datasets": {
+            "users": {
+                "loader": {
+                    "type": "rust",
+                    "callback": "builtin.dataset.load_json",
+                    "params": {"file": "hooks/examples/users.json"},
+                }
+            },
             "email_locations": {
                 "loader": {
                     "type": "rust",
@@ -223,6 +230,7 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
     let mut process = ChildGuard::new(command.spawn().expect("configured host starts"));
 
     let data_key = format!("{}::email_locations::data", namespace.name);
+    let users_key = format!("{}::users::data", namespace.name);
     let expected = r#"["crm.contacts.email","billing.invoices.recipient_email"]"#;
     let started = Instant::now();
     loop {
@@ -234,8 +242,14 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
             .args(["-u", &redis, "HGET", &data_key, "columns"])
             .output()
             .expect("redis-cli is installed");
+        let user = Command::new("redis-cli")
+            .args(["-u", &redis, "HGET", &users_key, "alice"])
+            .output()
+            .expect("redis-cli is installed");
         if published.status.success()
             && String::from_utf8_lossy(&published.stdout).trim() == expected
+            && user.status.success()
+            && String::from_utf8_lossy(&user.stdout).contains("\"department\":\"finance\"")
         {
             break;
         }

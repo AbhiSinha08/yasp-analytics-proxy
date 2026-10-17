@@ -79,22 +79,26 @@ are enforced by the core. Python helpers wait synchronously on the async registr
 dataset loaders use a dedicated worker, while loader and callback code shares one
 interpreter and the GIL.
 
-`examples/datasets.py` loads a JSON object from `users.json`; values can be nested JSON
-objects, arrays, scalars, or `null`. [examples/datasets.rs](examples/datasets.rs) shows
-a compiled loader for the full `email_locations.json` shape. The supplied host
-registers it as `example.datasets.email_locations`. A consuming host registers its
-own callbacks. [examples/dataset_selector.rs](examples/dataset_selector.rs) shows
-an async Rust selector bound to application-owned department policy.
-Configure `application_contexts.datasets` with the chosen loader references and
-keep its Redis namespace separate from the result cache. The reference configuration
-has no active loaders by default. A zero refresh interval means startup-only loading;
-scheduled refreshes require a positive per-dataset interval.
+The supplied host's `builtin.dataset.load_json` loader reads a JSON object from
+`params.file`, resolved relative to the process working directory and bounded by
+`application_contexts.max_dataset_bytes`. Values can be nested objects, arrays,
+scalars, or `null`. [examples/datasets.rs](examples/datasets.rs) shows an
+application-owned compiled loader that returns email locations in code;
+`example.datasets.email_locations` remains registered by the supplied host.
+[examples/dataset_selector.rs](examples/dataset_selector.rs) shows an async Rust
+selector bound to application-owned department policy. Configure
+`application_contexts.datasets` with the chosen loader references and keep its Redis
+namespace separate from the result cache. The reference configuration uses the
+built-in file loader for its sample JSON resources. A zero refresh interval means
+startup-only loading; scheduled refreshes require a positive per-dataset interval.
 
 `examples/context.py` demonstrates `get` and `read`, and
 `examples/role_selector.py` demonstrates `get_many` plus reading the full email
-location dataset. Their SQL-comment extractor is an application test fixture only:
+location dataset. Its SQL-comment extractor is an application test fixture only:
 comments are client-controlled and must never be treated as authenticated identity.
-The examples pass field locations as context and do not mask data.
+The selector example returns the `secondary` target and `restricted` login when its
+sample mappings do not match; applications should replace that fallback with their
+own policy. The examples pass field locations as context and do not mask data.
 
 ## External Python callbacks
 
@@ -113,7 +117,8 @@ keeping pair params. Paths resolve relative to YAML. The callback returns a
 mapping with optional `target`, `backend_login`, and `compute_type` fields, or
 `None` to deny. The engine chooses an instance by overflow within the selected type.
 [examples/role_selector.py](examples/role_selector.py) demonstrates application-owned
-user/workload/report maps and denies missing or unmapped required classifications.
+user/workload/report maps and a hardcoded secondary-route fallback for unmatched
+sample values.
 Its input identity still needs the consuming application's verified metadata contract. [examples/passthrough.py](examples/passthrough.py) also
 contains future callback sketches; they are not wired into query/result stages.
 

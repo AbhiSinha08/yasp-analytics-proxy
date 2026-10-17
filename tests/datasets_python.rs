@@ -43,14 +43,18 @@ async fn python_dataset_loader_and_query_helpers_are_bounded_and_scoped() {
     let scripts = TempDirectory::new("yasp_python_datasets");
     let cancelled = scripts.0.join("cancelled.txt");
     let loader_started = scripts.0.join("loader_started.txt");
-    let python = scripts.0.join("datasets.py");
+    let python = scripts.0.join("callbacks.py");
     fs::write(
         &python,
         r#"
+import json
 import time
 from pathlib import Path
 
 retained = None
+
+def load_json(request, params):
+    return json.loads(Path(params["file"]).read_text(encoding="utf-8"))
 
 def load(request, params):
     if request.get("slow"):
@@ -155,14 +159,14 @@ def queued(request, params):
     )
     .await
     .expect("runtime supports default-size datasets independently of query byte capacity");
-    let example_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/examples/datasets.py");
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/examples");
     for file in ["users.json", "email_locations.json"] {
+        let file_path = examples.join(file);
         let example = runtime
             .register_loader(
-                &example_path,
+                &python,
                 "load_json",
-                Map::from_iter([("file".into(), json!(file))]),
+                Map::from_iter([("file".into(), json!(file_path.to_string_lossy()))]),
                 256,
                 Duration::from_secs(2),
             )

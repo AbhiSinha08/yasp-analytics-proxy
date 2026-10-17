@@ -167,11 +167,15 @@ application_contexts:
     users:
       refresh_interval_seconds: 0
       loader:
-        type: python
-        path: ../hooks/examples/datasets.py
-        callback: load_json
-        params: {file: users.json}
+        type: rust
+        callback: builtin.dataset.load_json
+        params: {file: hooks/examples/users.json}
 ```
+
+The built-in JSON file loader requires only `params.file`; relative paths resolve
+from the process working directory (the project root when started there). The file
+must contain a JSON object and fit within `max_dataset_bytes`. Use an application-
+owned Rust or Python loader when data must be fetched from another service.
 
 Each dataset's refresh interval defaults to zero, which loads at startup only. A
 positive value, such as `900`, schedules refreshes for that dataset. Startup always

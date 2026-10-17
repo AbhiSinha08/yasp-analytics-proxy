@@ -55,8 +55,11 @@ including when serving fails. Dropping the owner cancels its refresh admission.
 Compiled loaders use `datasets::bind_dataset_loader(state, function)` and return
 an owned `serde_json::Map<String, Value>`. Request `name` identifies the dataset;
 `reason` is `startup` or `scheduled`. The engine owns storage and bounds; loaders
-own fetching and data meaning. [Rust](../hooks/examples/datasets.rs) and
-[Python](../hooks/examples/datasets.py) examples load the same plain JSON contract.
+own fetching and data meaning. The supplied host provides
+[`builtin.dataset.load_json`](../hooks/builtin/dataset.rs) for small JSON files;
+[the Rust example](../hooks/examples/datasets.rs) shows an application-owned loader
+that returns data in code. Application hosts can also register Python loaders with
+`PythonRuntime::register_loader`; they follow the same plain JSON contract.
 
 For Python loaders, create the process runtime with
 `PythonRuntime::new_with_dataset_limit(settings, max_dataset_bytes)` and register

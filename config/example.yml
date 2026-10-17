@@ -200,16 +200,15 @@ application_contexts:
     users:
       refresh_interval_seconds: 0
       loader:
-        type: python
-        path: ../hooks/examples/datasets.py
-        callback: load_json
-        params: { file: users.json }
+        type: rust
+        callback: builtin.dataset.load_json
+        params: { file: hooks/examples/users.json }
     email_locations:
       refresh_interval_seconds: 900
       loader:
         type: rust
-        callback: example.datasets.email_locations
-        params: {}
+        callback: builtin.dataset.load_json
+        params: { file: hooks/examples/email_locations.json }
 
 # Future engine-applied masks, independent of optional result callbacks:
 # policy:
