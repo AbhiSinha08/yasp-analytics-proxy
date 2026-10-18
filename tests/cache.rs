@@ -36,5 +36,7 @@ mod eligibility;
 mod hits;
 #[path = "cache/results.rs"]
 mod results;
+#[path = "cache/transactions.rs"]
+mod transactions;
 #[path = "cache/wire.rs"]
 mod wire;

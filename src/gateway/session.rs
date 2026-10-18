@@ -2,6 +2,7 @@
 
 use super::{
     FrontendSocket, protocol_error, query::QuerySession, routing::Execution, server::Credentials,
+    transaction::Transaction,
 };
 use crate::{
     config::GatewaySettings, discovery::SessionSettings, query::ParsedQuery, transport::FrameGuard,
@@ -89,6 +90,7 @@ pub(super) async fn connection(
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
     let mut authenticated = false;
     let mut session = SessionSettings::default();
+    let mut transaction = Transaction::default();
     loop {
         let message = if authenticated {
             timeout(read_timeout, socket.next())
@@ -136,12 +138,16 @@ pub(super) async fn connection(
                 client_id,
                 source: &source,
                 session: &mut session,
+                transaction: &mut transaction,
             };
             let result = tokio::select! {
                 result = query_session.execute(&mut socket, &query.query, cancel) => result,
                 _ = observer.disconnected() => return Ok(()),
             };
-            finish_query(&mut socket, result, write_timeout).await?;
+            if result.is_err() {
+                transaction.fail();
+            }
+            finish_query(&mut socket, result, write_timeout, transaction.status()).await?;
             continue;
         }
         let extended = message.is_extended_query();
@@ -221,6 +227,8 @@ pub(super) async fn connection(
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response timed out"))?;
         if let Err(error) = result {
+            transaction.fail();
+            socket.set_transaction_status(transaction.status());
             tracing::error!(client_id, "client protocol operation failed");
             let mut info: ErrorInfo = error.into();
             if !authenticated {
@@ -297,6 +305,7 @@ async fn finish_query(
     socket: &mut FrontendSocket,
     result: PgWireResult<()>,
     write_timeout: Duration,
+    status: TransactionStatus,
 ) -> io::Result<()> {
     if let Err(error) = result {
         let mut info: ErrorInfo = error.into();
@@ -312,11 +321,11 @@ async fn finish_query(
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "error response timed out"))??;
     }
     socket.set_state(PgWireConnectionState::ReadyForQuery);
-    socket.set_transaction_status(TransactionStatus::Idle);
+    socket.set_transaction_status(status);
     timeout(
         write_timeout,
         socket.send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
-            TransactionStatus::Idle,
+            status,
         ))),
     )
     .await

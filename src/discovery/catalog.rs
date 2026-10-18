@@ -172,6 +172,7 @@ pub(crate) fn helper(object: &ObjectName) -> bool {
             | "sum"
             | "string_agg"
             | "array_agg"
+            | "json_build_object"
             | "coalesce"
             | "nullif"
             | "greatest"

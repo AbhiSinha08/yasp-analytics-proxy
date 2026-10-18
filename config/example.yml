@@ -27,6 +27,9 @@ gateway:
     # key_file: certs/yasp-key.pem
   # NOTE: The Gateway requires setting 'preferQueryMode=simple' for JDBC connections to it.
   # Otherwise JDBC defaults to extended query mode, which is not yet supported by YASP.
+  # For psycopg2 through SQLAlchemy, use AUTOCOMMIT to allow YASP result caching.
+  # In BI connection settings accepting engine_params JSON, use {"engine_params":{"isolation_level":"AUTOCOMMIT"}}.
+  # Explicit transactions are supported but bypass YASP's result cache.
 
 targets:
   primary:

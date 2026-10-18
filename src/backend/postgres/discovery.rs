@@ -3,7 +3,7 @@
 use super::{PostgresBackend, error_response};
 use crate::backend::discovery::DiscoveryRequest;
 use crate::{
-    discovery::{SessionSettings, catalog_relation, helper, name},
+    discovery::{catalog_relation, helper, name},
     query::{ParsedQuery, QueryError},
 };
 use futures::{Sink, channel::oneshot};
@@ -42,7 +42,7 @@ where
     tracing::debug!(query_id = query.query_id(), client_id, ?kind, database = ?backend.target(), database_user = %backend.database_user(), sql = ?query.sql(), "discovery query sent to backend");
     let query =
         prepare(query).map_err(|_| error_response("54000", "metadata query exceeds its bound"))?;
-    let setup = setup(session);
+    let setup = session.setup_sql();
     backend
         .route()
         .acquire()
@@ -54,7 +54,7 @@ where
 
 /// Qualify native catalogs/helpers and restrict every database listing to its source.
 /// Only statements accepted by the frontend discovery classifier enter this path.
-fn prepare(query: &ParsedQuery) -> Result<ParsedQuery, QueryError> {
+pub(in crate::backend) fn prepare(query: &ParsedQuery) -> Result<ParsedQuery, QueryError> {
     let mut statement = query.statement().clone();
     static LISTING: std::sync::OnceLock<sqlparser::ast::Query> = std::sync::OnceLock::new();
     let listing = LISTING.get_or_init(|| {
@@ -160,18 +160,4 @@ fn qualify_type(ty: &mut DataType) {
         ) => qualify_type(ty),
         _ => {}
     }
-}
-
-fn setup(settings: &SessionSettings) -> String {
-    format!(
-        "SELECT pg_catalog.set_config('search_path', {}, true); SET LOCAL application_name = {}",
-        // pg_catalog is implicit unless explicitly placed first in this path.
-        // Leaving it implicit preserves PostgreSQL's current_schema() semantics.
-        quote(&settings.search_path),
-        quote(&settings.application_name)
-    )
-}
-
-fn quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }

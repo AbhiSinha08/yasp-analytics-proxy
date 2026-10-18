@@ -1,6 +1,9 @@
 //! Ordered simple-query stages: setup, metadata, context, routing, cache, execution.
 
-use super::{FrontendSocket, protocol_error, routing::Execution, server::Credentials};
+use super::{
+    FrontendSocket, protocol_error, routing::Execution, server::Credentials,
+    transaction::Transaction,
+};
 use crate::{
     backend::{
         discovery::DiscoveryRequest,
@@ -27,15 +30,16 @@ use tokio::time::timeout;
 
 /// Borrow one frontend's execution services and mutable local setup state.
 /// A query cannot replace the authenticated identity or the configured limits.
-pub(super) struct QuerySession<'a> {
-    pub(super) execution: &'a Execution,
+pub(super) struct QuerySession<'a, 'backend> {
+    pub(super) execution: &'backend Execution,
     pub(super) settings: &'a GatewaySettings,
     pub(super) client_id: u64,
     pub(super) source: &'a Credentials,
     pub(super) session: &'a mut SessionSettings,
+    pub(super) transaction: &'a mut Transaction<'backend>,
 }
 
-impl QuerySession<'_> {
+impl<'backend> QuerySession<'_, 'backend> {
     pub(super) async fn execute(
         &mut self,
         socket: &mut FrontendSocket,
@@ -84,6 +88,28 @@ impl QuerySession<'_> {
         mut cancel: oneshot::Receiver<()>,
     ) -> PgWireResult<()> {
         let write_timeout = self.settings.write_timeout();
+        let application_name = self.session.application_name.clone();
+        let control = self
+            .transaction
+            .control(query.statement(), self.session)
+            .await;
+        if application_name != self.session.application_name {
+            timeout(
+                write_timeout,
+                socket.send(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
+                    "application_name".into(),
+                    self.session.application_name.clone(),
+                ))),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "frontend setup response timed out")
+            })??;
+        }
+        if let Some(tag) = control? {
+            return send_setup_response(socket, SetupResponse::Command(tag), write_timeout).await;
+        }
+        self.transaction.check()?;
         if let Some(response) = self
             .session
             .handle(query.statement())
@@ -95,6 +121,21 @@ impl QuerySession<'_> {
             .validate_read_only()
             .map_err(|error| protocol_error("ERROR", "0A000", &error.to_string()))?;
         if let Some(kind) = discovery::classify(query) {
+            if self.transaction.active() {
+                let execution: &'backend Execution = self.execution;
+                let discovery = execution.discovery();
+                return self
+                    .transaction
+                    .execute(
+                        &discovery.route(),
+                        &discovery.prepare(query)?,
+                        socket,
+                        self.session,
+                        self.settings,
+                        cancel,
+                    )
+                    .await;
+            }
             return self
                 .execution
                 .discovery()
@@ -128,11 +169,18 @@ impl QuerySession<'_> {
             datasets: self.source.datasets.as_ref(),
             async_hook_timeout_ms: self.settings.async_hook_timeout_ms,
         };
+        let execution: &'backend Execution = self.execution;
         let route = tokio::select! {
             biased;
             _ = &mut cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
-            result = self.execution.select(&request) => result?,
+            result = execution.select(&request) => result?,
         };
+        if self.transaction.active() {
+            return self
+                .transaction
+                .execute(&route, query, socket, self.session, self.settings, cancel)
+                .await;
+        }
         let selected = route.selection();
         let backend = route.preferred();
         let cache = self.source.cache.as_deref();
@@ -149,6 +197,7 @@ impl QuerySession<'_> {
                     authenticated_user,
                     frontend_database,
                     self.settings,
+                    self.session,
                 );
                 buffer = cache.reserve(&scope);
                 if let Some(entry) = &mut buffer {
@@ -187,6 +236,7 @@ impl QuerySession<'_> {
                 authenticated_user,
                 frontend_database,
                 self.settings,
+                self.session,
             );
             buffer = cache.and_then(|cache| cache.reserve(&scope));
         }
@@ -202,12 +252,13 @@ impl QuerySession<'_> {
         );
         let mut output = CaptureSink::new(socket, buffer, cache);
         let cacheable_completion = lease
-            .execute(
+            .execute_with_setup(
                 query,
                 &mut output,
                 self.settings.query_timeout(),
                 write_timeout,
                 Some(cancel),
+                Some(&self.session.setup_sql()),
             )
             .await?;
         if cacheable_completion && let (Some(cache), Some(buffer)) = (cache, output.captured()) {
@@ -251,6 +302,9 @@ async fn send_setup_response(
     write_timeout: Duration,
 ) -> PgWireResult<()> {
     let messages = match response {
+        SetupResponse::Command(tag) => vec![PgWireBackendMessage::CommandComplete(
+            CommandComplete::new(tag.into()),
+        )],
         SetupResponse::Set { parameter } => {
             let mut messages = Vec::new();
             if let Some((name, value)) = parameter {

@@ -119,8 +119,10 @@ The runtime supports a bounded PostgreSQL simple-query subset over independently
 configured source-role routing, optional query context, shared application datasets,
 separate metadata discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
 access. It preserves native text values and metadata with verified pool cleanup.
-Prepared statements, client transactions, general query/result/lifecycle hooks,
-engine RBAC interpretation, masking, and management UI remain planned.
+Prepared statements, general query/result/lifecycle hooks, engine RBAC
+interpretation, masking, and management UI remain planned. Bounded read-only,
+read-committed client transactions pin one physical backend until commit/rollback
+and bypass result caching.
 Verified TLS covers PostgreSQL clients, source/cancellation connections, and both
 Redis consumers; see [TLS setup](tls.md).
 
@@ -495,7 +497,7 @@ claims. Production readiness requires separate operational and security validati
 Next validate client context and compatibility. General result processing remains
 a later milestone. Validate the result cache with the intended BI client before enabling
 it in that deployment. Add basic
-prepared statements and portals, limited `SET` and transactions, suspended portals,
+prepared statements and portals, broader `SET` and transaction features, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote
 an item when a concrete BI compatibility requirement needs it.
 

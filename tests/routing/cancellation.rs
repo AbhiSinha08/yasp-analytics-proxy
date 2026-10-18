@@ -126,6 +126,21 @@ pub(super) fn routed_cancellation_contract(
                 .await
                 .expect("frontend session is usable after query cancellation");
 
+            client.simple_query(DefaultSimpleQueryHandler::new(), "BEGIN").await.unwrap();
+            let mut transactional = Box::pin(client.simple_query(
+                DefaultSimpleQueryHandler::new(), "SELECT pg_sleep(8) /* route_two */",
+            ));
+            tokio::select! {
+                result = &mut transactional => panic!("transaction query completed before cancellation: {result:?}"),
+                _ = sleep(std::time::Duration::from_millis(200)) => {}
+            }
+            cancel(address, client_pid, client_key.clone()).await;
+            assert!(matches!(transactional.await, Err(PgWireClientError::RemoteError(info)) if info.code == "57014"));
+            let failed = client.simple_query(DefaultSimpleQueryHandler::new(), "SELECT 1 /* route_two */").await;
+            assert!(matches!(failed, Err(PgWireClientError::RemoteError(info)) if info.code == "25P02"));
+            client.simple_query(DefaultSimpleQueryHandler::new(), "ROLLBACK").await.unwrap();
+            client.simple_query(DefaultSimpleQueryHandler::new(), "SELECT 1 /* route_two */").await.unwrap();
+
             // A late request from the first session cannot cancel another client's work.
             let mut other_query = Box::pin(other.simple_query(
                 DefaultSimpleQueryHandler::new(),

@@ -5,6 +5,7 @@ use super::PostgresBackend;
 use crate::{
     cache::{CacheBuffer, RedisCache},
     config::GatewaySettings,
+    discovery::SessionSettings,
 };
 use futures::{Sink, SinkExt, channel::oneshot};
 use pgwire::{
@@ -25,6 +26,7 @@ pub(crate) fn scope(
     user: &str,
     database: &str,
     settings: &GatewaySettings,
+    session: &SessionSettings,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
     for value in [
@@ -36,6 +38,8 @@ pub(crate) fn scope(
         backend.compute_type().unwrap_or(""),
         backend.compute(),
         super::SESSION_DEFAULTS,
+        &session.search_path,
+        &session.application_name,
     ] {
         hash.update((value.len() as u64).to_be_bytes());
         hash.update(value.as_bytes());

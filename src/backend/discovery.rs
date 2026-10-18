@@ -1,7 +1,10 @@
 //! Dispatch PostgreSQL client metadata requests to their configured source engine.
 //! Source handlers own forwarding, translation, and PostgreSQL response encoding.
 
-use super::{PostgresBackend, postgres};
+use super::{
+    PostgresBackend,
+    postgres::{self, BackendRoute},
+};
 use crate::{
     discovery::{DiscoveryKind, SessionSettings},
     query::ParsedQuery,
@@ -28,7 +31,19 @@ pub(crate) enum DiscoverySource<'a> {
     Postgres(&'a PostgresBackend),
 }
 
-impl DiscoverySource<'_> {
+impl<'a> DiscoverySource<'a> {
+    pub(crate) fn route(&self) -> BackendRoute<'a> {
+        match self {
+            Self::Postgres(backend) => backend.route(),
+        }
+    }
+
+    pub(crate) fn prepare(&self, query: &ParsedQuery) -> PgWireResult<ParsedQuery> {
+        match self {
+            Self::Postgres(_) => postgres::prepare_discovery(query)
+                .map_err(|_| postgres::error_response("54000", "metadata query exceeds its bound")),
+        }
+    }
     /// The source handler supplies the PostgreSQL version advertised to clients.
     pub(crate) async fn server_version(&self) -> PgWireResult<String> {
         match self {

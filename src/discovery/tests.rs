@@ -35,6 +35,28 @@ fn dbeaver_discovery_queries_bypass_ordinary_routing() {
 }
 
 #[test]
+fn psycopg2_driver_discovery_stays_on_its_configured_source() {
+    let queries: Vec<String> =
+        serde_json::from_str(include_str!("../../tests/fixtures/psycopg2_discovery.json")).unwrap();
+    for sql in queries {
+        assert!(
+            classify(&ParsedQuery::parse(&sql).unwrap()).is_some(),
+            "{sql}"
+        );
+    }
+    for sql in [
+        "SELECT json_build_object('value', (SELECT email FROM users)) FROM pg_class",
+        "SELECT public.json_build_object('value', relname) FROM pg_class",
+        "SELECT json_build_object('value', public.secret()) FROM pg_class",
+    ] {
+        assert!(
+            classify(&ParsedQuery::parse(sql).unwrap()).is_none(),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn discovery_classification_does_not_grant_application_access() {
     for sql in [
         "SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname",

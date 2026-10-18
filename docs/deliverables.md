@@ -67,6 +67,10 @@
   - [x] **Verified Redis transport** — Supports rediss URLs, CA overrides and optional client identities for both cache and dataset connections while retaining existing deadlines and failure behavior.
   - [x] **Library and host setup** — Provides certificate configuration, server/client setup instructions, and a compiling fixed/routed library example.
   - [x] **Automated transport verification** — Exercises disposable TLS services, certificate rejection, encrypted cancellation, bounds/disconnect recovery, configuration-relative paths, discovery, cache replay, and dataset refresh.
+- [x] **Read-only frontend transactions** — Support bounded native client transactions
+  - [x] **Pending transactions and affinity** — Handle BEGIN/COMMIT/ROLLBACK and pin the first actual target/login/compute binding, including overflow.
+  - [x] **Failure state and cleanup** — Preserve I/T/E status, rollback recovery, cancellation, idle/message deadlines, and verified lease cleanup.
+  - [x] **Transactional setup and cache scope** — Restore supported settings on rollback, retain them on commit, isolate autocommit cache scope, and bypass cache inside transactions.
 - [ ] End to End testing with BI tools and Postgres Backend
 
 ## Phase 2 — Additional engines, dynamic masking, and management

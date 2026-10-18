@@ -5,10 +5,13 @@ pub(crate) mod cache;
 mod connection;
 mod discovery;
 mod pool;
+mod transaction;
+
+pub(crate) use transaction::PostgresTransaction;
 
 use connection::validate_text_fields;
-pub(super) use discovery::discover;
-use pool::{ConnectionBudget, InstanceState, Lease, PgManager};
+pub(super) use discovery::{discover, prepare as prepare_discovery};
+use pool::{ConnectionBudget, InstanceState, PgManager};
 
 use crate::{
     config::{BackendConfig, BackendSettings},
@@ -19,7 +22,7 @@ use deadpool::managed::Pool;
 use futures::{Sink, SinkExt};
 use pgwire::{
     error::{ErrorInfo, PgWireError, PgWireResult},
-    messages::{PgWireBackendMessage, response::TransactionStatus},
+    messages::PgWireBackendMessage,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -255,7 +258,7 @@ pub struct BackendRoute<'a> {
     candidates: Vec<&'a PostgresBackend>,
 }
 
-impl BackendRoute<'_> {
+impl<'a> BackendRoute<'a> {
     pub fn selection(&self) -> &BackendSelection {
         &self.selection
     }
@@ -265,7 +268,13 @@ impl BackendRoute<'_> {
         self.candidates[0]
     }
 
-    pub async fn acquire(&self) -> PgWireResult<BackendLease<'_>> {
+    pub(crate) fn contains(&self, backend: &PostgresBackend) -> bool {
+        self.candidates
+            .iter()
+            .any(|candidate| std::ptr::eq(*candidate, backend))
+    }
+
+    pub async fn acquire(&self) -> PgWireResult<BackendLease<'a>> {
         let deadline = tokio::time::Instant::now() + self.candidates[0].acquire_timeout;
         let budget = &self.candidates[0].budget;
         loop {
@@ -318,7 +327,7 @@ impl Drop for AdmissionPermit {
     }
 }
 
-impl BackendLease<'_> {
+impl<'a> BackendLease<'a> {
     pub fn backend(&self) -> &PostgresBackend {
         self.backend
     }
@@ -365,8 +374,8 @@ impl BackendLease<'_> {
         .await
     }
 
-    async fn execute_with_setup<S>(
-        mut self,
+    pub(crate) async fn execute_with_setup<S>(
+        self,
         query: &ParsedQuery,
         output: &mut S,
         query_timeout: Duration,
@@ -382,81 +391,21 @@ impl BackendLease<'_> {
         query
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
-        let mut lease = Lease(self.object.take());
-        let connection = lease.0.as_mut().unwrap();
-        connection.clean = false;
-        connection.query_complete = false;
-        connection.cancel_requested = false;
-        let transaction = format!(
-            "BEGIN READ ONLY; SET LOCAL statement_timeout = '{}ms'; SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
-            query_timeout.as_millis(),
-            query_timeout.max(write_timeout).as_millis(),
-        );
-        timeout(CONNECT_TIMEOUT, connection.control(&transaction))
-            .await
-            .map_err(|_| error_response("08006", "PostgreSQL transaction setup timed out"))??;
-        if connection.status != TransactionStatus::Transaction {
-            return Err(error_response(
-                "08006",
-                "unexpected PostgreSQL transaction state",
-            ));
-        }
-        if let Some(setup) = setup {
-            timeout(CONNECT_TIMEOUT, connection.control(setup))
-                .await
-                .map_err(|_| error_response("08006", "PostgreSQL metadata setup timed out"))??;
-        }
-        let completion = connection
-            .stream_query(query.sql(), output, query_timeout, write_timeout, cancel)
+        let mut transaction = self
+            .begin(query_timeout, query_timeout.max(write_timeout))
+            .await?;
+        let completion = transaction
+            .execute(query, output, query_timeout, write_timeout, cancel, setup)
             .await;
-        let cancel_requested = connection.cancel_requested;
-        if !connection.query_complete {
-            return completion.map(|_| false);
-        }
-        if connection.status != TransactionStatus::Transaction
-            && connection.status != TransactionStatus::Error
-        {
-            return Err(error_response(
-                "08006",
-                "unexpected PostgreSQL transaction state",
-            ));
-        }
-        let cleanup = timeout(CLEANUP_TIMEOUT, async {
-            connection.control("ROLLBACK").await?;
-            connection.control("DISCARD ALL").await?;
-            connection.control(SESSION_DEFAULTS).await?;
-            if connection.status != TransactionStatus::Idle {
-                return Err(error_response(
-                    "08006",
-                    "PostgreSQL cleanup could not be verified",
-                ));
-            }
-            connection.control("SELECT 1").await?;
-            connection.clean = true;
-            Ok(())
-        })
-        .await
-        .map_err(|_| error_response("08006", "PostgreSQL cleanup timed out"))
-        .and_then(|result| result);
-        if let Err(error) = cleanup {
+        let reusable = transaction.usable();
+        if let Err(error) = transaction.finish(false).await {
             return Err(completion.err().unwrap_or(error));
         }
-        let message = match completion {
-            Ok(message) => message,
-            Err(error) => {
-                if !cancel_requested {
-                    lease.release();
-                }
-                return Err(error);
-            }
-        };
+        let message = completion?;
         timeout(write_timeout, output.send(message))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out"))??;
-        if !cancel_requested {
-            lease.release();
-        }
-        Ok(!cancel_requested)
+        Ok(reusable)
     }
 }
 
@@ -700,7 +649,7 @@ impl PostgresBackends {
     }
 }
 
-fn error_response(code: &str, message: &str) -> PgWireError {
+pub(super) fn error_response(code: &str, message: &str) -> PgWireError {
     PgWireError::UserError(Box::new(ErrorInfo::new(
         "ERROR".into(),
         code.into(),

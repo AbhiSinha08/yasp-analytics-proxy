@@ -243,7 +243,7 @@ def forwarding_checks(schema):
         f"WITH changed AS (DELETE FROM {schema}.orders RETURNING *) SELECT * FROM changed",
         f"SELECT * INTO {schema}.unwanted_table FROM {schema}.users", f"SELECT * FROM {schema}.users FOR UPDATE",
         f"SELECT * FROM (SELECT * FROM {schema}.users FOR SHARE) locked",
-        "SELECT 1; SELECT 2", "BEGIN", "SET ROLE public", "COPY t TO STDOUT",
+        "SELECT 1; SELECT 2", "SET ROLE public", "COPY t TO STDOUT",
     ]:
         result = psql(query, "SELECT 1")
         assert "0A000" in result.stderr and result.stdout.strip() == "1", (query, result)
@@ -812,10 +812,31 @@ def gateway_settings_checks(directory):
             assert result.returncode == 0 and result.stdout.strip() == "t", result
             result = psql("SELECT pg_sleep(3)", "SELECT 1", timeout=6)
             assert "57014" in result.stderr and result.stdout.strip() == "1", result
+            result = psql("BEGIN", "SELECT pg_sleep(3)", "SELECT 1", "ROLLBACK", "SELECT 1", timeout=6)
+            assert "57014" in result.stderr and "25P02" in result.stderr, result
+            assert result.stdout.strip().endswith("ROLLBACK\n1"), result
+            for partial_message in [False, True]:
+                with authenticated_socket() as idle_transaction:
+                    idle_transaction.sendall(packet(b"Q", b"BEGIN\0"))
+                    assert responses(idle_transaction)[-1] == (b"Z", b"T")
+                    idle_transaction.sendall(packet(b"Q", b"SELECT pg_backend_pid()\0"))
+                    result = responses(idle_transaction)
+                    pid = int(next(value for kind, value in result if kind == b"D")[6:])
+                    if partial_message:
+                        idle_transaction.sendall(b"Q\0\0")
+                    time.sleep(0.3)
+                    closed(idle_transaction)
+                remaining = psql(f"SELECT count(*) FROM pg_stat_activity WHERE pid={pid}", backend=True)
+                assert remaining.stdout.strip() == "0", remaining
             # An authenticated idle frontend is closed by the message-read deadline.
             with authenticated_socket() as idle:
                 time.sleep(0.3)
                 closed(idle)
+            with authenticated_socket() as pending:
+                pending.sendall(packet(b"Q", b"BEGIN\0"))
+                assert responses(pending)[-1] == (b"Z", b"T")
+                time.sleep(0.3)
+                closed(pending)
             with authenticated_socket() as partial:
                 partial.sendall(b"Q\0\0")
                 time.sleep(0.3)
@@ -893,6 +914,91 @@ def gateway_settings_checks(directory):
         health()
 
 
+def transaction_checks(schema):
+    def query(stream, sql, status=b"T", code=None, tag=None):
+        stream.sendall(packet(b"Q", sql.encode() + b"\0"))
+        result = responses(stream)
+        assert result[-1] == (b"Z", status), (sql, result)
+        errors = [value for kind, value in result if kind == b"E"]
+        assert bool(errors) == bool(code), (sql, errors)
+        if code:
+            assert b"C" + code.encode() + b"\0" in errors[0], (sql, errors)
+        if tag:
+            assert (b"C", tag.encode() + b"\0") in result, (sql, result)
+        return [value for kind, value in result if kind == b"D"]
+
+    with authenticated_socket() as stream:
+        for end in ["ROLLBACK", "COMMIT"]:
+            query(stream, "BEGIN", tag="BEGIN")
+            query(stream, end, b"I", tag=end)
+        query(stream, "ROLLBACK", b"I", tag="ROLLBACK")
+        query(stream, "COMMIT", b"I", tag="COMMIT")
+        query(stream, "BEGIN")
+        stream.sendall(packet(b"P", b"probe\0SELECT 1\0\0\0") + packet(b"S"))
+        result = responses(stream)
+        assert [kind for kind, _ in result] == [b"E", b"Z"] and result[-1][1] == b"E", result
+        query(stream, "ROLLBACK", b"I")
+        # Fresh psycopg2/SQLAlchemy connections use these three transaction groups.
+        for probes in [
+            ["SELECT t.oid, typarray FROM pg_type t JOIN pg_namespace ns ON typnamespace = ns.oid WHERE typname = 'hstore'"],
+            ["select pg_catalog.version()", "select current_schema()",
+             "show transaction isolation level", "show standard_conforming_strings"],
+            ["SELECT 1"],
+        ]:
+            query(stream, "BEGIN")
+            for probe in probes:
+                query(stream, probe)
+            query(stream, "ROLLBACK", b"I")
+        query(stream, "BEGIN")
+        for probe in json.loads((ROOT / "tests/fixtures/psycopg2_discovery.json").read_text()):
+            query(stream, probe)
+        query(stream, "ROLLBACK", b"I")
+        query(stream, "START TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
+        pid = query(stream, "SELECT pg_backend_pid()")
+        assert query(stream, "SELECT pg_backend_pid()") == pid
+        query(stream, "COMMIT", b"I")
+        for bad, code in [("SELECT 1 / 0", "22012"), ("SELECT FROM", "42601"),
+                          ("SELECT 1; SELECT 2", "0A000"), ("SAVEPOINT x", "0A000"),
+                          ("BEGIN", "25001"), ("COMMIT AND CHAIN", "0A000")]:
+            query(stream, "BEGIN")
+            query(stream, bad, b"E", code)
+            query(stream, "SHOW application_name", b"E", "25P02")
+            query(stream, "SELECT 1", b"E", "25P02")
+            query(stream, "COMMIT", b"I", tag="ROLLBACK")
+            query(stream, "SELECT 1", b"I")
+        for bad in ["BEGIN READ WRITE", "BEGIN ISOLATION LEVEL REPEATABLE READ",
+                    "START TRANSACTION ISOLATION LEVEL SERIALIZABLE", "ROLLBACK TO x"]:
+            query(stream, bad, b"I", "0A000")
+
+        query(stream, "SET application_name = 'before'", b"I")
+        query(stream, "BEGIN")
+        query(stream, "SET application_name = 'rolled back'")
+        query(stream, f'SET search_path = "{schema}"')
+        assert schema.encode() in query(stream, "SELECT current_schema()")[0]
+        query(stream, "ROLLBACK", b"I")
+        assert b"before" in query(stream, "SHOW application_name", b"I")[0]
+        assert b"public" in query(stream, "SELECT current_schema()", b"I")[0]
+        query(stream, "BEGIN")
+        query(stream, f'SET search_path = "{schema}"')
+        query(stream, "SET application_name = 'committed'")
+        query(stream, "COMMIT", b"I")
+        # Session settings survive commit and apply to ordinary execution too.
+        assert schema.encode() in query(stream, "SELECT current_schema()", b"I")[0]
+        assert b"committed" in query(stream, "SELECT current_setting('application_name')", b"I")[0]
+        query(stream, "SELECT count(*) FROM users", b"I")
+
+    with authenticated_socket() as disconnected:
+        query(disconnected, "BEGIN")
+        pid = int(query(disconnected, "SELECT pg_backend_pid()")[0][6:])
+    deadline = time.monotonic() + 3
+    while True:
+        remaining = psql(f"SELECT count(*) FROM pg_stat_activity WHERE pid={pid}", backend=True)
+        if remaining.stdout.strip() == "0":
+            break
+        assert time.monotonic() < deadline, "disconnect retained a transaction lease"
+        time.sleep(0.02)
+
+
 def main():
     with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as probe:
         assert probe.connect_ex(ADDRESS) != 0, "ephemeral gateway port was occupied before startup"
@@ -913,6 +1019,7 @@ def main():
                 assert psql("  sElEcT\t1 ;  ").stdout.strip() == "1"
                 forwarding_checks(schema)
                 discovery_checks(schema)
+                transaction_checks(schema)
                 wire_checks()
                 backend_recovery_checks(schema)
                 pool_checks()

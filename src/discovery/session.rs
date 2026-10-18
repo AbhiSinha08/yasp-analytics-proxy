@@ -26,6 +26,7 @@ pub(crate) fn fixed_setting(name: &str) -> Option<&'static str> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SessionSettings {
     pub search_path: String,
     pub application_name: String,
@@ -41,6 +42,7 @@ impl Default for SessionSettings {
 }
 
 pub(crate) enum SetupResponse {
+    Command(&'static str),
     Set {
         parameter: Option<(&'static str, String)>,
     },
@@ -51,6 +53,15 @@ pub(crate) enum SetupResponse {
 }
 
 impl SessionSettings {
+    /// Replay only the bounded frontend settings; protected text settings stay fixed.
+    pub(crate) fn setup_sql(&self) -> String {
+        format!(
+            "SELECT pg_catalog.set_config('search_path', '{}', true); SET LOCAL application_name = '{}'",
+            self.search_path.replace('\'', "''"),
+            self.application_name.replace('\'', "''"),
+        )
+    }
+
     pub fn set_search_path(&mut self, value: &str) -> Result<(), &'static str> {
         if value.len() > 1024 || value.contains('\0') || !valid_search_path(value) {
             return Err("unsupported or oversized metadata search path");
@@ -126,6 +137,7 @@ impl SessionSettings {
                 let value = match setting.as_str() {
                     "search_path" => Some(self.search_path.as_str()),
                     "application_name" => Some(self.application_name.as_str()),
+                    "transaction isolation level" => fixed_setting("transaction_isolation"),
                     _ => fixed_setting(&setting),
                 };
                 if let Some(value) = value {
@@ -133,6 +145,7 @@ impl SessionSettings {
                         "datestyle" => "DateStyle",
                         "timezone" => "TimeZone",
                         "intervalstyle" => "IntervalStyle",
+                        "transaction isolation level" => "transaction_isolation",
                         _ => &setting,
                     };
                     return Ok(Some(SetupResponse::Show {

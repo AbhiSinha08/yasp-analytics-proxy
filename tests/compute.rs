@@ -171,6 +171,42 @@ fn compute_types_overflow_share_capacity_and_reclaim_idle_connections() {
         assert!(text(&overflow).contains(&databases[1].connection.identity.database));
         assert!(text(&overflow).contains(&reader.identity.user));
 
+        let pinned = client.queries(&[
+            "BEGIN",
+            "SELECT pg_backend_pid(), current_database() /* limited */",
+            "SELECT pg_backend_pid(), current_database() /* limited */",
+            "COMMIT",
+        ]);
+        assert_success(&pinned, "transaction retains its actual overflow instance");
+        let output = text(&pinned);
+        let rows: Vec<_> = output.lines().filter(|line| line.contains('|')).collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], rows[1]);
+        assert!(rows[0].contains(&databases[1].connection.identity.database));
+
+        let conflict = client.queries(&[
+            "BEGIN",
+            "SELECT pg_backend_pid(), current_database() /* limited */",
+            "SELECT 'escaped', current_database() /* limited large_compute */",
+            "SELECT 'still_failed' /* limited */",
+            "ROLLBACK",
+            "SELECT 'after_conflict' /* limited */",
+        ]);
+        let errors = String::from_utf8_lossy(&conflict.stderr);
+        assert!(
+            errors.contains("25000"),
+            "compute change must fail: {errors}"
+        );
+        assert!(
+            errors.contains("25P02"),
+            "transaction must stay failed: {errors}"
+        );
+        let output = text(&conflict);
+        assert!(!output.contains("escaped"));
+        assert!(!output.contains("still_failed"));
+        assert!(!output.contains(&databases[2].connection.identity.database));
+        assert!(output.contains("after_conflict"));
+
         let large =
             client.query("SELECT 'ordinary', current_database(), current_user /* large_compute */");
         assert_success(&large, "large class reclaims idle source capacity");

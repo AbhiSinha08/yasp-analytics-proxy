@@ -147,7 +147,8 @@ Session, SQL, context, and timeout limits must be positive. Frontend frames must
 between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
 Backend connection and cleanup deadlines are fixed at 10 seconds. Acquisition
 uses `backend.acquire_timeout_ms`, which defaults to 60,000 ms. PostgreSQL
-transaction-local idle timeout uses the larger query/write budget.
+transaction-local idle timeout uses the larger query/write budget for autocommit
+execution and `read_timeout_ms` for explicit client transactions.
 Prepared-statement and portal settings remain future configuration.
 
 ## Shared application datasets
@@ -229,16 +230,50 @@ set PostgreSQL driver properties `preferQueryMode=simple`, `prepareThreshold=0`,
 after configuration changes. Discovery supports the recorded psql 18 and DBeaver
 query fixtures; this does not establish general BI compatibility.
 
-`SET application_name` accepts at most 63 UTF-8 bytes. Discovery-only `SET search_path`
+For all BI tools using psycopg2, enable autocommit so ordinary reads can use YASP's
+result cache. For SQLAlchemy connections, set the engine's `isolation_level` to
+`AUTOCOMMIT`. In BI connection settings that accept `engine_params` JSON, use:
+
+```json
+{"engine_params":{"isolation_level":"AUTOCOMMIT"}}
+```
+
+For direct psycopg2 connections, set `connection.autocommit = True`.
+Psycopg2 uses simple queries and does not accept JDBC's `preferQueryMode` option.
+Its default transactions are supported, but explicit transactions bypass YASP's
+result cache. Disable the BI tool's query-result cache so YASP owns result caching.
+
+`SET application_name` accepts at most 63 UTF-8 bytes. `SET search_path`
 accepts at most 1,024 bytes and 16 entries; an explicit `pg_catalog` must be first.
 Matching SHOW requests read frontend state. These startup parameters use the same
-bounds. Ordinary reads retain the source's normal search path.
+bounds. Both settings are replayed for ordinary and metadata reads and participate
+in ordinary result-cache scope. Changes inside a client transaction survive commit
+and are restored on rollback.
 
 Clients may reaffirm fixed UTF8 encoding, standard strings on, DateStyle `ISO, MDY`,
 TimeZone `UTC`, IntervalStyle `postgres`, bytea output `hex`, extra float digits `3`,
-read-only mode on, and `read committed` isolation. Other settings, roles, client
-transactions, and extended-query execution are unsupported. Startup probes the
+read-only mode on, and `read committed` isolation. `SHOW TRANSACTION ISOLATION LEVEL`
+also reports this fixed isolation level. Other settings, roles, and extended-query
+execution are unsupported. Startup probes the
 source version; restart after a source version upgrade.
+
+### Read-only client transactions
+
+`BEGIN` and `START TRANSACTION` support the fixed `READ ONLY`, `READ COMMITTED`
+policy, followed by `COMMIT` or `ROLLBACK`. A pending transaction acquires no backend
+until its first source query. That query pins the actual target/login/compute
+connection; later decisions must permit it. A conflicting discovery binding also
+fails. Empty commit/rollback needs no backend or routing metadata.
+
+Errors leave the transaction failed: subsequent queries receive `25P02` until
+rollback, and commit in failed state rolls back. `read_timeout_ms` bounds idle and
+partial-message transactions. Explicit transactions bypass result-cache reads and
+writes. Read-write requests, other isolation levels, nested BEGIN, savepoints,
+chained transactions, and procedural BEGIN blocks are unsupported.
+
+Native transactions support psycopg2/SQLAlchemy connection probes and ping.
+SQL-based query cancellation is outside this supported subset; PostgreSQL wire
+cancellation remains supported.
 
 ## Redis result cache
 

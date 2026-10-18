@@ -5,6 +5,7 @@ mod query;
 mod routing;
 mod server;
 mod session;
+mod transaction;
 mod transport;
 
 use crate::transport::FrameGuard;

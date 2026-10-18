@@ -62,7 +62,11 @@ scenario and verifies resource removal.
 Routing and cache scenarios live under their matching subdirectories. Shared fixture
 ownership is under `support/`; PostgreSQL drivers remain in the real engine adapters.
 The Python feature adds routed selection, context, and cache callback scenarios.
-Captured psql/DBeaver protocol replay does not establish full BI-client compatibility.
+Native transaction scenarios cover frontend status and recovery, retained physical
+connections, route/discovery/compute conflicts, transactional setup, cache bypass
+and session scope, cancellation, disconnects, and idle/partial-message deadlines.
+The captured psycopg2/SQLAlchemy driver sequence is replayed by `gateway`.
+Captured protocol replay does not establish full BI-client compatibility.
 Future phase coverage belongs in [the plan](../docs/PLAN.md).
 
 ## Existing test services

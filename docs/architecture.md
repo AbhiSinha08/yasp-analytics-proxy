@@ -48,7 +48,11 @@ not only another connection driver.
 ```mermaid
 flowchart TD
     Query[Simple-query message] --> Parse[Bounded parse]
-    Parse --> Setup{Recognized setup command?}
+    Parse --> Control{Transaction control?}
+    Control -->|yes| TxControl[Begin pending transaction or finish pinned work]
+    Control -->|no| Usable{Transaction usable?}
+    Usable -->|no| Aborted[Reject until rollback]
+    Usable -->|yes| Setup{Recognized setup command?}
     Setup -->|yes| Local[Update or read frontend state]
     Setup -->|no| ReadOnly[Validate read-only statement]
     ReadOnly --> Metadata{Recognized metadata query?}
@@ -56,7 +60,9 @@ flowchart TD
     Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
     DatasetRead --> Context[Derive optional bounded context]
     Context --> Route[Resolve target, login, and optional compute type]
-    Route --> Eligible{Cache enabled and eligible?}
+    Route --> Explicit{Explicit transaction?}
+    Explicit -->|yes| Pin[Validate affinity and pin first backend]
+    Explicit -->|no| Eligible{Cache enabled and eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
     Lookup -->|hit| Replay[Replay PostgreSQL response]
     Lookup -->|miss or no budget| Allocate[Overflow within type; reserve shared capacity]
@@ -68,8 +74,15 @@ flowchart TD
     Complete --> Cacheable{Caching allowed and capture complete?}
     Cacheable -->|yes| Store[Write bounded cache entry]
     Cacheable -->|no| Ready
-    Local --> Ready[ReadyForQuery]
-    Discovery --> Ready
+    Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
+    TxControl --> Ready
+    Aborted --> Ready
+    Discovery --> MetadataTxn{Explicit transaction?}
+    MetadataTxn -->|yes| Pin
+    MetadataTxn -->|no| DiscoverOnce[Execute metadata and clean up]
+    DiscoverOnce --> Ready
+    Pin --> PinnedExecute[Execute on retained connection without result cache]
+    PinnedExecute --> Ready
     Replay --> Ready
     Store --> Ready
 ```
@@ -122,8 +135,8 @@ source authentication while instance limits cover all logins together.
 
 Physical connection budgets include idle sessions and remain held until socket
 closure. Idle pressure reclamation lets a different login use shared capacity.
-Queries wait asynchronously under a fixed 10-second acquisition deadline when
-capacity is exhausted, then receive `53300`. Session limits bound waiting queries;
+Queries wait asynchronously under `backend.acquire_timeout_ms` when capacity is
+exhausted, then receive `53300`. Session limits bound waiting queries;
 Redis query queuing is future work. Cache replay acquires no compute lease.
 
 ## Discovery and frontend state
@@ -137,10 +150,20 @@ The PostgreSQL handler qualifies native names, limits database listings to the
 source database, and applies discovery session state inside the existing read-only
 transaction. The source must be reachable at startup to supply its server version.
 
-Frontend state supports `application_name`, a discovery-only `search_path`, matching
-SHOW requests, and reaffirming fixed encoding/text/read-only settings. This is not
-client transaction support. Ordinary queries use the backend's normal search path;
-use schema-qualified application tables. Client setup is in [configuration](configuration.md#discovery-and-client-setup).
+Frontend state supports bounded `application_name` and `search_path`, matching SHOW
+requests, and reaffirming fixed encoding/text/read-only settings. Both discovery
+and ordinary execution replay these settings. Explicit transactions retain their
+initial frontend settings for rollback; commit preserves supported changes.
+Autocommit cache scope includes these settings. Client setup is in
+[configuration](configuration.md#discovery-and-client-setup).
+
+`BEGIN` records a pending read-only, read-committed transaction without selecting a
+backend. The first backend operation pins its actual physical connection. Each
+ordinary statement still runs context and selection; its route must permit that
+connection. Discovery retains its independently configured binding and fails on a
+conflicting pin. Transaction controls need no context or fresh selection. Explicit
+transactions bypass cache reads and writes. Errors produce failed transaction
+status until rollback; commit in failed state rolls back.
 
 ## Sessions, cancellation, and cleanup
 
@@ -162,9 +185,19 @@ sequenceDiagram
         Adapter->>PG: Dedicated CancelRequest with source TLS policy if executing
     end
     PG-->>Adapter: Rows, completion, or query error
-    Adapter->>PG: Rollback and reset when protocol state permits
-    Adapter-->>Session: Completion or error - release only a verified idle lease
-    Session-->>Client: Response and ReadyForQuery
+    alt Autocommit query
+        Adapter->>PG: Rollback and reset when protocol state permits
+        Adapter-->>Session: Completion or error - release only a verified idle lease
+        Session-->>Client: Response and idle ReadyForQuery
+    else Explicit transaction
+        Adapter-->>Session: Completion or error - retain pinned lease
+        Session-->>Client: Response and transaction or failed ReadyForQuery
+        Client->>Session: COMMIT or ROLLBACK
+        Session->>Adapter: End pinned transaction without selection
+        Adapter->>PG: Commit or rollback, reset and verify idle
+        Adapter-->>Session: Release clean lease or discard uncertain connection
+        Session-->>Client: Completion and idle ReadyForQuery
+    end
 ```
 
 TLS material loads before session admission. Frame bounds apply to decrypted
@@ -176,7 +209,9 @@ The gateway admits bounded extra cancel-only connections even when normal sessio
 slots are occupied. Cancellation can stop context, selection, cache waits, or active
 backend work; backend cancellation uses a separate PostgreSQL connection. A cancelled
 lease is discarded, preventing a delayed cancel from reaching a future borrower.
-Cancellation reports `57014` and the frontend session can continue. A disconnect
+Cancellation reports `57014`; explicit transactions require rollback before further
+queries. The message-read deadline bounds idle and partial-message transactions,
+including pending transactions. A disconnect
 abandons its active execution; interrupted or unhealthy leases are discarded.
 
 Reusable leases require rollback, `DISCARD ALL`, restoration of fixed settings,
@@ -195,8 +230,9 @@ cache scope, validation, and replay in `backend/postgres/cache.rs`.
 Shared Redis code stores a versioned opaque payload under a namespace and normalized
 SQL SHA-256 identifier together with configured target/login names. Separate named
 pairs retain separate entries. Scope also validates frontend identity/database,
-compute instance, backend endpoint/database/user, fixed text settings, query/write
-timers, and codec version. Different physical scopes within a named pair can
+compute instance, backend endpoint/database/user, fixed text settings, effective
+search path and application name, query/write timers, and codec version.
+Different physical scopes within a named pair can
 replace its SQL slot; validation prevents cross-scope replay. Derived context does
 not partition cache entries.
 
