@@ -19,6 +19,43 @@ fn psql_discovery_queries_use_the_catalog_route() {
 }
 
 #[test]
+fn metabase_schema_sync_uses_discovery_without_application_access() {
+    let queries: Vec<String> =
+        serde_json::from_str(include_str!("../../tests/fixtures/metabase_discovery.json")).unwrap();
+    for sql in queries.iter().map(String::as_str).chain([
+        "WITH a AS (SELECT relname FROM pg_class), b AS (SELECT * FROM a) SELECT * FROM b",
+        "WITH \"Meta\" AS (SELECT relname FROM pg_class) SELECT * FROM \"Meta\"",
+        "WITH a AS (SELECT relname FROM pg_class) SELECT * FROM (WITH b AS (SELECT * FROM a) SELECT * FROM b) s",
+    ]) {
+        assert_eq!(classify(&ParsedQuery::parse(sql).unwrap()), Some(DiscoveryKind::Catalog), "{sql}");
+    }
+    for sql in [
+        "WITH t AS (SELECT * FROM users) SELECT * FROM t JOIN pg_class ON true",
+        "WITH t AS (SELECT * FROM pg_class) SELECT * FROM t JOIN users ON true",
+        "WITH t AS (SELECT * FROM pg_class), unused AS (SELECT * FROM users) SELECT * FROM t",
+        "WITH t AS (SELECT * FROM pg_class) SELECT public.secret() FROM t",
+        "WITH t AS (SELECT * FROM users), users AS (SELECT * FROM pg_class) SELECT * FROM t",
+        "WITH users AS (SELECT * FROM users UNION SELECT * FROM pg_class) SELECT * FROM users",
+        "SELECT * FROM (WITH users AS (SELECT * FROM pg_class) SELECT * FROM users) s JOIN users ON true",
+        "WITH \"Meta\" AS (SELECT * FROM pg_class) SELECT * FROM meta",
+        "WITH t AS (SELECT * FROM pg_class) SELECT * FROM public.t",
+        "WITH pg_class AS (SELECT * FROM pg_namespace) SELECT * FROM pg_class",
+        "WITH RECURSIVE t AS (SELECT * FROM pg_class) SELECT * FROM t",
+        "WITH t AS (DELETE FROM users RETURNING *) SELECT * FROM t",
+        "SELECT format('%s', (SELECT email FROM users)) FROM pg_class",
+        "SELECT public.format('%s', relname) FROM pg_class",
+        "SELECT * FROM public.pg_stat_user_tables",
+        "SELECT * FROM pg_stat_user_tables WHERE EXISTS (SELECT 1 FROM users)",
+        "SELECT * FROM pg_stats",
+    ] {
+        assert!(
+            classify(&ParsedQuery::parse(sql).unwrap()).is_none(),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn dbeaver_discovery_queries_bypass_ordinary_routing() {
     let queries: Vec<String> =
         serde_json::from_str(include_str!("../../tests/fixtures/dbeaver_discovery.json")).unwrap();

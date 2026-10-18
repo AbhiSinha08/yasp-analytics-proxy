@@ -144,8 +144,10 @@ Redis query queuing is future work. Cache replay acquires no compute lease.
 Recognized catalog reads use the configured discovery target/login and optional
 compute instance, sharing capacity limits while bypassing
 application hooks and the result cache. The frontend classifier checks nested
-relations, functions, and casts. Mixed application/catalog reads, CTE queries, and
-unrecognized helpers follow ordinary routing. Source-role visibility still applies.
+relations, functions, and casts, including nonrecursive metadata-only CTEs.
+Mixed application/catalog reads, recursive CTEs, CTEs that shadow native catalog
+names, and unrecognized helpers follow ordinary routing. Source-role visibility
+still applies.
 The PostgreSQL handler qualifies native names, limits database listings to the
 source database, and applies discovery session state inside the existing read-only
 transaction. The source must be reachable at startup to supply its server version.

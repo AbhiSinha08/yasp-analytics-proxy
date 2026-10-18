@@ -85,6 +85,33 @@ pub(super) fn metadata_discovery(
         );
     }
     assert_eq!(callback_count.load(Ordering::SeqCst), before);
+    let metabase: Vec<String> =
+        serde_json::from_str(include_str!("../fixtures/metabase_discovery.json")).unwrap();
+    for (index, query) in metabase.iter().enumerate() {
+        let forwarded = client(&[&format!("{query}\n/* route_denied */")]);
+        assert!(
+            forwarded.status.success(),
+            "Metabase discovery query {}: {}",
+            index + 1,
+            String::from_utf8_lossy(&forwarded.stderr)
+        );
+        let direct = maintenance(query, &database_names[0]);
+        let sorted = |output: &Output| {
+            let mut lines: Vec<_> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            lines.sort();
+            lines
+        };
+        assert_eq!(
+            sorted(&forwarded),
+            sorted(&direct),
+            "Metabase discovery query {}",
+            index + 1
+        );
+    }
+    assert_eq!(callback_count.load(Ordering::SeqCst), before);
     let mixed_queries = [
         "SELECT u.id FROM pg_class c CROSS JOIN public.users u LIMIT 1 /* route_denied */",
         "SELECT id FROM public.users LIMIT 10000 /* route_denied */",
@@ -94,6 +121,7 @@ pub(super) fn metadata_discovery(
         "SELECT pg_read_file('/etc/passwd') FROM pg_extension /* route_denied */",
         "SELECT pg_stat_get_activity(NULL) FROM pg_extension /* route_denied */",
         "SELECT most_common_vals::text FROM pg_stats /* route_denied */",
+        "WITH t AS (SELECT * FROM public.users) SELECT * FROM t JOIN pg_class ON true /* route_denied */",
     ];
     let mixed = client(&mixed_queries);
     assert!(String::from_utf8_lossy(&mixed.stderr).contains("42501"));

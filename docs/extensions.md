@@ -176,6 +176,40 @@ to that future contract. See [Phase 2](PLAN.md#phase-2--additional-engines-dynam
 | Load balancing                            | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and prepared-state pinning are later milestones.                                                       |
 | Management or UI                          | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet.                                                                           |
 
+### Observed SQL context from local BI traffic
+
+The 2026-10-18 local capture showed these chart-query formats:
+
+| Tool | SQL shape observed | Context available in the captured SQL |
+| ---- | ----------------- | ------------------------------------- |
+| Metabase | A leading line comment, `-- Metabase:: userID: <id> queryType: <type> queryHash: <hash>`, followed by native SQL. The session also sent `SET application_name = 'Metabase v0.64.2.8 [<instance-id>]'`. | `userID`, `queryType` (observed as `native`), and `queryHash`; the application name identifies the client version and instance. Repeated runs retained the query hash. |
+| Redash | A leading block comment, `/* user_id: <id>, query_id: <id>, Job ID: <uuid>, Query Hash: <hash>, Scheduled: <bool> */`, followed by SQL. | User, saved-query, job, hash, and scheduled-run fields. The capture showed `Scheduled: False`; repeated runs kept the saved-query ID and hash while changing the job ID. |
+| Superset | Generated SQL wraps a query as `SELECT ... FROM ( <dataset SQL> ) AS virtual_table`, often with outer grouping, ordering, or a `LIMIT 1000`. | No native user/query comment or equivalent SQL marker was visible. The test charts deliberately included a string literal such as `'Superset' AS bi_tool_name`; this is a test marker, not metadata emitted by Superset, and the outer query may omit it from its output columns. |
+
+Treat comment fields such as `userID` and `user_id` as client-supplied hints, never as authenticated identity or authorization evidence. The SQL log records query text and execution/cache events, but does not identify whether a run came from a dashboard refresh, a chart view, a download, or an embed. The failed support-ticket join still appeared in the received SQL, so failures do not change the observed envelope. A YASP cache hit appears as a cache-served event rather than a new backend execution.
+
+The `metabase_pg` and Redash extractors recognize the leading PostgreSQL comments
+shown above. They return normalized fields including `tool`, `user_id`,
+`query_hash`, and tool-specific values such as `query_type`, `query_id`, `job_id`,
+or `scheduled`. Malformed or nonleading comments produce no metadata.
+
+Metabase's Redshift driver overrides `query->remark` to prepend a JSON `partner`
+comment containing dashboard, chart, user, account, and filter metadata before the
+default `Metabase::` remark. The resulting SQL remark is
+`-- /* partner: "metabase", { ... } */ Metabase:: userID: ... queryType: ... queryHash: ...`.
+The `metabase_rs` extractor parses that envelope and returns the partner fields
+alongside the common Metabase fields. This format is implemented from Metabase's
+[Redshift driver source](https://github.com/metabase/metabase/blob/master/modules/drivers/redshift/src/metabase/driver/redshift.clj#L3427-L3445);
+it has not been manually tested through a YASP Redshift gateway.
+
+Superset extraction is deferred: the local 6.1.0 instance had no
+`SQL_QUERY_MUTATOR` configured, and its deployment-controlled mutation path has not
+been verified for every query path. When DEBUG logging is enabled, PostgreSQL
+queries recognized by the gateway include `bi_remark` as the normalized object or
+`null` in the `query received` event; the raw leading BI comment is omitted from
+that event's `sql` field. The metadata is diagnostic only and does not affect
+context or routing.
+
 Keep PostgreSQL-specific response types and parsing inside the relevant adapters
 as new implementations arrive. The present concrete APIs do not promise arbitrary
 cross-engine SQL translation or PostgreSQL transparency. Add reusable traits only

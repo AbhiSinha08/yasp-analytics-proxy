@@ -42,11 +42,11 @@
   - [x] **Separate Redis registry and bounded lookup API** — Read current shared values with bounded `get`, `get_many`, and full-dataset operations.
   - [x] **Scheduled refresh and recovery** — Use lease/revision protection and retain prior values after refresh errors.
   - [x] **Examples and documentation** — Provide JSON, Python, and Rust loader examples plus dataset-aware context and selection examples.
-- [ ] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
+- [x] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
   - [x] **Context hook platform** — Derives bounded application context once per validated query with async Rust or external Python callbacks.
   - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
   - [x] **Placeholder extractors** — Provides named Metabase, Superset, and Redash helper functions that report they are not implemented.
-  - [ ] **Real BI metadata extractors** — Implement and validate extraction against observed client metadata; no extractor is enabled by default.
+  - [x] **Real BI metadata extractors** — Implement and validate extraction against observed client metadata; no extractor is enabled by default.
 - [x] **Database schema discovery** — Route metadata to its configured source and verify client browsing.
   - [x] **Discovery route and inference** — Resolves a configured target/login, preserves the first declared login, and bypasses callbacks and Redis.
   - [x] **PostgreSQL metadata rules** — Recognizes bounded catalog reads, qualifies native names, and limits database listings to the current source.
@@ -82,6 +82,7 @@
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **Backend Database Schema Caching**
 - [ ] **AST Based Dynamic Masking**
+- [ ] **Redshift Gateway**
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.

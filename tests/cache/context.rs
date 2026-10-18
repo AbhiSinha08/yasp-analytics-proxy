@@ -9,6 +9,17 @@ fn context_and_metadata_bypass() {
     let password = fixture.identity.password.clone();
     let database = fixture.identity.database.clone();
     let primary = &fixture.primary;
+    primary.execute(&format!(
+        "GRANT CREATE ON SCHEMA public TO {}",
+        quote_ident(&fixture.secondary.identity.user)
+    ));
+    fixture
+        .secondary
+        .execute("CREATE TABLE public.metabase_restricted_only (discovery_column int)");
+    let discovery_route = BackendSelection {
+        target: fixture.route.target.clone(),
+        backend_login: "secondary".into(),
+    };
     let default = &fixture.route;
     let route = |login: &str| BackendSelection {
         target: default.target.clone(),
@@ -71,6 +82,7 @@ fn context_and_metadata_bypass() {
     );
     let context_gateway = GatewayConfig::new(user.clone(), password.clone(), database.clone())
         .expect("frontend identity is valid")
+        .with_schema_discovery(discovery_route.clone())
         .with_cache(context_cache)
         .with_context_hook(context_hook);
     let context_server = start_server(context_gateway, make_backends(), context_selector);
@@ -127,6 +139,34 @@ fn context_and_metadata_bypass() {
     }
     assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
     assert!(context_observations.lock().unwrap().is_empty());
+    let metabase: Vec<String> =
+        serde_json::from_str(include_str!("../fixtures/metabase_discovery.json")).unwrap();
+    for (index, query) in metabase.iter().enumerate() {
+        let result = normalized_context_hit(query);
+        assert_success(&result, "Metabase discovery with cache enabled");
+        if index == 2 {
+            assert!(
+                stdout(&result).contains("discovery_column"),
+                "column sync uses the discovery role's visibility"
+            );
+            let ordinary = primary.query(query);
+            assert_success(&ordinary, "column sync directly on ordinary role");
+            assert!(!stdout(&ordinary).contains("discovery_column"));
+        }
+        assert!(!redis_exists(
+            &redis_url,
+            &cache_key(&context_namespace, &discovery_route, query)
+        ));
+        assert!(!redis_exists(
+            &redis_url,
+            &cache_key(&context_namespace, &fixture.route, query)
+        ));
+    }
+    assert_eq!(context_sequence.load(Ordering::SeqCst), 0);
+    assert!(
+        context_observations.lock().unwrap().is_empty(),
+        "Metabase discovery bypasses context, selection, and cache eligibility"
+    );
     let information_schema_sql =
         "SELECT feature_id FROM information_schema.sql_features ORDER BY feature_id LIMIT 1";
     let result = normalized_context_hit(information_schema_sql);

@@ -39,7 +39,7 @@ where
         query_timeout,
         write_timeout,
     } = request;
-    tracing::debug!(query_id = query.query_id(), client_id, ?kind, database = ?backend.target(), database_user = %backend.database_user(), sql = ?query.sql(), "discovery query sent to backend");
+    tracing::debug!(query_id = query.query_id(), client_id, ?kind, database = ?backend.target(), database_user = %backend.database_user(), sql = ?crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(query.sql()), "discovery query sent to backend");
     let query =
         prepare(query).map_err(|_| error_response("54000", "metadata query exceeds its bound"))?;
     let setup = session.setup_sql();

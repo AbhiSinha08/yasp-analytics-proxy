@@ -130,9 +130,10 @@ implementation proceeds through requested subtasks
   Mermaid query, session, or component diagrams in the same change. Verify those
   flows against the code; mark future stages explicitly.
 - Add Sub items to the file docs/deliverables.md if a plan implements multiple
-  features or som sub-item is left delegated to the next session.
-
+features or some sub-item is left delegated to the next session. Do not modify it for minor
+changes, fixes etc. which does not affect the future plans
 <!-- trail:start -->
+
 ## Trail — repo context graph
 
 This repo is indexed in `.trail/cache/`: small linked markdown nodes that explain each
@@ -172,4 +173,5 @@ re-read whole files.
 
 After big code changes, refresh the graph with `trail build` (deterministic,
 no API key, $0).
+
 <!-- trail:end -->

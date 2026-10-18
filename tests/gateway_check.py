@@ -740,15 +740,36 @@ def derive(request, params):
         time.sleep(0.1)
         return {'deny': True}
     if 'context_helpers' in sql:
-        for helper in (yasp_extractors.metabase, yasp_extractors.superset, yasp_extractors.redash):
-            try:
-                helper(sql)
-            except NotImplementedError:
-                pass
-        return None
+        metabase = yasp_extractors.metabase_pg(
+            '-- Metabase:: userID: 42 queryType: native queryHash: abcdef\nSELECT 1')
+        assert metabase == {'tool': 'metabase', 'user_id': 42,
+                            'query_type': 'native', 'query_hash': 'abcdef'}
+        redshift = yasp_extractors.metabase_rs(
+            '-- /* partner: "metabase", {"dashboard_id":null,"chart_id":57,"optional_user_id":1,"optional_account_id":"account-1","filter_values":{"region":"west"}} */ Metabase:: userID: 1 queryType: MBQL queryHash: rs-hash\nSELECT 1')
+        assert redshift == {'tool': 'metabase', 'user_id': 1, 'query_type': 'MBQL',
+                            'query_hash': 'rs-hash', 'dashboard_id': None,
+                            'chart_id': 57, 'optional_user_id': 1,
+                            'optional_account_id': 'account-1',
+                            'filter_values': {'region': 'west'}}
+        redash = yasp_extractors.redash(
+            '/* user_id: 7, query_id: 19, Job ID: job-1, Query Hash: hash-1, Scheduled: False */ SELECT 1')
+        assert redash == {'tool': 'redash', 'user_id': 7, 'query_id': 19,
+                          'job_id': 'job-1', 'query_hash': 'hash-1', 'scheduled': False}
+        assert yasp_extractors.metabase_pg('SELECT 1 -- Metabase:: userID: 42') is None
+        assert yasp_extractors.metabase_rs('SELECT 1 -- /* partner: "metabase", {} */') is None
+        assert yasp_extractors.redash('SELECT 1 /* user_id: 7 */') is None
+        try:
+            yasp_extractors.superset('SELECT 1')
+        except NotImplementedError:
+            pass
+        else:
+            raise RuntimeError('Superset extractor must remain deferred')
+        return {'extractors_verified': True}
     return {'deny': True} if 'context_deny' in sql else None
 
 def select(request, params):
+    if 'context_helpers' in request['sql']:
+        assert request['context'].get('extractors_verified') is True
     return None if request['context'].get('deny') else params
 """)
     custom_path = Path(directory) / "config/context.yml"
@@ -784,6 +805,25 @@ def select(request, params):
                 assert b"C42501\0" in responses(stream)[0][1], "late/default context cannot replace a later snapshot"
     finally:
         ADDRESS = previous_address
+
+
+def bi_remark_logging_checks(directory):
+    environment = FRONTEND_ENV | PASSWORDS | {"LOG_LEVEL": "DEBUG"}
+    config_path = Path(directory) / "config/local.yml"
+    config_path.write_text(json.dumps(CONFIG))
+    with server(directory, config_file=config_path, **environment) as process:
+        wait_ready(process)
+        assert psql("-- Metabase:: userID: 42 queryType: native queryHash: mb-hash\nSELECT 1").stdout.strip() == "1"
+        assert psql("/* user_id: 7, query_id: 19, Job ID: job-1, Query Hash: rd-hash, Scheduled: False */ SELECT 1").stdout.strip() == "1"
+        failed = psql("/* user_id: 7, query_id: 19, Job ID: failed-job, Query Hash: fail-hash, Scheduled: False */ SELECT 1 / 0")
+        assert failed.returncode != 0
+        assert psql("SELECT 1").stdout.strip() == "1"
+    output = (Path(directory) / "server.log").read_text()
+    assert 'bi_remark={"query_hash":"mb-hash","query_type":"native","tool":"metabase","user_id":42}' in output
+    assert 'bi_remark={"job_id":"job-1","query_hash":"rd-hash","query_id":19,"scheduled":false,"tool":"redash","user_id":7}' in output
+    assert 'bi_remark={"job_id":"failed-job","query_hash":"fail-hash","query_id":19,"scheduled":false,"tool":"redash","user_id":7}' in output
+    assert "bi_remark=null" in output
+    assert "-- Metabase::" not in output and "/* user_id:" not in output
 
 
 def gateway_settings_checks(directory):
@@ -1028,6 +1068,7 @@ def main():
             custom_config_checks(directory)
             routing_config_checks(directory)
             context_config_checks(directory)
+            bi_remark_logging_checks(directory)
             gateway_settings_checks(directory)
         with socket.socket(socket.AF_INET6 if ":" in ADDRESS[0] else socket.AF_INET) as reusable:
             reusable.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

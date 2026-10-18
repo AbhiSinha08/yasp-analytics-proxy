@@ -15,3 +15,8 @@ captured using SQLAlchemy 1.4.54 and psycopg2 2.9.13. It covers
 hstore lookup, server/schema probes, and schema, table, column, domain, and enum
 reflection. The gateway replay adds transaction controls, the isolation-level
 probe, and ping. These fixtures cover that installed driver sequence.
+
+`metabase_discovery.json` contains three reported Metabase schema-sync queries:
+table privileges, tables with estimated row counts, and column metadata. Routing
+tests replay them against the configured discovery source; cache tests verify
+that they bypass context, selection, cache eligibility, and Redis storage.

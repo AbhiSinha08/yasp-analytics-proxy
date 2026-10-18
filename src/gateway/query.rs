@@ -73,7 +73,24 @@ impl<'backend> QuerySession<'_, 'backend> {
         };
         let query_id = query.query_id();
         let client_id = self.client_id;
-        tracing::debug!(query_id, client_id, sql = ?query.sql(), "query received");
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let bi_remark =
+                crate::hooks::builtin::extractors::observed_postgres_remark(query.sql())
+                    .map(Value::Object)
+                    .unwrap_or(Value::Null);
+            let sql = crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(
+                query.sql(),
+            );
+            tracing::debug!(
+                query_id,
+                client_id,
+                sql = ?sql,
+                bi_remark = %bi_remark,
+                "query received"
+            );
+        } else {
+            tracing::debug!(query_id, client_id, sql = ?crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(query.sql()), "query received");
+        }
         let result = self.execute_parsed(socket, &query, cancel).await;
         if result.is_err() {
             tracing::error!(query_id, client_id, "query failed");
@@ -209,7 +226,7 @@ impl<'backend> QuerySession<'_, 'backend> {
                     if hit
                         && response_cache::valid_response(&entry.bytes, cache.max_rows_per_query())
                     {
-                        tracing::debug!(query_id, client_id, database = ?backend.target(), database_user = %backend.database_user(), sql = ?query.sql(), "query served from cache");
+                        tracing::debug!(query_id, client_id, database = ?backend.target(), database_user = %backend.database_user(), sql = ?crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(query.sql()), "query served from cache");
                         return response_cache::replay(entry, socket, write_timeout, &mut cancel)
                             .await;
                     }
@@ -247,7 +264,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             database_user = %backend.database_user(),
             target = %selected.target,
             backend_login = %selected.backend_login,
-            sql = ?query.sql(),
+            sql = ?crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(query.sql()),
             "query sent to backend"
         );
         let mut output = CaptureSink::new(socket, buffer, cache);

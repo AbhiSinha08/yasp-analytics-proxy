@@ -56,10 +56,16 @@ validated query before selection and eligibility, including hits. Discovery/setu
 bypass application hooks. Failures use an empty mapping; cancellation stops the query.
 Derived data cannot replace authenticated frontend identity.
 
-[examples/context.py](examples/context.py) is the Python scaffold. Metabase,
-Superset, and Redash extractors under `builtin::extractors` are placeholders returning
-`NotImplemented`; Python `yasp_extractors` raises `NotImplementedError`. SQL comments
-are untrusted hints, and live BI metadata/identity contracts remain integration work.
+[examples/context.py](examples/context.py) is the Python scaffold. `metabase_pg`
+and Redash parse the observed leading PostgreSQL comments; `metabase_rs` parses
+the Redshift partner remark emitted by Metabase's Redshift driver. They return
+normalized JSON mappings or `None`; Python `yasp_extractors` exposes the same
+named helpers. Superset remains unimplemented and raises `NotImplementedError` in
+Python. The Redshift format has fixture coverage but awaits manual validation when
+a YASP Redshift gateway is available. These comments are untrusted hints, never
+authenticated identity. See the
+[BI metadata notes](../docs/extensions.md#observed-sql-context-from-local-bi-traffic)
+for supported versions and observed formats.
 
 ## Shared datasets
 

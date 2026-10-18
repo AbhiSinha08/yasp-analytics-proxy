@@ -7,10 +7,10 @@ use super::{
 };
 use crate::query::ParsedQuery;
 use sqlparser::ast::{
-    BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, Query, SelectItem,
-    SetExpr, Statement, TableFactor, Value, Visit, Visitor,
+    BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, ObjectName, Query,
+    SelectItem, SetExpr, Statement, TableFactor, Value, Visit, Visitor,
 };
-use std::ops::ControlFlow;
+use std::{collections::VecDeque, ops::ControlFlow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiscoveryKind {
@@ -37,6 +37,7 @@ pub fn classify(query: &ParsedQuery) -> Option<DiscoveryKind> {
         catalog: false,
         fingerprint: false,
         role_identity: false,
+        ctes: Vec::new(),
     };
     if query.statement().visit(&mut visitor).is_break() {
         return None;
@@ -76,17 +77,45 @@ struct Metadata {
     catalog: bool,
     fingerprint: bool,
     role_identity: bool,
+    ctes: Vec<CteScope>,
+}
+
+#[derive(Default)]
+struct CteScope {
+    visible: Vec<String>,
+    pending: VecDeque<String>,
 }
 
 impl Visitor for Metadata {
     type Break = ();
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<()> {
-        // CTE aliases can shadow native catalogs; these use ordinary routing.
-        if query.with.is_some() {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
+        let mut scope = CteScope::default();
+        if let Some(with) = &query.with {
+            if with.recursive {
+                return ControlFlow::Break(());
+            }
+            for cte in &with.cte_tables {
+                let object = ObjectName::from(vec![cte.alias.name.clone()]);
+                // Native-name qualification must never rewrite a CTE reference.
+                if catalog_relation(&object).is_some() || cte.from.is_some() {
+                    return ControlFlow::Break(());
+                }
+                scope.pending.push_back(name(&object).unwrap().1);
+            }
         }
+        self.ctes.push(scope);
+        ControlFlow::Continue(())
+    }
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<()> {
+        self.ctes.pop();
+        // sqlparser visits WITH definitions in order before the query body.
+        // Nonrecursive CTEs become visible only after their definition is checked.
+        if let Some(parent) = self.ctes.last_mut()
+            && let Some(alias) = parent.pending.pop_front()
+        {
+            parent.visible.push(alias);
+        }
+        ControlFlow::Continue(())
     }
     fn pre_visit_table_factor(&mut self, table: &TableFactor) -> ControlFlow<()> {
         match table {
@@ -97,6 +126,15 @@ impl Visitor for Metadata {
                 version: None,
                 ..
             } => {
+                if self::name(name).is_some_and(|(schema, relation)| {
+                    schema.is_none()
+                        && self
+                            .ctes
+                            .iter()
+                            .any(|scope| scope.visible.contains(&relation))
+                }) {
+                    return ControlFlow::Continue(());
+                }
                 if catalog_relation(name).is_none() {
                     return ControlFlow::Break(());
                 }

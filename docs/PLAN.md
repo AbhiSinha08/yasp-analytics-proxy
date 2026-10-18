@@ -190,8 +190,11 @@ stops the query. This contract does not establish that any BI client's metadata 
 trusted or present. Verify actual client version, authentication mode, discovery,
 query forms, background work, and missing-context behavior before claiming
 compatibility. Client-supplied SQL comments do not prove end-user identity.
-Metabase, Superset, and Redash extractor names are placeholders that report
-`NotImplemented`; no real client extractor is enabled.
+The `metabase_pg` and Redash extractors parse the observed leading PostgreSQL
+remarks for the tested client versions and expose normalized diagnostic fields.
+`metabase_rs` parses the partner remark defined by Metabase's Redshift driver;
+manual validation awaits a YASP Redshift gateway. Superset extraction is not
+builtin because its SQL mutator is deployment configured.
 
 ### Gateway and query processing
 
@@ -365,9 +368,10 @@ organization RBAC policy.
   binds an async Rust closure and returns owned JSON object data or `ContextError`.
   Context configuration uses `type`, `callback`, and `params`; Python references also
   name a file `path` and call `function(request, params)`, returning a dictionary or
-  `None`. `hooks::builtin::extractors` exposes named Metabase, Superset, and Redash
-  placeholders that return `NotImplemented`; the Python `yasp_extractors` module
-  exposes the same names and raises `NotImplementedError`.
+  `None`. `hooks::builtin::extractors` exposes `metabase_pg`, `metabase_rs`, and
+  `redash` parsers, plus the unimplemented Superset placeholder. Python
+  `yasp_extractors` exposes the same names and raises `NotImplementedError` for
+  Superset.
 - Derive context once for ordinary queries after SQL validation and before backend selection and cache
   eligibility, also on cache hits. Downstream selection sees context as nested plain
   immutable data; Python receives a copy. Context cannot replace frontend identity.

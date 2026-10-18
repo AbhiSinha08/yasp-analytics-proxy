@@ -84,7 +84,8 @@ pub(super) fn initialize(paths: &[PathBuf]) -> Result<(), PythonHookError> {
         use crate::hooks::builtin::extractors as builtin;
         type Extractor = fn(&str) -> Result<Option<Map<String, Value>>, builtin::ExtractionError>;
         for (name, function) in [
-            ("metabase", builtin::metabase as Extractor),
+            ("metabase_pg", builtin::metabase_pg as Extractor),
+            ("metabase_rs", builtin::metabase_rs as Extractor),
             ("superset", builtin::superset as Extractor),
             ("redash", builtin::redash as Extractor),
         ] {

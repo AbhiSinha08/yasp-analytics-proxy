@@ -259,14 +259,31 @@ import yasp_extractors
 def context(request, params):
     sql = request['sql']
     if 'helpers' in sql:
-        for helper in (yasp_extractors.metabase, yasp_extractors.superset, yasp_extractors.redash):
-            try:
-                helper(sql)
-            except NotImplementedError:
-                pass
-            else:
-                raise RuntimeError('placeholder must not emit claims')
-        return None
+        metabase = yasp_extractors.metabase_pg(
+            '-- Metabase:: userID: 42 queryType: native queryHash: abcdef\nSELECT 1')
+        assert metabase == {'tool': 'metabase', 'user_id': 42,
+                            'query_type': 'native', 'query_hash': 'abcdef'}
+        redshift = yasp_extractors.metabase_rs(
+            '-- /* partner: "metabase", {"dashboard_id":null,"chart_id":57,"optional_user_id":1,"optional_account_id":"account-1","filter_values":{"region":"west"}} */ Metabase:: userID: 1 queryType: MBQL queryHash: rs-hash\nSELECT 1')
+        assert redshift == {'tool': 'metabase', 'user_id': 1, 'query_type': 'MBQL',
+                            'query_hash': 'rs-hash', 'dashboard_id': None,
+                            'chart_id': 57, 'optional_user_id': 1,
+                            'optional_account_id': 'account-1',
+                            'filter_values': {'region': 'west'}}
+        redash = yasp_extractors.redash(
+            '/* user_id: 7, query_id: 19, Job ID: job-1, Query Hash: hash-1, Scheduled: False */ SELECT 1')
+        assert redash == {'tool': 'redash', 'user_id': 7, 'query_id': 19,
+                          'job_id': 'job-1', 'query_hash': 'hash-1', 'scheduled': False}
+        assert yasp_extractors.metabase_pg('SELECT 1 -- Metabase:: userID: 42') is None
+        assert yasp_extractors.metabase_rs('SELECT 1 -- /* partner: "metabase", {} */') is None
+        assert yasp_extractors.redash('SELECT 1 /* user_id: 7 */') is None
+        try:
+            yasp_extractors.superset('SELECT 1')
+        except NotImplementedError:
+            pass
+        else:
+            raise RuntimeError('Superset extractor must remain deferred')
+        return {'extractors_verified': True}
     if 'empty' in sql:
         return None
     if 'raise' in sql:
@@ -346,13 +363,15 @@ def eligible(request, params):
     );
     for mode in ["empty", "helpers", "raise", "invalid", "large", "deep"] {
         let query = ParsedQuery::parse(&format!("SELECT 1 /* {mode} */")).unwrap();
-        assert!(
-            context
-                .derive(context_request(&query), Duration::from_secs(1), 1024)
-                .await
-                .is_empty(),
-            "{mode} uses the default context"
-        );
+        let derived = context
+            .derive(context_request(&query), Duration::from_secs(1), 1024)
+            .await;
+        if mode == "helpers" {
+            assert_eq!(derived.get("extractors_verified"), Some(&json!(true)));
+            assert_eq!(derived.len(), 1);
+        } else {
+            assert!(derived.is_empty(), "{mode} uses the default context");
+        }
     }
     assert!(
         context
