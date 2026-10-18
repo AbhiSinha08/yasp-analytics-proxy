@@ -16,7 +16,16 @@ hstore lookup, server/schema probes, and schema, table, column, domain, and enum
 reflection. The gateway replay adds transaction controls, the isolation-level
 probe, and ping. These fixtures cover that installed driver sequence.
 
-`metabase_discovery.json` contains three reported Metabase schema-sync queries:
-table privileges, tables with estimated row counts, and column metadata. Routing
-tests replay them against the configured discovery source; cache tests verify
-that they bypass context, selection, cache eligibility, and Redis storage.
+`metabase_discovery.json` contains three reported Metabase schema-sync queries
+for table privileges, tables with estimated row counts, and column metadata,
+plus foreign-key and index queries rendered from its
+[PostgreSQL driver](https://github.com/metabase/metabase/blob/master/src/metabase/driver/postgres.clj).
+
+`postgres_metadata_variants.json` covers column/type metadata derived from
+[PostgreSQL JDBC](https://github.com/pgjdbc/pgjdbc/blob/master/pgjdbc/src/main/java/org/postgresql/jdbc/PgDatabaseMetaData.java),
+constraint/collation metadata derived from
+[SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy/blob/main/lib/sqlalchemy/dialects/postgresql/base.py),
+and PostgreSQL schema/version, privilege, and database-listing syntax variants.
+Routing tests compare source responses; cache tests verify context, selection,
+cache eligibility, and Redis bypass. These source-derived regressions do not
+establish full compatibility with those clients.

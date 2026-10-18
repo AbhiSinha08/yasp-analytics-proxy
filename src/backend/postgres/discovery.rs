@@ -12,8 +12,8 @@ use pgwire::{
     messages::PgWireBackendMessage,
 };
 use sqlparser::ast::{
-    DataType, Expr, Ident, ObjectName, ObjectNamePart, Statement, TableAlias, TableFactor,
-    VisitMut, VisitorMut,
+    DataType, Expr, Ident, ObjectName, ObjectNamePart, Select, SelectItem,
+    SelectItemQualifiedWildcardKind, Statement, TableAlias, TableFactor, VisitMut, VisitorMut,
 };
 use std::{fmt, ops::ControlFlow};
 
@@ -84,8 +84,27 @@ struct NativeNames<'a> {
     listing: &'a sqlparser::ast::Query,
 }
 
+fn database_qualifier(object: &ObjectName) -> bool {
+    name(object).is_some_and(|(schema, table)| {
+        schema.as_deref() == Some("pg_catalog") && table == "pg_database"
+    })
+}
+
 impl VisitorMut for NativeNames<'_> {
     type Break = ();
+    fn post_visit_select(&mut self, select: &mut Select) -> ControlFlow<()> {
+        for item in &mut select.projection {
+            if let SelectItem::QualifiedWildcard(
+                SelectItemQualifiedWildcardKind::ObjectName(object),
+                _,
+            ) = item
+                && database_qualifier(object)
+            {
+                object.0.remove(0);
+            }
+        }
+        ControlFlow::Continue(())
+    }
     fn post_visit_table_factor(&mut self, table: &mut TableFactor) -> ControlFlow<()> {
         match table {
             TableFactor::Table {
@@ -131,6 +150,14 @@ impl VisitorMut for NativeNames<'_> {
     }
     fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<()> {
         match expr {
+            // Database listings become a derived table named pg_database, so
+            // schema-qualified column references must use that table alias.
+            Expr::CompoundIdentifier(parts)
+                if parts.len() == 3
+                    && database_qualifier(&ObjectName::from(parts[..2].to_vec())) =>
+            {
+                parts.remove(0);
+            }
             Expr::Function(function) if helper(&function.name) => {
                 if !name(&function.name).is_some_and(|(_, n)| {
                     matches!(n.as_str(), "coalesce" | "nullif" | "greatest" | "least")

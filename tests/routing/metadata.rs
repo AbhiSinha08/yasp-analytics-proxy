@@ -87,11 +87,13 @@ pub(super) fn metadata_discovery(
     assert_eq!(callback_count.load(Ordering::SeqCst), before);
     let metabase: Vec<String> =
         serde_json::from_str(include_str!("../fixtures/metabase_discovery.json")).unwrap();
-    for (index, query) in metabase.iter().enumerate() {
+    let variants: Vec<String> =
+        serde_json::from_str(include_str!("../fixtures/postgres_metadata_variants.json")).unwrap();
+    for (index, query) in metabase.iter().chain(&variants).enumerate() {
         let forwarded = client(&[&format!("{query}\n/* route_denied */")]);
         assert!(
             forwarded.status.success(),
-            "Metabase discovery query {}: {}",
+            "BI metadata query {}: {}",
             index + 1,
             String::from_utf8_lossy(&forwarded.stderr)
         );
@@ -107,7 +109,7 @@ pub(super) fn metadata_discovery(
         assert_eq!(
             sorted(&forwarded),
             sorted(&direct),
-            "Metabase discovery query {}",
+            "BI metadata query {}",
             index + 1
         );
     }
@@ -122,6 +124,10 @@ pub(super) fn metadata_discovery(
         "SELECT pg_stat_get_activity(NULL) FROM pg_extension /* route_denied */",
         "SELECT most_common_vals::text FROM pg_stats /* route_denied */",
         "WITH t AS (SELECT * FROM public.users) SELECT * FROM t JOIN pg_class ON true /* route_denied */",
+        "SELECT version() UNION ALL TABLE public.users /* route_denied */",
+        "WITH hidden AS (TABLE public.users) SELECT * FROM hidden CROSS JOIN pg_class /* route_denied */",
+        "SELECT * FROM pg_class WHERE EXISTS (TABLE public.users) /* route_denied */",
+        "SELECT * FROM pg_class CROSS JOIN current_setting('role') s /* route_denied */",
     ];
     let mixed = client(&mixed_queries);
     assert!(String::from_utf8_lossy(&mixed.stderr).contains("42501"));

@@ -56,6 +56,62 @@ fn metabase_schema_sync_uses_discovery_without_application_access() {
 }
 
 #[test]
+fn postgres_metadata_variants_use_discovery() {
+    let queries: Vec<String> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/postgres_metadata_variants.json"
+    ))
+    .unwrap();
+    let missed: Vec<_> = queries
+        .iter()
+        .enumerate()
+        .filter(|(_, sql)| classify(&ParsedQuery::parse(sql).unwrap()).is_none())
+        .map(|(i, sql)| (i + 1, sql))
+        .collect();
+    assert!(missed.is_empty(), "metadata queries missed: {missed:?}");
+    for sql in [
+        "SELECT * FROM public.users LIMIT 0",
+        "SELECT row_number() OVER (ORDER BY email) FROM users",
+        "SELECT row_number() OVER (ORDER BY (SELECT email FROM users LIMIT 1)) FROM pg_class",
+        "SELECT public.bool_and(true) FROM pg_class",
+        "SELECT has_type_privilege(public.secret(), 'USAGE')",
+        "SELECT has_table_privilege(current_user, (SELECT email FROM users LIMIT 1), 'SELECT')",
+        "SELECT public.has_schema_privilege('public', 'USAGE')",
+        "SELECT * FROM current_setting('role') s CROSS JOIN pg_class",
+        "SELECT * FROM pg_class CROSS JOIN LATERAL current_setting('role') s",
+        "SELECT * FROM pg_class CROSS JOIN current_setting('is_superuser') s",
+        "SELECT * FROM pg_class CROSS JOIN current_setting('server_version' || public.secret()) s",
+        "SELECT * FROM pg_catalog.version() v CROSS JOIN users",
+        "SELECT current_schema() || ':' || current_role",
+        "SELECT current_role",
+    ] {
+        assert!(
+            classify(&ParsedQuery::parse(sql).unwrap()).is_none(),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn metadata_syntax_cannot_hide_application_access() {
+    let queries = [
+        "SELECT version() UNION ALL TABLE public.users",
+        "WITH hidden AS (TABLE public.users) SELECT * FROM hidden CROSS JOIN pg_class",
+        "SELECT * FROM pg_class WHERE EXISTS (TABLE public.users)",
+        "SELECT relname FROM pg_class WHERE relname OPERATOR(public.~) ANY(ARRAY['users'])",
+        "SELECT relname FROM pg_class WHERE relname OPERATOR(public.~) ALL(ARRAY['users'])",
+        "SELECT relname FROM pg_class WHERE relname OPERATOR(pg_catalog.||) ANY(ARRAY['users'])",
+    ];
+    let unsafe_queries: Vec<_> = queries
+        .into_iter()
+        .filter(|sql| ParsedQuery::parse(sql).is_ok_and(|query| classify(&query).is_some()))
+        .collect();
+    assert!(
+        unsafe_queries.is_empty(),
+        "application paths classified as metadata: {unsafe_queries:?}"
+    );
+}
+
+#[test]
 fn dbeaver_discovery_queries_bypass_ordinary_routing() {
     let queries: Vec<String> =
         serde_json::from_str(include_str!("../../tests/fixtures/dbeaver_discovery.json")).unwrap();

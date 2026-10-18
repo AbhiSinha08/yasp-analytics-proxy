@@ -67,8 +67,10 @@ fn fingerprint_projection(statement: &Statement) -> bool {
             let (SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. }) = item else {
                 return false;
             };
-            matches!(expr, Expr::Function(f) if name(&f.name).is_some_and(|(_, n)| matches!(n.as_str(),
-                "version" | "current_database" | "current_schema" | "current_schemas" | "current_setting"
+            matches!(expr, Expr::Identifier(i) if i.quote_style.is_none()
+                && matches!(i.value.to_ascii_lowercase().as_str(), "current_schema" | "current_role"))
+                || matches!(expr, Expr::Function(f) if name(&f.name).is_some_and(|(_, n)| matches!(n.as_str(),
+                "version" | "current_catalog" | "current_database" | "current_schema" | "current_schemas" | "current_setting"
                     | "current_user" | "session_user" | "current_role" | "user")))
         })
 }
@@ -86,9 +88,56 @@ struct CteScope {
     pending: VecDeque<String>,
 }
 
+impl Metadata {
+    // Function calls in SELECT and FROM must share the same allowlist and
+    // setting restrictions, regardless of the parser's table-function shape.
+    fn function(&mut self, object: &ObjectName, args: &[FunctionArg]) -> ControlFlow<()> {
+        if !helper(object) {
+            return ControlFlow::Break(());
+        }
+        let (_, function) = name(object).unwrap();
+        if function == "current_setting" {
+            let valid = matches!(args.first(), Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(v))))
+                if matches!(&v.value, Value::SingleQuotedString(s) if fixed_setting(s).is_some()
+                    || matches!(s.to_ascii_lowercase().as_str(), "server_version" | "server_version_num" | "search_path" | "application_name")));
+            if !valid {
+                return ControlFlow::Break(());
+            }
+        }
+        self.fingerprint |= matches!(
+            function.as_str(),
+            "version"
+                | "current_database"
+                | "current_schema"
+                | "current_schemas"
+                | "current_setting"
+        );
+        // These prefixes only apply after explicit helper allowlisting above.
+        self.catalog |= function.starts_with("pg_")
+            || function.starts_with("has_")
+            || matches!(
+                function.as_str(),
+                "format_type" | "obj_description" | "col_description" | "shobj_description"
+            );
+        ControlFlow::Continue(())
+    }
+}
+
 impl Visitor for Metadata {
     type Break = ();
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<()> {
+        // TABLE stores relation names as strings, outside the visitor's table
+        // checks. Only the set-expression shapes inspected below use discovery.
+        let mut bodies = vec![query.body.as_ref()];
+        while let Some(body) = bodies.pop() {
+            match body {
+                SetExpr::SetOperation { left, right, .. } => {
+                    bodies.extend([left.as_ref(), right.as_ref()]);
+                }
+                SetExpr::Select(_) | SetExpr::Query(_) | SetExpr::Values(_) => {}
+                _ => return ControlFlow::Break(()),
+            }
+        }
         let mut scope = CteScope::default();
         if let Some(with) = &query.with {
             if with.recursive {
@@ -142,17 +191,10 @@ impl Visitor for Metadata {
             }
             TableFactor::Table {
                 name,
-                args: Some(_),
+                args: Some(args),
                 ..
-            }
-            | TableFactor::Function { name, .. } => {
-                if !helper(name) {
-                    return ControlFlow::Break(());
-                }
-                // Only allowlisted helpers reach this point; the prefix marks
-                // metadata output, never permission to call arbitrary pg_* code.
-                self.catalog |= self::name(name).is_some_and(|(_, n)| n.starts_with("pg_"));
-            }
+            } => self.function(name, &args.args)?,
+            TableFactor::Function { name, args, .. } => self.function(name, args)?,
             TableFactor::Derived { sample: None, .. }
             | TableFactor::NestedJoin { .. }
             | TableFactor::UNNEST { .. } => {}
@@ -162,6 +204,17 @@ impl Visitor for Metadata {
     }
     fn pre_visit_expr(&mut self, expression: &Expr) -> ControlFlow<()> {
         match expression {
+            // sqlparser preserves these PostgreSQL keywords as identifiers.
+            Expr::Identifier(i)
+                if i.quote_style.is_none() && i.value.eq_ignore_ascii_case("current_schema") =>
+            {
+                self.fingerprint = true;
+            }
+            Expr::Identifier(i)
+                if i.quote_style.is_none() && i.value.eq_ignore_ascii_case("current_role") =>
+            {
+                self.role_identity = true;
+            }
             // sqlparser represents PostgreSQL ARRAY(SELECT ...) as a function.
             // Its subquery is still visited and must contain metadata only.
             Expr::Function(function)
@@ -172,7 +225,7 @@ impl Visitor for Metadata {
                     && matches!(function.args, FunctionArguments::Subquery(_))
                     && matches!(function.parameters, FunctionArguments::None) => {}
             Expr::Function(function) => {
-                // PostgreSQL role keywords have no call syntax and cannot be
+                // PostgreSQL identity keywords have no call syntax and cannot be
                 // redirected to an application function with the same name.
                 if function.name.0.len() == 1
                     && function.name.0[0]
@@ -183,38 +236,28 @@ impl Visitor for Metadata {
                     && name(&function.name).is_some_and(|(_, n)| {
                         matches!(
                             n.as_str(),
-                            "current_user" | "session_user" | "current_role" | "user"
+                            "current_user"
+                                | "session_user"
+                                | "current_role"
+                                | "user"
+                                | "current_catalog"
+                                | "current_schema"
                         )
                     })
                 {
-                    self.role_identity = true;
+                    let (_, keyword) = name(&function.name).unwrap();
+                    if matches!(keyword.as_str(), "current_catalog" | "current_schema") {
+                        self.fingerprint = true;
+                    } else {
+                        self.role_identity = true;
+                    }
                     return ControlFlow::Continue(());
                 }
-                if !helper(&function.name) {
-                    return ControlFlow::Break(());
-                }
-                let (_, function_name) = name(&function.name).unwrap();
-                if function_name == "current_setting" {
-                    let valid = matches!(&function.args, FunctionArguments::List(list)
-                        if matches!(list.args.first(), Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(v))))
-                            if matches!(&v.value, Value::SingleQuotedString(s) if fixed_setting(s).is_some() || matches!(s.as_str(), "server_version" | "server_version_num" | "search_path" | "application_name"))));
-                    if !valid {
-                        return ControlFlow::Break(());
-                    }
-                }
-                self.fingerprint |= matches!(
-                    function_name.as_str(),
-                    "version"
-                        | "current_database"
-                        | "current_schema"
-                        | "current_schemas"
-                        | "current_setting"
-                );
-                self.catalog |= function_name.starts_with("pg_")
-                    || matches!(
-                        function_name.as_str(),
-                        "obj_description" | "col_description"
-                    );
+                let args = match &function.args {
+                    FunctionArguments::List(list) => list.args.as_slice(),
+                    _ => &[],
+                };
+                self.function(&function.name, args)?;
             }
             Expr::Cast { data_type, .. } => {
                 // A user-defined type can run arbitrary input/conversion functions.

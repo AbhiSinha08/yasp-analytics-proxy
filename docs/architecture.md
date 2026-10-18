@@ -145,9 +145,11 @@ Recognized catalog reads use the configured discovery target/login and optional
 compute instance, sharing capacity limits while bypassing
 application hooks and the result cache. The frontend classifier checks nested
 relations, functions, and casts, including nonrecursive metadata-only CTEs.
+Allowlisted privilege/type probes and schema/version probes use this route even
+without a catalog table or when their functions appear in FROM.
 Mixed application/catalog reads, recursive CTEs, CTEs that shadow native catalog
-names, and unrecognized helpers follow ordinary routing. Source-role visibility
-still applies.
+names, TABLE set expressions, and unrecognized helpers follow ordinary routing.
+Source-role visibility still applies.
 The PostgreSQL handler qualifies native names, limits database listings to the
 source database, and applies discovery session state inside the existing read-only
 transaction. The source must be reachable at startup to supply its server version.

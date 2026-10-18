@@ -8,7 +8,7 @@
 - [x] **Python environment probe** — Checks embedded Python linking and imports without starting the proxy.
 - [x] **Development and test guidance** — Documents runtime configuration, isolated test databases, and fixture ownership.
 
-## Phase 1 — PostgreSQL analytics proxy (in progress)
+## Phase 1 — PostgreSQL analytics proxy
 
 - [x] **Simple-query PostgreSQL gateway** — Accepts encrypted or configured plaintext client sessions, authenticates with SCRAM, streams backend results, and reports PostgreSQL metadata.
   - [x] **Supported read-only SQL subset** — Handles SELECT, read-only WITH, subqueries, joins, aggregates, unions, catalog queries, and SHOW variable/ALL requests.
@@ -53,9 +53,9 @@
   - [x] **Client setup and source fingerprint** — Handles bounded application name/discovery search path, fixed session defaults, and the discovery source's server version.
   - [x] **Routing and protocol checks** — Tests metadata/data separation, native results, settings, callback bypass, and pool cleanup with real PostgreSQL clients.
   - [x] **Live desktop-client browsing** — Verify VS Code Database Client and DBeaver UI refresh with autocommit and JDBC simple-query mode.
-- [ ] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
+- [x] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
   - [x] **Partial selector decisions** — Let the single selector omit unambiguous target/login fields and request an optional target-scoped compute type.
-  - [ ] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended real BI client.
+  - [x] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended real BI client.
 - [x] **Optional compute-type routing and overflow** — Uses [target-scoped compute routing](source-access-routing-plan.md) and bounded shared allocation.
   - [x] **Target-scoped compute configuration** — Define compute types, ordered instances, and supported login bindings without changing ordinary targets.
   - [x] **Shared connection budgets** — Bound actual open connections across pools and reclaim idle sessions when another binding needs capacity.
@@ -71,9 +71,9 @@
   - [x] **Pending transactions and affinity** — Handle BEGIN/COMMIT/ROLLBACK and pin the first actual target/login/compute binding, including overflow.
   - [x] **Failure state and cleanup** — Preserve I/T/E status, rollback recovery, cancellation, idle/message deadlines, and verified lease cleanup.
   - [x] **Transactional setup and cache scope** — Restore supported settings on rollback, retain them on commit, isolate autocommit cache scope, and bypass cache inside transactions.
-- [ ] End to End testing with BI tools and Postgres Backend
+- [x] End to End testing with BI tools and Postgres Backend
 
-## Phase 2 — Additional engines, dynamic masking, and management
+## Phase 2 — Additional engines, dynamic masking, and management (To be started)
 
 - [ ] **Warehouse adapter** — Adds one selected engine with its own execution, metadata, type, and session behavior.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.

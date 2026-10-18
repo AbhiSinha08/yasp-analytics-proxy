@@ -1,0 +1,19 @@
+[
+  "SELECT CURRENT_SCHEMA AS schema",
+  "SELECT CURRENT_CATALOG AS database, CURRENT_SCHEMA AS schema, SESSION_USER AS login",
+  "SELECT * FROM pg_catalog.current_schema()",
+  "SELECT * FROM pg_catalog.version()",
+  "SELECT * FROM pg_catalog.current_setting('SERVER_VERSION_NUM')",
+  "SELECT current_setting('SEARCH_PATH')",
+  "SELECT * FROM (\nSELECT current_database() AS current_database, n.nspname,c.relname,a.attname,a.atttypid,a.attnotnull\nOR (t.typtype = 'd' AND t.typnotnull) AS attnotnull,a.atttypmod,a.attlen,t.typtypmod,\nrow_number() OVER (PARTITION BY a.attrelid ORDER BY a.attnum) AS attnum,\nnullif(a.attidentity, '') as attidentity,nullif(a.attgenerated, '') as attgenerated,\npg_catalog.pg_get_expr(def.adbin, def.adrelid) AS adsrc,dsc.description,t.typbasetype,t.typtype\nFROM pg_catalog.pg_namespace n\nJOIN pg_catalog.pg_class c ON (c.relnamespace = n.oid)\nJOIN pg_catalog.pg_attribute a ON (a.attrelid=c.oid)\nJOIN pg_catalog.pg_type t ON (a.atttypid = t.oid)\nLEFT JOIN pg_catalog.pg_attrdef def ON (a.attrelid=def.adrelid AND a.attnum = def.adnum)\nLEFT JOIN pg_catalog.pg_description dsc ON (c.oid=dsc.objoid AND a.attnum = dsc.objsubid)\nLEFT JOIN pg_catalog.pg_class dc ON (dc.oid=dsc.classoid AND dc.relname='pg_class')\nLEFT JOIN pg_catalog.pg_namespace dn ON (dc.relnamespace=dn.oid AND dn.nspname='pg_catalog')\nWHERE c.relkind in ('r','p','v','f','m') and a.attnum > 0 AND NOT a.attisdropped\nAND n.nspname LIKE 'public' AND c.relname LIKE 'users') c WHERE true\nAND attname LIKE '%' ORDER BY nspname,c.relname,attnum",
+  "SELECT t.typname,t.oid FROM pg_catalog.pg_type t\nJOIN pg_catalog.pg_namespace n ON (t.typnamespace = n.oid)\nWHERE n.nspname != 'pg_toast'\nAND (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid))\nAND has_type_privilege(t.oid, 'USAGE') ORDER BY t.oid",
+  "SELECT conrelid, bool_and(indnullsnotdistinct) FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_index i ON i.indexrelid=c.conindid GROUP BY conrelid ORDER BY conrelid",
+  "SELECT collname, pg_catalog.pg_collation_is_visible(oid) FROM pg_catalog.pg_collation ORDER BY oid",
+  "SELECT nspname FROM pg_catalog.pg_namespace WHERE NOT pg_is_other_temp_schema(oid) AND oid <> pg_my_temp_schema() ORDER BY nspname",
+  "SELECT has_schema_privilege(current_user, 'public', 'USAGE')",
+  "SELECT has_table_privilege(current_user, 'public.users', 'SELECT')",
+  "SELECT format_type(23, -1), shobj_description(0, 'pg_database')",
+  "SELECT pg_catalog.pg_database.datname FROM pg_catalog.pg_database WHERE datname=current_database()",
+  "SELECT pg_catalog.pg_database.* FROM pg_catalog.pg_database WHERE datname=current_database()",
+  "SELECT v.*, s.* FROM LATERAL pg_catalog.version() v CROSS JOIN LATERAL pg_catalog.current_setting('SERVER_VERSION_NUM') s"
+]

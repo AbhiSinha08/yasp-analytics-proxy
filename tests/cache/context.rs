@@ -141,9 +141,11 @@ fn context_and_metadata_bypass() {
     assert!(context_observations.lock().unwrap().is_empty());
     let metabase: Vec<String> =
         serde_json::from_str(include_str!("../fixtures/metabase_discovery.json")).unwrap();
-    for (index, query) in metabase.iter().enumerate() {
+    let variants: Vec<String> =
+        serde_json::from_str(include_str!("../fixtures/postgres_metadata_variants.json")).unwrap();
+    for (index, query) in metabase.iter().chain(&variants).enumerate() {
         let result = normalized_context_hit(query);
-        assert_success(&result, "Metabase discovery with cache enabled");
+        assert_success(&result, "BI metadata with cache enabled");
         if index == 2 {
             assert!(
                 stdout(&result).contains("discovery_column"),
