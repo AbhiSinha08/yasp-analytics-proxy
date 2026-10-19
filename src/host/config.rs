@@ -62,6 +62,20 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
     )?
     .with_settings(file.gateway.clone())?
     .with_schema_discovery(file.discovery_backend()?);
+    let gateway = if let Some(hook) = &file.hooks.input_options {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Params {
+            native_dialect: yasp::query::SqlDialect,
+        }
+        let params: Params =
+            serde_json::from_value(serde_json::Value::Object(hook.params.clone()))?;
+        gateway.with_input_options(yasp::hooks::builtin::input_options::metabase(
+            params.native_dialect,
+        ))
+    } else {
+        gateway
+    };
     let gateway = match file.discovery_compute()? {
         Some(compute) => gateway.with_schema_discovery_compute(compute),
         None => gateway,

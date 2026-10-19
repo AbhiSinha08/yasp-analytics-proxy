@@ -1,13 +1,17 @@
-//! PostgreSQL frontend entry points. Sessions, routing, and query stages have
-//! separate owners; the PostgreSQL backend owns source protocol and result bytes.
+//! Shared pgwire frontend entry points for PostgreSQL and Redshift profiles.
+//! Execution policy and source-native sessions/results have separate owners.
 
+mod frontend;
+mod metadata;
 mod query;
-mod routing;
+mod result;
 mod server;
 mod session;
-mod transaction;
 mod transport;
 
+pub use frontend::FrontendProfile;
+
+use crate::backend::execution::Execution;
 use crate::transport::FrameGuard;
 use crate::{
     backend::{PostgresBackend, PostgresBackends},
@@ -18,7 +22,6 @@ use pgwire::{
     error::{ErrorInfo, PgWireError},
     tokio::server::PgWireMessageServerCodec,
 };
-use routing::Execution;
 use server::serve_sessions;
 use std::{future::Future, io, sync::Arc};
 use tokio::net::TcpListener;
@@ -70,6 +73,44 @@ pub async fn serve_routed(
 }
 
 type FrontendSocket = Framed<FrameGuard, PgWireMessageServerCodec<String>>;
+
+/// Serve PostgreSQL and Snowflake bindings through one frontend and selection
+/// hook. This initial mixed-engine path uses a PostgreSQL discovery authority.
+#[cfg(feature = "snowflake")]
+pub async fn serve_backends(
+    listener: TcpListener,
+    config: GatewayConfig,
+    backends: Arc<crate::backend::Backends>,
+    selector: impl Into<RoutedSelector>,
+    shutdown: impl Future<Output = ()>,
+) -> io::Result<()> {
+    let discovery = backends
+        .postgres
+        .discovery_route(config.schema_discovery.as_ref())?;
+    let discovery_compute = config.schema_discovery_compute.clone();
+    if backends
+        .postgres
+        .get_discovery(&discovery, discovery_compute.as_deref())
+        .is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "discovery requires a configured PostgreSQL binding",
+        ));
+    }
+    serve_sessions(
+        listener,
+        config,
+        Execution::Mixed {
+            backends,
+            selector: selector.into(),
+            discovery,
+            discovery_compute,
+        },
+        shutdown,
+    )
+    .await
+}
 
 fn protocol_error(severity: &str, code: &str, message: &str) -> PgWireError {
     PgWireError::UserError(Box::new(ErrorInfo::new(

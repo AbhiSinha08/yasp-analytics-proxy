@@ -1,5 +1,10 @@
 # Runtime configuration
 
+Library hosts can attach a shared, periodically refreshed schema catalog with
+`GatewayConfig::with_catalog`. Its source identity, schema scope, refresh/age and
+row/byte limits are described in [Shared schema catalog](catalog.md). The YAML host
+enables the PostgreSQL provider through `schema_discovery.catalog`.
+
 The host loads ignored `config/local.yml`; `--config PATH` selects another file.
 [config/example.yml](../config/example.yml) is the full loadable reference. Its
 commented future settings are not accepted runtime fields. Omitted supported fields
@@ -14,6 +19,10 @@ cargo run --locked -- --config config/local.yml
 ```
 
 ## Secrets and targets
+
+The repository YAML host currently accepts PostgreSQL targets. The optional
+Snowflake library host below uses typed configuration; adding `engine: snowflake`
+to this YAML is not yet supported.
 
 The process environment takes precedence over optional `.env` in the working
 directory. The host parses `.env` without mutating the process environment. Keep
@@ -128,7 +137,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 
 | Setting under `gateway` | Default          | Meaning                                                                                 |
 | ----------------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `protocol`              | `postgresql`     | Only supported frontend protocol.                                                       |
+| `protocol`              | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS). |
 | `listen`                | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
 | `max_sessions`          | 32               | Normal frontend session capacity.                                                       |
 | `max_message_bytes`     | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
@@ -150,6 +159,21 @@ uses `backend.acquire_timeout_ms`, which defaults to 60,000 ms. PostgreSQL
 transaction-local idle timeout uses the larger query/write budget for autocommit
 execution and `read_timeout_ms` for explicit client transactions.
 Prepared-statement and portal settings remain future configuration.
+
+The Redshift profile requires `tls.mode: enable`. It advertises version 8.0.2,
+implements simple-query framing, and leaves Redshift protocol extensions disabled.
+The YAML host uses PostgreSQL backends. Captured JDBC and Metabase Redshift
+metadata queries have focused coverage; full query-builder compatibility remains
+unvalidated. See [multi-engine support](multi-engine.md).
+
+`hooks.input_options` optionally registers the compiled
+`builtin.input_options.metabase` resolver with a required `native_dialect` param
+(`postgresql`, `redshift`, or `snowflake`). Only a valid leading Metabase remark
+whose `queryType` is `native` selects that dialect. MBQL, absent, malformed, and
+unknown remarks retain the listener's dialect. Input is byte-bounded before this
+callback. Native SQL still runs read-only validation, context, and selection;
+source-engine mismatch returns `0A000` after selection. Native hints never select
+the discovery identity. An omitted resolver preserves the listener's input grammar.
 
 ## Shared application datasets
 
@@ -213,6 +237,8 @@ separate from `cache.namespace`.
 schema_discovery:
   target: primary
   backend_login: reader
+  catalog:
+    schemas: [public]
 ```
 
 The target is inferred only when exactly one exists. An omitted login uses the
@@ -224,11 +250,78 @@ of ordinary-query callbacks and caching. Library hosts use
 `GatewayConfig::with_schema_discovery` and optional
 `with_schema_discovery_compute` to choose explicitly.
 
+`schema_discovery.catalog` enables bounded, periodically refreshed definitions from
+that same discovery target, login and optional compute. `schemas` lists exact source
+names; it is required when the catalog is enabled. Initial loading must succeed
+before the listener accepts clients. Omit `catalog` to retain PostgreSQL discovery
+forwarding. Redshift Metabase's captured table/column scans require the catalog;
+Redshift-specific views are answered locally rather than forwarded to PostgreSQL.
+See [catalog configuration](catalog.md#yaml-host) for refresh, age and memory bounds.
+
+### JDBC clients
+
+Use the driver matching `gateway.protocol`. Both profiles require simple-query
+mode; extended-query execution is unsupported. Use the configured gateway database
+and frontend credentials, rather than backend login credentials.
+
 For DBeaver, use autocommit, connect to the configured gateway/source database, and
 set PostgreSQL driver properties `preferQueryMode=simple`, `prepareThreshold=0`,
 `binaryTransfer=false`, and local `sslmode=disable`. Refresh cached database trees
 after configuration changes. Discovery supports the recorded psql 18 and DBeaver
 query fixtures; this does not establish general BI compatibility.
+
+For the Redshift gateway, use the Amazon Redshift JDBC driver with these connection
+properties in Metabase or DBeaver:
+
+| Property | Value | Purpose |
+| --- | --- | --- |
+| `preferQueryMode` | `simple` | Use the supported wire protocol. |
+| `compression` | `off` | Disable Redshift protocol compression. |
+| `ApplicationName` | `yasp` | Supply an explicit name within the 63-byte limit. |
+| `ssl` | `true` | Redshift password authentication requires gateway TLS. |
+| `sslmode` | `verify-full` | Verify both the certificate chain and hostname. |
+| `sslrootcert` | Path to the issuing CA certificate | Trust a private CA without disabling verification. |
+
+In Metabase, choose **Amazon Redshift**, enable SSL, and paste the following into
+**Additional JDBC connection string options**, adjusting the certificate path:
+
+```text
+ssl=true&sslmode=verify-full&sslrootcert=/tmp/yasp-ca.crt&preferQueryMode=simple&compression=off&ApplicationName=yasp
+```
+
+For Metabase in Docker, the CA path must exist inside its container. Containers
+reach the local gateway through `host.docker.internal:6432`; the server certificate
+must include that hostname in its subject alternative names. With the repository's
+local CA, a one-time copy to the existing container is:
+
+```sh
+docker cp config/local-tls/ca.crt yasp-metabase:/tmp/yasp-ca.crt
+```
+
+The copy survives restarts but not container recreation. For a durable deployment,
+mount only the public CA certificate read-only at the same path:
+
+```yaml
+volumes:
+  - /home/abhisinha08/code/yasp/config/local-tls/ca.crt:/tmp/yasp-ca.crt:ro
+```
+
+In DBeaver, set these values under **Driver properties**, using a CA path readable
+by the desktop JVM and a hostname covered by the certificate, such as `localhost`.
+Use autocommit for ordinary reads when YASP result caching is desired. The
+PostgreSQL-only `prepareThreshold` and `binaryTransfer` settings above are not
+requirements for the Redshift driver. See the
+[Redshift JDBC options](https://docs.aws.amazon.com/redshift/latest/mgmt/jdbc20-configuration-options.html)
+and [Metabase certificate setup](https://www.metabase.com/docs/latest/databases/ssl-certificates).
+
+### Python clients (psycopg2 and SQLAlchemy)
+
+Redash and Superset use Python database drivers. JDBC properties such as
+`ApplicationName`, `preferQueryMode`, and `compression` must not be added to their
+connection parameters. Use libpq's `application_name` spelling when needed.
+Psycopg2 uses the shared PostgreSQL wire protocol, so its PostgreSQL runner can
+also connect to a Redshift listener. The configured listener still determines
+the frontend dialect and metadata profile; the driver name does not select one.
 
 For all BI tools using psycopg2, enable autocommit so ordinary reads can use YASP's
 result cache. For SQLAlchemy connections, set the engine's `isolation_level` to
@@ -243,10 +336,58 @@ Psycopg2 uses simple queries and does not accept JDBC's `preferQueryMode` option
 Its default transactions are supported, but explicit transactions bypass YASP's
 result cache. Disable the BI tool's query-result cache so YASP owns result caching.
 
+For Superset's **Amazon Redshift** connection, install a compatible
+`sqlalchemy-redshift` dialect in its Python environment. The tested local image
+uses Superset 6.1.0, SQLAlchemy 1.4.54, psycopg2-binary 2.9.13 and
+`sqlalchemy-redshift==0.8.14`. Version 1.0 of that dialect requires SQLAlchemy 2;
+do not upgrade Superset's SQLAlchemy dependency just to install the latest dialect.
+Restart Superset after installing the driver. Include it in the image build so
+container recreation retains it. See [Superset's Redshift setup](https://superset.apache.org/user-docs/databases/supported/amazon-redshift/).
+
+Use this SQLAlchemy URI, substituting the frontend password:
+
+```text
+redshift+psycopg2://yasp:PASSWORD@host.docker.internal:6432/development?sslmode=verify-full&sslrootcert=/tmp/yasp-ca.crt&application_name=superset
+```
+
+Mount the public CA into the Superset container at that path. In **Advanced →
+Other → Engine Parameters**, enter `{"isolation_level":"AUTOCOMMIT"}`. This editor
+accepts the engine options directly; the surrounding `engine_params` key belongs
+only in the full Extra JSON representation shown above. Test and save the
+connection after clearing any JDBC-only parameters.
+
+Connection testing and native SQL execution work with this local combination.
+The Redshift dialect's table reflection also queries Redshift-only catalog fields
+such as `pg_class.reldiststyle`; that SQL is outside the current captured metadata
+handlers and fails against a PostgreSQL backend. Use the PostgreSQL SQLAlchemy
+dialect (`postgresql+psycopg2://...`) against the same listener for the existing
+PostgreSQL metadata surface when table browsing is required. This does not change
+the listener's Redshift profile. Redshift-specific Superset reflection needs its
+own captured query handlers before full dataset browsing is supported.
+
+Redash 26.9's **Redshift** runner has an SSL-mode field but no CA-upload or JDBC
+properties field. It supplies its bundled CA file at
+`/app/redash/query_runner/files/redshift-ca-bundle.crt`. For a private issuing CA,
+append the public CA certificate to that bundle, preserving the existing AWS
+certificates, in the server and every query-worker/scheduler image. A read-only
+mount of a prebuilt combined bundle at that same path is another option. Merely
+copying a CA to `/tmp` does not configure this runner to trust it. Select
+`verify-full`, use a hostname in the server certificate, and leave the optional
+ad-hoc and scheduled query-group fields empty: those fields prepend a second
+statement, outside the current single-statement query surface.
+
+The captured Redash Redshift schema query is served from the configured PostgreSQL
+catalog snapshot. Refresh Redash's cached schema after restarting YASP with
+catalog support. Saved query remarks contain a numeric `query_id`; new queries
+contain `query_id: adhoc`. Both retain their numeric `user_id` for the example
+context hook. A missing or invalid user remark still takes the configured fallback
+route. Comments do not authenticate the BI user.
+
 `SET application_name` accepts at most 63 UTF-8 bytes. `SET search_path`
 accepts at most 1,024 bytes and 16 entries; an explicit `pg_catalog` must be first.
 Matching SHOW requests read frontend state. These startup parameters use the same
-bounds. Both settings are replayed for ordinary and metadata reads and participate
+bounds. Configure an explicit JDBC `ApplicationName` within this bound, including
+for the Redshift driver. Both settings are replayed for PostgreSQL ordinary and metadata reads and participate
 in ordinary result-cache scope. Changes inside a client transaction survive commit
 and are restored on rollback.
 
@@ -254,8 +395,10 @@ Clients may reaffirm fixed UTF8 encoding, standard strings on, DateStyle `ISO, M
 TimeZone `UTC`, IntervalStyle `postgres`, bytea output `hex`, extra float digits `3`,
 read-only mode on, and `read committed` isolation. `SHOW TRANSACTION ISOLATION LEVEL`
 also reports this fixed isolation level. Other settings, roles, and extended-query
-execution are unsupported. Startup probes the
-source version; restart after a source version upgrade.
+execution are unsupported. PostgreSQL startup probes the
+source version; restart after a source version upgrade. The experimental Redshift
+profile accepts its driver's advisory `SET readonly=0/1` commands without changing
+the engine's read-only enforcement and advertises its compatibility version.
 
 ### Read-only client transactions
 
@@ -323,3 +466,35 @@ bypasses both reads and writes. See [hook examples](../hooks/README.md#cache-eli
 file. Limits must be positive, a payload must fit the byte budget, and counters must
 fit their platform bounds. Build with `--features python`; install and expose the
 matching interpreter and packages as described in [development](development.md#python-embedding).
+
+## Experimental Snowflake library host
+
+Build with `--features snowflake` and construct a `SnowflakeConfig` for each
+configured source identity. Register it with `Backends::with_snowflake`, then call
+`gateway::serve_backends` using the existing selection hook. The PostgreSQL
+registry supplies the designated discovery authority. Eligible data bindings must
+expose the same logical schema. A binding fixes the role and warehouse; remarks
+only select SQL grammar. Snowflake results bypass the result cache.
+
+The compiled [Snowflake host example](../examples/snowflake_gateway.rs) reads
+`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, and `PGDATABASE` for metadata,
+`YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` for
+the frontend, and `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`,
+`SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_ROLE`, and
+`SNOWFLAKE_WAREHOUSE` for data execution. `YASP_SNOWFLAKE_DRIVER` names a trusted
+native library and `YASP_SNOWFLAKE_DRIVER_SHA256` must match its bytes.
+Use the patched artifact validated by the compatibility probes; a matching digest
+identifies the library and does not establish compatibility for a replacement driver.
+
+```sh
+cargo run --locked --features snowflake --example snowflake_gateway
+```
+
+The example advertises the PostgreSQL profile and expects the normal Metabase
+native remark. It uses verified HTTPS for Snowflake. The typed `emulator` endpoint
+is reserved for explicit loopback HTTP fixtures. Capacity and acquisition timeout
+apply to each binding; worker ownership retains admission during cancellation and
+cleanup. Fresh connections isolate identities and transaction state. The Arrow
+batch check runs after allocation, so it does not hard cap native RSS.
+The [network runtime gate](../scripts/compatibility/README.md#native-runtime-gate)
+uses Fakesnow to test the actual connector path.

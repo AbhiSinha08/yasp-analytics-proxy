@@ -30,6 +30,14 @@ fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
 }
 
 pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if file
+        .hooks
+        .input_options
+        .as_ref()
+        .is_some_and(|hook| hook.callback != "builtin.input_options.metabase")
+    {
+        return Err(io::Error::other("unregistered hooks.input_options name").into());
+    }
     // The host maps names to compiled functions once, before accepting clients.
     if file
         .hooks

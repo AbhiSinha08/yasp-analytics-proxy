@@ -1,11 +1,13 @@
 //! PostgreSQL startup, authentication, message ordering, and session recovery.
 
 use super::{
-    FrontendSocket, protocol_error, query::QuerySession, routing::Execution, server::Credentials,
-    transaction::Transaction,
+    FrontendProfile, FrontendSocket, protocol_error,
+    query::QuerySession,
+    server::{Credentials, CredentialsAuth},
 };
 use crate::{
-    config::GatewaySettings, discovery::SessionSettings, query::ParsedQuery, transport::FrameGuard,
+    backend::execution::Execution, config::GatewaySettings, discovery::SessionSettings,
+    execution::Transaction, query::ParsedQuery, transport::FrameGuard,
 };
 use futures::{SinkExt, StreamExt};
 use pgwire::{
@@ -14,6 +16,7 @@ use pgwire::{
         PgWireConnectionState,
         auth::{
             DefaultServerParameterProvider,
+            cleartext::CleartextPasswordAuthStartupHandler,
             sasl::{SASLAuthStartupHandler, scram::ScramAuth},
         },
     },
@@ -75,16 +78,27 @@ pub(super) async fn connection(
     parameters.date_style = "ISO, MDY".into();
     parameters.time_zone = "UTC".into();
     // SASL state belongs to one session; only immutable salted credentials are shared.
-    let mut scram = ScramAuth::new(source.clone());
+    let mut scram = ScramAuth::new(Arc::new(CredentialsAuth(source.clone())));
     if let Some(tls) = &tls {
         scram
             .configure_certificate(&tls.certificate)
             .map_err(|_| io::Error::other("invalid SCRAM TLS certificate"))?;
     }
-    let auth = Arc::new(
+    let scram_auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
             .with_scram(scram)
             .with_connection_manager(cancel_manager.clone()),
+    );
+    let password_auth = Arc::new(
+        CleartextPasswordAuthStartupHandler::new(CredentialsAuth(source.clone()), {
+            let mut parameters = DefaultServerParameterProvider::default();
+            parameters.server_version = source.server_version.clone();
+            parameters.is_superuser = false;
+            parameters.default_transaction_read_only = true;
+            parameters.time_zone = "UTC".into();
+            parameters
+        })
+        .with_connection_manager(cancel_manager.clone()),
     );
     let noop = Arc::new(NoopHandler);
     let read_timeout = Duration::from_millis(u64::from(settings.read_timeout_ms));
@@ -147,7 +161,13 @@ pub(super) async fn connection(
             if result.is_err() {
                 transaction.fail();
             }
-            finish_query(&mut socket, result, write_timeout, transaction.status()).await?;
+            finish_query(
+                &mut socket,
+                result,
+                write_timeout,
+                transaction.status().into(),
+            )
+            .await?;
             continue;
         }
         let extended = message.is_extended_query();
@@ -205,16 +225,29 @@ pub(super) async fn connection(
                             ));
                         }
                     }
-                    process_message(
-                        message,
-                        &mut socket,
-                        auth.clone(),
-                        noop.clone(),
-                        noop.clone(),
-                        noop.clone(),
-                        noop.clone(),
-                    )
-                    .await
+                    if source.profile == FrontendProfile::Redshift {
+                        process_message(
+                            message,
+                            &mut socket,
+                            password_auth.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                        )
+                        .await
+                    } else {
+                        process_message(
+                            message,
+                            &mut socket,
+                            scram_auth.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                            noop.clone(),
+                        )
+                        .await
+                    }
                 }
             }
         };
@@ -228,7 +261,7 @@ pub(super) async fn connection(
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response timed out"))?;
         if let Err(error) = result {
             transaction.fail();
-            socket.set_transaction_status(transaction.status());
+            socket.set_transaction_status(transaction.status().into());
             tracing::error!(client_id, "client protocol operation failed");
             let mut info: ErrorInfo = error.into();
             if !authenticated {

@@ -1,0 +1,69 @@
+//! Native Snowflake charts with PostgreSQL metadata through one pgwire listener.
+use std::{collections::BTreeMap, env, sync::Arc, time::Duration};
+use yasp::{
+    backend::{
+        Backends, PostgresBackends,
+        snowflake::{SnowflakeBackend, SnowflakeConfig},
+    },
+    config::{BackendConfig, BackendSettings, GatewayConfig},
+    hooks::{BackendSelection, bind_select_backend, builtin::input_options::metabase},
+    query::SqlDialect,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    yasp::logger::init()?;
+    let catalog = BackendSelection {
+        target: "catalog".into(),
+        backend_login: "reader".into(),
+    };
+    let selected = BackendSelection {
+        target: "snowflake".into(),
+        backend_login: "analyst".into(),
+    };
+    let postgres = Arc::new(PostgresBackends::new(
+        BTreeMap::from([(
+            catalog.clone(),
+            BackendConfig::new(
+                env::var("PGHOST")?,
+                env::var("PGPORT")?.parse()?,
+                env::var("PGUSER")?,
+                env::var("PGPASSWORD")?,
+                env::var("PGDATABASE")?,
+            )?,
+        )]),
+        BackendSettings::default(),
+    )?);
+    let snowflake = Arc::new(SnowflakeBackend::new(SnowflakeConfig {
+        driver_library: env::var_os("YASP_SNOWFLAKE_DRIVER")
+            .ok_or("missing YASP_SNOWFLAKE_DRIVER")?
+            .into(),
+        driver_sha256: env::var("YASP_SNOWFLAKE_DRIVER_SHA256")?,
+        account: env::var("SNOWFLAKE_ACCOUNT")?,
+        username: env::var("SNOWFLAKE_USER")?,
+        password: env::var("SNOWFLAKE_PASSWORD")?,
+        database: env::var("SNOWFLAKE_DATABASE")?,
+        schema: env::var("SNOWFLAKE_SCHEMA")?,
+        role: env::var("SNOWFLAKE_ROLE")?,
+        warehouse: env::var("SNOWFLAKE_WAREHOUSE")?,
+        emulator: None,
+        max_connections: 4,
+        acquire_timeout: Duration::from_secs(60),
+        max_batch_bytes: 8 * 1024 * 1024,
+    })?);
+    let backends = Arc::new(Backends::new(postgres).with_snowflake(selected.clone(), snowflake)?);
+    let selector = bind_select_backend(selected, |_, route| Ok(route.clone()));
+    let config = GatewayConfig::new(
+        env::var("YASP_GATEWAY_USERNAME")?,
+        env::var("YASP_GATEWAY_PASSWORD")?,
+        env::var("YASP_GATEWAY_DATABASE")?,
+    )?
+    .with_schema_discovery(catalog)
+    .with_input_options(metabase(SqlDialect::Snowflake));
+    let listener = tokio::net::TcpListener::bind(config.settings().listen).await?;
+    yasp::gateway::serve_backends(listener, config, backends, selector, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
+    Ok(())
+}

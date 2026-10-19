@@ -39,6 +39,7 @@ introduce only the contracts needed by the current phase.
 | Policy                       | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks.                           | Database access controls remain authoritative; masking preserves the result schema.                                                                               |
 | Extensions                   | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks.                                                | Contracts belong to the library; organization implementations live outside core engine code.                                                                      |
 | Result cache                 | Store source results for a limited time, then apply current engine processing.                                                         | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
+| Schema catalog               | Store source definitions in bounded immutable generations and refresh them periodically. | Source identity, exact names and native types are shared by frontend metadata and future AST binders; schema facts do not authorize access or apply masks. |
 | Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance.                                                 | Shared configuration names the client protocol and each target's engine explicitly.                                                                               |
 
 The gateway passes execution requests to the backend boundary rather than opening
@@ -514,25 +515,40 @@ through a System 1 decision model, and authenticated management tools.
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend adapters             | Add a selected warehouse engine, such as Redshift or Snowflake, with its own execution, metadata, type, and session rules.                                                                                                  |
 | Gateway and dialect handling | Publish which frontend/backend combinations work. Add explicit translation for a supported SQL subset where needed; reject unsupported combinations.                                                                        |
-| Shared execution contract    | Introduce adapter dispatch when the second engine is implemented. Keep routing, policies, hooks, and cache logic independent of its driver.                                                                                 |
+| Shared execution contract    | Use concrete source/session dispatch and typed execution contracts. Preserve opaque PostgreSQL values; extend adapters after their connector gates pass.                                                                                 |
 | Decision model and masking   | Classify result data and apply dynamic, policy-driven masks before forwarding results.                                                                                                                                      |
 | Management service           | Add authenticated APIs for configuration inspection, health, and cache clearing; use Axum if an embedded HTTP service fits.                                                                                                 |
 | Admin UI and SQL Studio      | Manage routing/access mappings and inspect query results through the same authorized execution path.                                                                                                                        |
 | Configuration lifecycle      | Validate replacement settings and hook versions, then activate a consistent generation without exposing mixed policies.                                                                                                     |
 | Redis query queue            | Bound burst admission with deadlines, cancellation, worker ownership, and recovery. Current local acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns a capacity error. |
 
-Choose the second engine when this phase starts. Do not install its SDK or implement
-its adapter in Phase 1. Adding another native client protocol is a separate gateway
-capability, not a prerequisite for every new backend.
+Snowflake is the selected second-engine candidate. Its driver and emulator must
+pass the [compatibility gates](multi-engine.md) before runtime integration.
+Snowflake runtime dependencies are optional behind the `snowflake` feature. Frontend
+profile selection, host-owned pre-parse dialect hints, native source affinity, and
+PostgreSQL execution/cache extraction are implemented. The Snowflake native C ABI
+passes the local read-only cancellation comparison with a corrected Fakesnow test
+fixture. Native Snowflake execution through pgwire, typed configuration, bounded
+worker admission, value conversion, transaction affinity, timeout/cancel/disconnect
+recovery, and source cleanup have local network coverage. Virtual metadata,
+generated SQL translation, host YAML configuration, full value and native-memory
+bounds, and real-source role/warehouse acceptance remain pending. Adding another
+native client protocol is a separate gateway capability, not a prerequisite for
+every new backend.
 
 ### Execution milestones
+
+The shared [schema catalog](catalog.md) supplies qualified relation/column
+coordinates and native types through periodically refreshed generations. Future
+AST lineage must pin a generation and resolve aliases, joins, CTEs and expressions
+before dynamic masking. Metadata snapshots alone do not establish result lineage.
 
 1. **Mask PostgreSQL results first.** Prove a deterministic policy with fixture
    classifications, then integrate the selected model with measured accuracy,
    latency, and failure behavior. Management UI work is not a prerequisite.
-2. **Add one warehouse.** Pick it from actual workload requirements. Write the
+2. **Add one warehouse.** Validate the selected Snowflake candidate's
    frontend/backend SQL, metadata, type, authentication, cancellation, and session
-   matrix before selecting its driver. Redshift's PostgreSQL-compatible connection
+   matrix before production acceptance. Redshift's PostgreSQL-compatible connection
    does not imply identical catalog or type behavior; Snowflake needs its own
    execution/authentication path. PostgreSQL JDBC catalog discovery against a
    warehouse needs metadata adaptation as well as query translation. Restrict the

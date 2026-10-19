@@ -1,10 +1,12 @@
 //! Validated gateway and PostgreSQL settings supplied by the host application.
 
+mod catalog;
 mod file;
 mod runtime;
 mod settings;
 
 pub use crate::tls::{ClientTlsSettings, TargetTls};
+pub use catalog::SchemaCatalogSettings;
 pub use file::{
     ComputeInstanceSettings, ComputeSettings, ComputeTypeSettings, CredentialOverride, FileConfig,
     LoginSettings, Logins, SchemaDiscoverySettings, TargetSettings,
@@ -36,6 +38,10 @@ pub enum ConfigError {
     #[error("application context dataset limits or names are invalid")]
     InvalidApplicationContexts,
     #[error(
+        "schema_discovery.catalog requires explicit schemas and valid refresh, age, row and byte bounds"
+    )]
+    InvalidCatalog,
+    #[error(
         "Python limits must be positive, the payload must fit the byte budget, and queue bounds must fit their counters"
     )]
     InvalidPythonLimit,
@@ -63,8 +69,10 @@ pub enum ConfigError {
     MissingDefaultBackend,
     #[error("target engine must be postgresql")]
     UnsupportedTarget,
-    #[error("gateway protocol must be postgresql")]
+    #[error("gateway protocol must be postgresql or redshift")]
     UnsupportedGateway,
+    #[error("the Redshift password authentication profile requires gateway TLS")]
+    RedshiftRequiresTls,
     #[error("gateway.listen requires a nonzero port")]
     InvalidListener,
     #[error("gateway session, SQL, context, hook, and timeout limits must be positive")]

@@ -5,7 +5,17 @@ registers callbacks, constructs backend pools and gateway configuration, then ca
 `gateway::serve_routed`. `gateway::serve` supports a fixed PostgreSQL backend through
 the same session handling. Custom compiled code belongs to that application or its
 own crate; external Python files are deployment resources. Core modules invoke
-contracts and validate decisions without interpreting organization policy.
+contracts and validate decisions without interpreting organization policy. Shared
+execution receives authenticated identity and bounded services; source driver and
+frontend password/TLS objects remain in their adapters.
+
+Hosts can also construct a shared [schema catalog](catalog.md), attach it with
+`GatewayConfig::with_catalog`, and retain its `Arc<Snapshot>` for later AST binding.
+Catalog source identity and refresh settings belong to the host; core owns bounded
+loading, atomic publication, expiry and frontend response handling. Schema coordinates
+are facts, not an authorization or masking decision.
+The repository host attaches the PostgreSQL provider through
+`schema_discovery.catalog`, sharing its configured discovery identity and pool.
 
 For encrypted deployments, see [TLS setup](tls.md#library-applications) and the
 [standalone library example](../examples/tls_gateway.rs). The application owns
@@ -20,6 +30,7 @@ and Python examples are under [hooks/examples](../hooks/examples).
 
 | Stage             | Binding and data                                                                                                                              | Result/failure policy                                                                                                                                                                           |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input options | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect. | Typed input grammar and native affinity. No credentials, routing decisions, or discovery privileges. |
 | Context           | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query.                   | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query.                                                                                      |
 | Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
 | Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
@@ -46,6 +57,16 @@ Use `bind_select_backend_async` or `bind_cache_eligibility_async` for asynchrono
 dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
 Context uses cooperative async I/O; its deadline cannot interrupt blocking Rust.
 See [binding examples](../hooks/README.md).
+
+Input options run before tokenization and parsing. The callback must be cheap and
+nonblocking. Repository hosts can bind `hooks::builtin::input_options::metabase`
+with their logical database's native dialect; other consumers can supply their
+own closure without interpreting BI comments in the core engine. Original SQL,
+immutable AST, and `ParsedQuery::input_options()` reach context and selection.
+Native source affinity is checked after ordinary routing and before pool
+acquisition or cache lookup. New frontend/dialect combinations bypass the
+PostgreSQL result cache.
+
 
 ## Owning shared datasets
 
@@ -192,6 +213,9 @@ The `metabase_pg` and Redash extractors recognize the leading PostgreSQL comment
 shown above. They return normalized fields including `tool`, `user_id`,
 `query_hash`, and tool-specific values such as `query_type`, `query_id`, `job_id`,
 or `scheduled`. Malformed or nonleading comments produce no metadata.
+Redash 26.9 emits `query_id: adhoc` for an unsaved SQL-editor query. The extractor
+preserves that marker as a string while retaining numeric saved-query IDs and
+numeric user IDs. The same context hook therefore handles saved and unsaved runs.
 
 Metabase's Redshift driver overrides `query->remark` to prepend a JSON `partner`
 comment containing dashboard, chart, user, account, and filter metadata before the
@@ -200,11 +224,12 @@ default `Metabase::` remark. The resulting SQL remark is
 The `metabase_rs` extractor parses that envelope and returns the partner fields
 alongside the common Metabase fields. This format is implemented from Metabase's
 [Redshift driver source](https://github.com/metabase/metabase/blob/master/modules/drivers/redshift/src/metabase/driver/redshift.clj#L3427-L3445);
-it has not been manually tested through a YASP Redshift gateway.
+the same envelope was observed through the YASP Redshift gateway with Metabase
+v0.64.2.8.
 
 Superset extraction is deferred: the local 6.1.0 instance had no
 `SQL_QUERY_MUTATOR` configured, and its deployment-controlled mutation path has not
-been verified for every query path. When DEBUG logging is enabled, PostgreSQL
+been verified for every query path. When DEBUG logging is enabled, PostgreSQL and Redshift
 queries recognized by the gateway include `bi_remark` as the normalized object or
 `null` in the `query received` event; the raw leading BI comment is omitted from
 that event's `sql` field. The metadata is diagnostic only and does not affect

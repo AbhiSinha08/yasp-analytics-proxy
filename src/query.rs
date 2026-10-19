@@ -1,4 +1,4 @@
-//! PostgreSQL query syntax and read-only inspection. Original SQL and the
+//! Dialect-aware query syntax and read-only inspection. Original SQL and the
 //! immutable parsed tree stay together through context, routing, and execution.
 
 mod fingerprint;
@@ -8,7 +8,7 @@ use fingerprint::query_id;
 use read_only::ReadOnly;
 use sqlparser::{
     ast::Visit,
-    dialect::PostgreSqlDialect,
+    dialect::{Dialect, PostgreSqlDialect, RedshiftSqlDialect, SnowflakeDialect},
     parser::Parser,
     tokenizer::{Token, TokenWithSpan, Tokenizer},
 };
@@ -20,12 +20,56 @@ const MAX_SQL_BYTES: usize = 1024 * 1024;
 // A nesting limit alone does not bound left-associative trees or their drop stack.
 const MAX_SQL_TOKENS: usize = 4096;
 
-/// Original SQL and its single PostgreSQL statement. Access is immutable so the
+/// The input grammar, independent of the selected source and its credentials.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlDialect {
+    #[default]
+    Postgresql,
+    Redshift,
+    Snowflake,
+}
+
+impl SqlDialect {
+    fn parser(self) -> &'static dyn Dialect {
+        match self {
+            Self::Postgresql => &PostgreSqlDialect {},
+            Self::Redshift => &RedshiftSqlDialect {},
+            Self::Snowflake => &SnowflakeDialect {},
+        }
+    }
+}
+
+/// Native SQL retains engine affinity and never grants discovery access.
+#[derive(Clone, Copy, Debug)]
+pub struct InputOptions {
+    pub dialect: SqlDialect,
+    pub native: bool,
+}
+
+impl InputOptions {
+    pub fn frontend(dialect: SqlDialect) -> Self {
+        Self {
+            dialect,
+            native: false,
+        }
+    }
+
+    pub fn native(dialect: SqlDialect) -> Self {
+        Self {
+            dialect,
+            native: true,
+        }
+    }
+}
+
+/// Original SQL and its single statement. Access is immutable so the
 /// inspected tree cannot diverge from the SQL sent to the database.
 pub struct ParsedQuery {
     sql: String,
     statement: Statement,
     query_id: String,
+    options: InputOptions,
 }
 
 #[derive(Debug, Error)]
@@ -38,7 +82,7 @@ pub enum QueryError {
     TooLarge,
     #[error("SQL exceeds the 4096 significant-token limit")]
     TooComplex,
-    #[error("unsupported or invalid PostgreSQL syntax")]
+    #[error("unsupported or invalid SQL syntax for the input dialect")]
     Syntax,
     #[error("query is outside the supported read-only scope")]
     Unsupported,
@@ -48,12 +92,13 @@ impl ParsedQuery {
     /// A generated metadata statement has its own effective SQL and query ID.
     pub(crate) fn from_statement(statement: Statement) -> Result<Self, QueryError> {
         let sql = statement.to_string();
-        let tokens = bounded_tokens(&sql, MAX_SQL_BYTES)?;
+        let tokens = bounded_tokens(&sql, MAX_SQL_BYTES, SqlDialect::Postgresql)?;
         let query_id = query_id(&sql, &tokens);
         Ok(Self {
             sql,
             statement,
             query_id,
+            options: InputOptions::frontend(SqlDialect::Postgresql),
         })
     }
 
@@ -62,8 +107,20 @@ impl ParsedQuery {
     }
 
     pub(crate) fn parse_with_limit(sql: &str, max_sql_bytes: usize) -> Result<Self, QueryError> {
-        let dialect = PostgreSqlDialect {};
-        let tokens = bounded_tokens(sql, max_sql_bytes)?;
+        Self::parse_with_options(
+            sql,
+            max_sql_bytes,
+            InputOptions::frontend(SqlDialect::Postgresql),
+        )
+    }
+
+    pub fn parse_with_options(
+        sql: &str,
+        max_sql_bytes: usize,
+        options: InputOptions,
+    ) -> Result<Self, QueryError> {
+        let dialect = options.dialect.parser();
+        let tokens = bounded_tokens(sql, max_sql_bytes, options.dialect)?;
         // sqlparser does not decode PostgreSQL Unicode identifier escapes.
         // Reject that syntax rather than inspecting a different function name.
         if tokens.windows(3).any(|tokens| {
@@ -77,7 +134,7 @@ impl ParsedQuery {
             return Err(QueryError::Unsupported);
         }
         let query_id = query_id(sql, &tokens);
-        let mut statements = Parser::new(&dialect)
+        let mut statements = Parser::new(dialect)
             .with_recursion_limit(64)
             .with_tokens_with_locations(tokens)
             .parse_statements()
@@ -91,11 +148,16 @@ impl ParsedQuery {
             sql: sql.to_owned(),
             statement: statements.remove(0),
             query_id,
+            options,
         })
     }
 
     pub fn sql(&self) -> &str {
         &self.sql
+    }
+
+    pub fn input_options(&self) -> InputOptions {
+        self.options
     }
 
     /// Stable lowercase SHA-256 identifier for this query's normalized tokens.
@@ -118,11 +180,15 @@ impl ParsedQuery {
     }
 }
 
-fn bounded_tokens(sql: &str, max_sql_bytes: usize) -> Result<Vec<TokenWithSpan>, QueryError> {
+fn bounded_tokens(
+    sql: &str,
+    max_sql_bytes: usize,
+    dialect: SqlDialect,
+) -> Result<Vec<TokenWithSpan>, QueryError> {
     if sql.len() > max_sql_bytes {
         return Err(QueryError::TooLarge);
     }
-    let tokens = Tokenizer::new(&PostgreSqlDialect {}, sql)
+    let tokens = Tokenizer::new(dialect.parser(), sql)
         .tokenize_with_location()
         .map_err(|_| QueryError::Syntax)?;
     if tokens

@@ -7,6 +7,7 @@ use std::{net::SocketAddr, time::Duration};
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {
+    pub input_options: Option<RustHookSettings>,
     pub context: Option<SelectorSettings>,
     pub select_backend: SelectorSettings,
     pub python: PythonSettings,
@@ -15,6 +16,7 @@ pub struct HooksSettings {
 impl Default for HooksSettings {
     fn default() -> Self {
         Self {
+            input_options: None,
             context: None,
             select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
             python: PythonSettings::default(),
@@ -343,8 +345,9 @@ impl Default for GatewaySettings {
 impl GatewaySettings {
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.tls.validate()?;
-        if self.protocol != "postgresql" {
-            return Err(ConfigError::UnsupportedGateway);
+        let profile = crate::gateway::FrontendProfile::from_protocol(&self.protocol)?;
+        if profile == crate::gateway::FrontendProfile::Redshift && self.tls.mode != "enable" {
+            return Err(ConfigError::RedshiftRequiresTls);
         }
         if self.listen.port() == 0 {
             return Err(ConfigError::InvalidListener);

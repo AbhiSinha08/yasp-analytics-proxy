@@ -108,6 +108,36 @@ fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
 }
 
 #[test]
+fn catalog_configuration_requires_bounded_explicit_schema_scope() {
+    let config = make_config("app.selector", ONE_TARGET, "  {}");
+    let mut value = serde_json::to_value(&config).unwrap();
+    value["schema_discovery"]["catalog"] = serde_json::json!({"schemas": ["Mixed.Schema's"]});
+    let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
+    config.validate().unwrap();
+    let settings = config.schema_discovery.catalog.unwrap().runtime().unwrap();
+    assert_eq!(settings.schemas, ["Mixed.Schema's"]);
+    assert_eq!(settings.refresh_interval.as_secs(), 60);
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!({"schemas": []}),
+        serde_json::json!({"schemas": ["public"], "refresh_interval_seconds": 0}),
+        serde_json::json!({"schemas": ["public"], "refresh_timeout_ms": 0}),
+        serde_json::json!({"schemas": ["public"], "max_age_seconds": 1}),
+        serde_json::json!({"schemas": ["public"], "max_rows": 0}),
+        serde_json::json!({"schemas": ["public"], "max_bytes": 67108865}),
+    ] {
+        value["schema_discovery"]["catalog"] = invalid;
+        let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidCatalog)
+        ));
+    }
+    value["schema_discovery"]["catalog"] = serde_json::json!({"schemas": ["public"], "unknown": 1});
+    assert!(serde_json::from_value::<FileConfig>(value).is_err());
+}
+
+#[test]
 fn cache_settings_and_bounds_are_validated() {
     let mut cache = CacheSettings::default();
     cache.validate().unwrap();

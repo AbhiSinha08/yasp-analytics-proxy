@@ -27,6 +27,8 @@ OpenSSL, and Python 3.
 `YASP_TEST_PG_BIN` can select the PostgreSQL binary directory. It cleans up its own
 services and files; it does not replace an existing developer service. Full setup,
 configured-service mode, and focused runs are in [tests/README.md](../tests/README.md).
+Run feature combinations sequentially when sharing a Cargo target directory:
+host integration tests launch the same output binary path.
 
 ```sh
 cargo test --locked --lib config

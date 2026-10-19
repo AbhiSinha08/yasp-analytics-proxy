@@ -5,7 +5,7 @@
 version: 1
 
 gateway:
-  protocol: postgresql
+  protocol: postgresql # redshift selects the experimental TLS password profile.
   listen: "127.0.0.1:6432"
   max_sessions: 32
   max_message_bytes: 8388608
@@ -112,6 +112,14 @@ targets:
 # Metadata bypasses application hooks and the result cache. A target is required
 # when several targets exist; an omitted login uses its first declared login.
 schema_discovery:
+  # Optional periodically refreshed metadata from this discovery identity.
+  # catalog:
+  #   schemas: [public]
+  #   refresh_interval_seconds: 60
+  #   refresh_timeout_ms: 10000
+  #   max_age_seconds: 300
+  #   max_rows: 100000
+  #   max_bytes: 16777216
   target: primary
   backend_login: restricted
 
@@ -152,6 +160,15 @@ cache:
   #     excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
 
 hooks:
+  # Optional compiled pre-parse hint resolver. Missing/MBQL/malformed remarks
+  # retain the frontend dialect. The repository YAML host configures PostgreSQL
+  # backends; Snowflake bindings currently require a custom library host.
+  # input_options:
+  #   type: rust
+  #   callback: builtin.input_options.metabase
+  #   params:
+  #     native_dialect: snowflake
+
   select_backend:
     type: rust
     callback: builtin.select_backend.passthrough
@@ -181,7 +198,7 @@ hooks:
   #   type: python
   #   path: ../hooks/examples/context.py
   #   callback: derive_context
-  #   params: {}
+  #   params: {workload: reporting, report_kind: dashboard}
 
   # Application-specific selector example: context and role policy remain host-owned.
   # Replace select_backend above after validating metadata and implementing the policy.

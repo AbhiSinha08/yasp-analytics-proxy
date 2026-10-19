@@ -23,8 +23,14 @@ Cargo arguments follow `--`, including individual scenarios:
 ```sh
 python3 scripts/test.py -- --test routing
 python3 scripts/test.py -- --test cache context_and_metadata_bypass
+python3 scripts/test.py -- --test metabase --test redash
+python3 scripts/test.py -- --test bi_context --features python
 python3 scripts/test.py -- --all-targets --features python
 ```
+
+Tool-specific schema scenarios live in `metabase.rs` and `redash.rs`.
+`bi_context.rs` verifies the shared example context and role mapping across BI
+remark formats. The schema tests share host setup in `support/catalog_host.rs`.
 
 The Python feature needs matching CPython headers and a shared `libpython`. Set
 `PYO3_PYTHON` for the build and `LD_LIBRARY_PATH` when that library is outside the
@@ -67,6 +73,22 @@ connections, route/discovery/compute conflicts, transactional setup, cache bypas
 and session scope, cancellation, disconnects, and idle/partial-message deadlines.
 The captured psycopg2/SQLAlchemy driver sequence is replayed by `gateway`.
 Captured protocol replay does not establish full BI-client compatibility.
+The separate [multi-engine probes](../scripts/compatibility/README.md) record
+candidate Snowflake driver and Metabase/JDBC versions. Standalone probes are not
+run by the PostgreSQL test runner. The optional `snowflake` feature has value and
+native-cleanup regression checks; its ignored HTTP integration test is launched
+by `scripts/compatibility/runtime_probe.py`. Synthetic write rollback remains a
+separate emulator diagnostic. Real Snowflake and Metabase/JDBC acceptance remain
+required.
+The ignored `jdbc` test uses disposable client containers from the pinned Metabase
+image. `scripts/compatibility/jdbc_probe.py` records its supported operations and
+catalog-backed table/column definitions for both drivers; it does not run Metabase's MBQL compiler.
+
+The `catalog` test covers periodic DDL refresh, pinned generation stability, source
+spelling/types, column-grant isolation, bounded-load failures and expiry. The ignored
+Snowflake network test also loads schema definitions through the native connector
+and renders both frontend profiles. Normalized keys and complete Metabase sync
+remain separate acceptance work.
 Future phase coverage belongs in [the plan](../docs/PLAN.md).
 
 ## Existing test services

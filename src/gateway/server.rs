@@ -1,6 +1,7 @@
 //! Listener admission, shared authentication material, and bounded shutdown.
 
-use super::{protocol_error, routing::Execution, session::connection};
+use super::{FrontendProfile, protocol_error, session::connection};
+use crate::backend::execution::Execution;
 use crate::{
     cache::RedisCache, config::GatewayConfig, datasets::DatasetReader, hooks::ContextHook, logger,
 };
@@ -26,19 +27,43 @@ pub(super) async fn serve_sessions(
     execution: Execution,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
-    let server_version = execution
-        .discovery()
-        .server_version()
-        .await
-        .map_err(|_| io::Error::other("cannot obtain PostgreSQL discovery profile"))?;
+    let profile =
+        FrontendProfile::from_protocol(&config.settings.protocol).map_err(io::Error::other)?;
+    if let Some(catalog) = &config.catalog {
+        let snapshot = catalog.snapshot().map_err(io::Error::other)?;
+        if snapshot.source.dialect == crate::query::SqlDialect::Postgresql
+            && snapshot.source != execution.discovery().catalog_identity()
+        {
+            return Err(io::Error::other(
+                "PostgreSQL catalog and discovery identities must match",
+            ));
+        }
+    }
+    let server_version = match profile {
+        // Preserve the existing source-backed PostgreSQL metadata surface.
+        FrontendProfile::Postgres => execution
+            .discovery()
+            .server_version()
+            .await
+            .map_err(|_| io::Error::other("cannot obtain PostgreSQL discovery profile"))?,
+        FrontendProfile::Redshift => "8.0.2".into(),
+    };
+    if profile == FrontendProfile::Redshift && config.tls.is_none() {
+        return Err(io::Error::other(
+            "Redshift password authentication requires TLS",
+        ));
+    }
     let settings = Arc::new(config.settings);
     let execution = Arc::new(execution);
     let cancel_manager = Arc::new(ConnectionManager::new());
     let salt = random_nonce().into_bytes();
-    let password = Password::new(
-        Some(salt.clone()),
-        gen_salted_password(&config.password, &salt, SCRAM_ITERATIONS),
-    );
+    let password = match profile {
+        FrontendProfile::Postgres => Password::new(
+            Some(salt.clone()),
+            gen_salted_password(&config.password, &salt, SCRAM_ITERATIONS),
+        ),
+        FrontendProfile::Redshift => Password::new(None, config.password.as_bytes().to_vec()),
+    };
     drop(config.password);
     let cache = config.cache;
     let context_hook = config.context_hook;
@@ -54,6 +79,9 @@ pub(super) async fn serve_sessions(
         datasets,
         stopped,
         server_version,
+        profile,
+        input_options: config.input_options,
+        catalog: config.catalog,
     });
     let mut sessions = JoinSet::new();
     tokio::pin!(shutdown);
@@ -129,6 +157,7 @@ pub(super) async fn serve_sessions(
 }
 
 pub(super) struct Credentials {
+    pub(super) catalog: Option<Arc<crate::catalog::Catalog>>,
     pub(super) tls: Option<Arc<crate::tls::ServerTls>>,
     pub(super) username: String,
     pub(super) database: String,
@@ -138,6 +167,8 @@ pub(super) struct Credentials {
     pub(super) datasets: Option<DatasetReader>,
     pub(super) stopped: watch::Receiver<bool>,
     pub(super) server_version: String,
+    pub(super) profile: FrontendProfile,
+    pub(super) input_options: Option<Arc<crate::hooks::InputOptionsResolver>>,
 }
 
 impl fmt::Debug for Credentials {
@@ -147,11 +178,14 @@ impl fmt::Debug for Credentials {
 }
 
 #[async_trait]
-impl AuthSource for Credentials {
+impl AuthSource for CredentialsAuth {
     async fn get_password(&self, login: &LoginInfo) -> PgWireResult<Password> {
-        if login.user() != Some(self.username.as_str()) {
+        if login.user() != Some(self.0.username.as_str()) {
             return Err(protocol_error("FATAL", "28P01", "authentication failed"));
         }
-        Ok(self.password.clone())
+        Ok(self.0.password.clone())
     }
 }
+
+#[derive(Debug)]
+pub(super) struct CredentialsAuth(pub(super) Arc<Credentials>);

@@ -11,9 +11,11 @@ pub struct GatewayConfig {
     pub(crate) tls: Option<std::sync::Arc<crate::tls::ServerTls>>,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
+    pub(crate) input_options: Option<std::sync::Arc<crate::hooks::InputOptionsResolver>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
     pub(crate) schema_discovery_compute: Option<String>,
     pub(crate) datasets: Option<crate::datasets::DatasetReader>,
+    pub(crate) catalog: Option<std::sync::Arc<crate::catalog::Catalog>>,
 }
 
 impl GatewayConfig {
@@ -35,9 +37,11 @@ impl GatewayConfig {
             tls: None,
             cache: None,
             context_hook: None,
+            input_options: None,
             schema_discovery: None,
             schema_discovery_compute: None,
             datasets: None,
+            catalog: None,
         })
     }
 
@@ -50,6 +54,18 @@ impl GatewayConfig {
 
     pub fn settings(&self) -> &GatewaySettings {
         &self.settings
+    }
+
+    /// Resolve the input grammar before parsing; this cannot authorize a route.
+    pub fn with_input_options(
+        mut self,
+        resolver: impl Fn(crate::hooks::InputRequest<'_>) -> crate::query::InputOptions
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.input_options = Some(std::sync::Arc::new(resolver));
+        self
     }
 
     /// Use a configured pair for discovery without invoking application hooks.
@@ -77,6 +93,13 @@ impl GatewayConfig {
 
     pub fn with_datasets(mut self, reader: crate::datasets::DatasetReader) -> Self {
         self.datasets = Some(reader);
+        self
+    }
+
+    /// Share source definitions with frontend metadata handlers and AST consumers.
+    /// The host owns the catalog's source identity and refresh lifetime.
+    pub fn with_catalog(mut self, catalog: std::sync::Arc<crate::catalog::Catalog>) -> Self {
+        self.catalog = Some(catalog);
         self
     }
 }

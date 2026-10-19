@@ -34,6 +34,7 @@ pub struct SchemaDiscoverySettings {
     pub target: Option<String>,
     pub backend_login: Option<String>,
     pub compute: Option<String>,
+    pub catalog: Option<super::SchemaCatalogSettings>,
 }
 
 /// Named logins retain their declaration order for the discovery default.
@@ -202,6 +203,9 @@ impl FileConfig {
         self.hooks.python.validate()?;
         self.cache.validate()?;
         self.application_contexts.validate()?;
+        if let Some(catalog) = &self.schema_discovery.catalog {
+            catalog.runtime()?;
+        }
         if let Some(hook) = &self.hooks.context {
             match hook {
                 SelectorSettings::Rust(name) => validate_value("hooks.context", name)?,

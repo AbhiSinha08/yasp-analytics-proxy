@@ -73,16 +73,40 @@
   - [x] **Transactional setup and cache scope** — Restore supported settings on rollback, retain them on commit, isolate autocommit cache scope, and bypass cache inside transactions.
 - [x] End to End testing with BI tools and Postgres Backend
 
-## Phase 2 — Additional engines, dynamic masking, and management (To be started)
+## Phase 2 — Additional engines, dynamic masking, and management
 
 - [ ] **Warehouse adapter** — Adds one selected engine with its own execution, metadata, type, and session behavior.
+  - [x] **Candidate dependency probe** — Pin and exercise the Snowflake ADBC/Fakesnow network path with Rust 1.89, exact decimals/NULLs, rollback, and in-flight cancellation; record failed gates in [multi-engine compatibility](multi-engine.md).
+  - [x] **Isolate cancellation failures** — Compare Rust manager and native C ABI against the same fixed Fakesnow endpoint; verify native cancellation stops server work and permits another query. Synthetic write rollback remains a diagnostic outside the read-only surface.
+  - [x] **Native connector ownership gate** — Retain native parent handles through execution/fetch, permit concurrent operation-scoped cancellation, reject stale handles, and verify recovery and balanced session cleanup through the network fixture.
+  - [x] **Fetch cancellation and read-ahead gate** — Verify blocked HTTP downloads stop and sessions recover. Build a pinned Apache driver with a stream-window patch; the unmodified wheel and Foundry 1.15.0 remain negative comparisons for their failing gates.
+  - [ ] **Production connector gates** — Establish native-memory bounds, full value coverage, deployment packaging, and real Snowflake role/warehouse isolation before production acceptance.
+  - [x] **PostgreSQL execution ownership** — Keep cache replay/capture, source session SQL, and physical acquisition/execution in the PostgreSQL adapter while preserving existing tests and public entry points.
+  - [x] **Shared execution boundary** — Preserve PostgreSQL behavior and public entry points while separating typed execution/errors/results from frontend wire messages.
+  - [x] **Experimental native Snowflake runtime** — Add optional typed source bindings, mixed-engine selection, blocking worker admission, exact decimal/binary/date/time values, transaction affinity, timeout/cancel/disconnect recovery, and balanced network-session cleanup. Retain PostgreSQL as the discovery authority.
+  - [ ] **Snowflake host configuration** — Load Snowflake identities and warehouses through the repository host's validated configuration.
+  - [ ] **Snowflake execution and lifecycle** — Implement configured accounts/roles/warehouses, exact value conversion, bounded workers/prefetch, transaction affinity, cleanup, and real-source authorization tests.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
+  - [x] **Client version inventory** — Record the deployed Metabase image digest and bundled PostgreSQL/Redshift JDBC versions.
+  - [x] **Bundled JDBC SQL corpus** — Capture TLS/simple-query setup, schemas/tables/columns/keys/indexes, previews, and transactions from PostgreSQL 42.7.12 and Redshift 2.2.5. Both drivers pass these captured operations with catalog-backed definitions and PostgreSQL key/index discovery.
+  - [ ] **Driver traffic corpus** — Capture startup, sync, browsing, filters, aggregates, time buckets, native charts, downloads, and cancellation in both connection modes.
+  - [x] **Input SQL dialect** — Resolve host-owned remark hints before dialect-aware tokenization/parsing and enforce native engine affinity after selection.
+  - [x] **Shared catalog generations** — Store filtered PostgreSQL/Snowflake schema facts in bounded memory; refresh periodically with atomic generations, source identity, age/status and qualified column coordinates. Keep old generations available to pinned readers.
+  - [x] **Captured frontend metadata** — Render the pinned JDBC schema/table/column shapes for both profiles using normalized definitions. Verify Snowflake metadata through the HTTP connector and both frontend profiles.
+  - [ ] **Remaining virtual metadata** — Add declared keys and other captured driver shapes, virtual identifiers and unsupported-type coverage before complete Snowflake sync acceptance.
+  - [x] **Catalog host configuration** — Load explicit schema scope and refresh/age/bound settings from `schema_discovery.catalog`; reuse the PostgreSQL discovery identity and pool.
+  - [x] **Metabase Redshift schema scans** — Serve captured custom table/field scans from the catalog, including literal filters, comments and PostgreSQL primary-key membership; keep application reads on ordinary routing.
+  - [ ] **Standalone warehouse host** — Remove the required PostgreSQL discovery binding once frontend startup, fingerprints and remaining metadata are served independently of it.
+  - [ ] **Bounded generated-query translation** — Validate the supported Metabase expression forms and explicit unsupported-feature errors against backend results.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
 - [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
-- [ ] **Backend Database Schema Caching**
+- [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [ ] **AST Based Dynamic Masking**
+  - [ ] **Column binding and lineage** — Pin a catalog generation, expand wildcards, resolve aliases/joins/CTEs/subqueries/expressions and expose ambiguous origins before policy-driven masking.
 - [ ] **Redshift Gateway**
+  - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.
+  - [ ] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.

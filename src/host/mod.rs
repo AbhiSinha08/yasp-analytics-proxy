@@ -53,27 +53,58 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(datasets) => gateway.with_datasets(datasets.reader()),
                 None => gateway,
             };
+            let discovery = host.file.discovery_backend()?;
+            let discovery_compute = host.file.discovery_compute()?;
             let backends = Arc::new(PostgresBackends::with_bindings(
                 host.backends,
                 host.file.backend,
             )?);
-            let listener = TcpListener::bind(gateway.settings().listen).await?;
-            tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-            gateway::serve_routed(listener, gateway, backends, selector, async {
-                #[cfg(unix)]
-                {
-                    let mut terminate =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                            .expect("cannot register SIGTERM handler");
-                    tokio::select! {
-                        _ = tokio::signal::ctrl_c() => {},
-                        _ = terminate.recv() => {},
-                    }
+            let catalog = match &host.file.schema_discovery.catalog {
+                Some(settings) => {
+                    let source = backends
+                        .get_discovery(&discovery, discovery_compute.as_deref())
+                        .ok_or_else(|| {
+                            io::Error::other("catalog discovery binding is unavailable")
+                        })?;
+                    Some(
+                        yasp::catalog::Catalog::postgres(
+                            Arc::new(source.clone()),
+                            settings.runtime()?,
+                        )
+                        .await?,
+                    )
                 }
-                #[cfg(not(unix))]
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await?;
+                None => None,
+            };
+            let gateway = match &catalog {
+                Some(catalog) => gateway.with_catalog(catalog.clone()),
+                None => gateway,
+            };
+            let serving = async {
+                let listener = TcpListener::bind(gateway.settings().listen).await?;
+                tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
+                gateway::serve_routed(listener, gateway, backends, selector, async {
+                    #[cfg(unix)]
+                    {
+                        let mut terminate = tokio::signal::unix::signal(
+                            tokio::signal::unix::SignalKind::terminate(),
+                        )
+                        .expect("cannot register SIGTERM handler");
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {},
+                            _ = terminate.recv() => {},
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await
+            }
+            .await;
+            if let Some(catalog) = catalog {
+                catalog.stop_refreshing().await;
+            }
+            serving?;
             Ok::<(), Box<dyn std::error::Error>>(())
         }
         .await;

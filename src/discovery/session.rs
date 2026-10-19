@@ -42,6 +42,9 @@ impl Default for SessionSettings {
 }
 
 pub(crate) enum SetupResponse {
+    EmptyInteger {
+        name: &'static str,
+    },
     Command(&'static str),
     Set {
         parameter: Option<(&'static str, String)>,
@@ -50,18 +53,14 @@ pub(crate) enum SetupResponse {
         name: String,
         value: String,
     },
+    Row {
+        name: String,
+        value: String,
+        tag: &'static str,
+    },
 }
 
 impl SessionSettings {
-    /// Replay only the bounded frontend settings; protected text settings stay fixed.
-    pub(crate) fn setup_sql(&self) -> String {
-        format!(
-            "SELECT pg_catalog.set_config('search_path', '{}', true); SET LOCAL application_name = '{}'",
-            self.search_path.replace('\'', "''"),
-            self.application_name.replace('\'', "''"),
-        )
-    }
-
     pub fn set_search_path(&mut self, value: &str) -> Result<(), &'static str> {
         if value.len() > 1024 || value.contains('\0') || !valid_search_path(value) {
             return Err("unsupported or oversized metadata search path");

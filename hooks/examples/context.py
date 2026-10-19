@@ -1,18 +1,34 @@
-"""Application example; the SQL-comment extractor is for local tests only."""
+"""Application example; client SQL remarks are local-demo hints, not identity."""
 
 import re
 
 
 def derive_context(request, params=None):
     params = params or {}
+    if "datasets" not in request:
+        return None
     # Test fixture only. SQL comments are client-controlled and do not prove identity.
     match = re.search(
         r"/\* yasp-test user=([\w-]+) workload=([\w-]+) report=([\w-]+) \*/",
         request["sql"],
     )
-    if match is None or "datasets" not in request:
-        return None
-    user_id, workload, report_kind = match.groups()
+    if match is not None:
+        user_id, workload, report_kind = match.groups()
+    else:
+        if not request["sql"].lstrip().startswith(("--", "/*")):
+            return None
+        import yasp_extractors
+
+        metadata = (
+            yasp_extractors.metabase_rs(request["sql"])
+            or yasp_extractors.metabase_pg(request["sql"])
+            or yasp_extractors.redash(request["sql"])
+        )
+        if metadata is None:
+            return None
+        user_id = str(metadata["user_id"])
+        workload = params.get("workload")
+        report_kind = params.get("report_kind")
     user = request["datasets"].get("users", user_id)
     if not isinstance(user, dict):
         return None

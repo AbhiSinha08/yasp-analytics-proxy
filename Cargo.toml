@@ -10,6 +10,7 @@ publish = false
 default = []
 # Rust-only hosts do not need a Python installation or libpython.
 python = ["dep:pyo3"]
+snowflake = ["dep:adbc_ffi", "dep:arrow-array", "dep:arrow-schema", "dep:libloading", "dep:chrono"]
 
 [dependencies]
 async-trait = "0.1"
@@ -32,7 +33,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 sha2 = "0.11"
 bytes = "1"
+adbc_ffi = { version = "=0.24.0", optional = true }
+arrow-array = { version = "=59.0.0", optional = true, features = ["ffi"] }
+arrow-schema = { version = "=59.0.0", optional = true }
+libloading = { version = "=0.8.9", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["std"] }
 
 [[example]]
 name = "python_environment"
 required-features = ["python"]
+
+[[example]]
+name = "snowflake_gateway"
+required-features = ["snowflake"]

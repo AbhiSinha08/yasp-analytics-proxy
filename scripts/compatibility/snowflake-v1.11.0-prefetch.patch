@@ -1,0 +1,86 @@
+--- a/go/adbc/driver/snowflake/record_reader.go
++++ b/go/adbc/driver/snowflake/record_reader.go
+@@ -39,6 +39,7 @@
+ 	"github.com/apache/arrow-go/v18/arrow/memory"
+ 	"github.com/snowflakedb/gosnowflake"
+ 	"golang.org/x/sync/errgroup"
++	"golang.org/x/sync/semaphore"
+ )
+ 
+ const MetadataKeySnowflakeType = "SNOWFLAKE_TYPE"
+@@ -516,6 +517,10 @@
+ }
+ 
+ type reader struct {
++	// Slots remain held until the consumer drains each stream, including the
++	// inline stream. Finished producers must not enable unbounded read-ahead.
++	streamSlots *semaphore.Weighted
++	slotHeld []bool
+ 	refCount   int64
+ 	schema     *arrow.Schema
+ 	chs        []chan arrow.RecordBatch
+@@ -670,6 +675,16 @@
+ 	group, ctx := errgroup.WithContext(compute.WithAllocator(ctx, alloc))
+ 	ctx, cancelFn := context.WithCancel(ctx)
+ 	group.SetLimit(prefetchConcurrency)
++	slots := semaphore.NewWeighted(int64(prefetchConcurrency))
++	if err := slots.Acquire(ctx, 1); err != nil {
++		cancelFn()
++		rr.Release()
++		_ = r.Close()
++		return nil, err
++	}
++	slotHeld := make([]bool, len(batches))
++	slotHeld[0] = true
++
+ 
+ 	// Initialize all channels upfront to avoid race condition
+ 	chs := make([]chan arrow.RecordBatch, len(batches))
+@@ -680,6 +695,8 @@
+ 	rdr := &reader{
+ 		refCount: 1,
+ 		chs:      chs,
++		streamSlots: slots,
++		slotHeld: slotHeld,
+ 		err:      nil,
+ 		cancelFn: cancelFn,
+ 		done:     make(chan struct{}),
+@@ -719,8 +736,19 @@
+ 
+ 	lastChannelIndex := len(chs) - 1
+ 	go func() {
++		var admissionErr error
+ 		for i, b := range batches[1:] {
+ 			batch, batchIdx := b, i+1
++			if err := slots.Acquire(ctx, 1); err != nil {
++				admissionErr = err
++				// Unscheduled streams own no slot and need no download. Close
++				// their channels so cancellation/error cannot strand Next.
++				for pending := batchIdx; pending < lastChannelIndex; pending++ {
++					close(chs[pending])
++				}
++				break
++			}
++			slotHeld[batchIdx] = true
+ 			// Channels already initialized above, no need to create them here
+ 			group.Go(func() (err error) {
+ 				// close channels (except the last) so that Next can move on to the next channel properly
+@@ -768,7 +796,7 @@
+ 		// separate goroutine. Otherwise we'll have a race condition between
+ 		// the call to wait and the calls to group.Go to kick off the jobs
+ 		// to perform the pre-fetching (GH-1283).
+-		rdr.err = group.Wait()
++		rdr.err = errors.Join(admissionErr, group.Wait())
+ 		// don't close the last channel until after the group is finished,
+ 		// so that Next() can only return after reader.err may have been set
+ 		close(chs[lastChannelIndex])
+@@ -810,6 +838,9 @@
+ 		if r.rec, ok = <-r.chs[r.curChIndex]; ok {
+ 			break
+ 		}
++		if r.streamSlots != nil && r.slotHeld[r.curChIndex] {
++			r.streamSlots.Release(1)
++		}
+ 		r.curChIndex++
+ 	}
+ 	return r.rec != nil

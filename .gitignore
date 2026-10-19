@@ -1,4 +1,5 @@
 /target/
+/scripts/compatibility/target/
 /.venv/
 __pycache__/
 *.py[cod]
@@ -6,4 +7,5 @@ __pycache__/
 .env.*
 !.env.example
 /config/local.yml
+/config/local-tls/
 /logs/

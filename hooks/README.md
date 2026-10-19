@@ -61,8 +61,15 @@ and Redash parse the observed leading PostgreSQL comments; `metabase_rs` parses
 the Redshift partner remark emitted by Metabase's Redshift driver. They return
 normalized JSON mappings or `None`; Python `yasp_extractors` exposes the same
 named helpers. Superset remains unimplemented and raises `NotImplementedError` in
-Python. The Redshift format has fixture coverage but awaits manual validation when
-a YASP Redshift gateway is available. These comments are untrusted hints, never
+Python. Redash saved-query IDs are numbers; its unsaved-query marker is the string
+`adhoc`. Both formats require a numeric user ID and the remaining observed remark
+fields. The example hook tries these helpers, converts numeric user IDs to dataset
+keys, and obtains its routing labels from `params.workload` and `params.report_kind`.
+The local demo maps Metabase user `1` to `finance`; its selector maps that department
+to `primary/restricted`. Metabase Admin status does not imply a source database role.
+Existing `yasp-test` comments retain their explicit workload/report labels.
+The Redshift remark has been observed through the gateway with Metabase v0.64.2.8.
+These comments are untrusted hints, never
 authenticated identity. See the
 [BI metadata notes](../docs/extensions.md#observed-sql-context-from-local-bi-traffic)
 for supported versions and observed formats.
@@ -123,7 +130,7 @@ keeping pair params. Paths resolve relative to YAML. The callback returns a
 mapping with optional `target`, `backend_login`, and `compute_type` fields, or
 `None` to deny. The engine chooses an instance by overflow within the selected type.
 [examples/role_selector.py](examples/role_selector.py) demonstrates application-owned
-user/workload/report maps and a hardcoded secondary-route fallback for unmatched
+user/workload/report maps and a hardcoded `primary/analyst` fallback for unmatched
 sample values.
 Its input identity still needs the consuming application's verified metadata contract. [examples/passthrough.py](examples/passthrough.py) also
 contains future callback sketches; they are not wired into query/result stages.

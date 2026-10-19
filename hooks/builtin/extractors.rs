@@ -9,37 +9,25 @@ pub enum ExtractionError {
 }
 
 fn metabase_fields(comment: &str) -> Option<Map<String, Value>> {
-    let Some(comment) = comment.strip_prefix("Metabase::") else {
-        return None;
-    };
-    let Some(comment) = comment.lines().next() else {
-        return None;
-    };
+    let comment = comment.strip_prefix("Metabase::")?;
+    let comment = comment.lines().next()?;
     let mut fields = comment.split_whitespace();
     if fields.next() != Some("userID:") {
         return None;
     }
-    let Some(user_id) = fields.next().and_then(|value| value.parse::<u64>().ok()) else {
-        return None;
-    };
+    let user_id = fields.next().and_then(|value| value.parse::<u64>().ok())?;
     if fields.next() != Some("queryType:") {
         return None;
     }
-    let Some(query_type) = fields
+    let query_type = fields
         .next()
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-    else {
-        return None;
-    };
+        .filter(|value| !value.is_empty() && value.len() <= 64)?;
     if fields.next() != Some("queryHash:") {
         return None;
     }
-    let Some(query_hash) = fields
+    let query_hash = fields
         .next()
-        .filter(|value| !value.is_empty() && value.len() <= 128)
-    else {
-        return None;
-    };
+        .filter(|value| !value.is_empty() && value.len() <= 128)?;
     if fields.next().is_some() {
         return None;
     }
@@ -133,7 +121,11 @@ pub fn redash(sql: &str) -> Result<Option<Map<String, Value>>, ExtractionError> 
                 }
             }
             "query_id" if query_id.is_none() => {
-                query_id = value.parse::<u64>().ok();
+                query_id = if value == "adhoc" {
+                    Some(Value::String(value.into()))
+                } else {
+                    value.parse::<u64>().ok().map(Value::from)
+                };
                 if query_id.is_none() {
                     return Ok(None);
                 }
@@ -166,25 +158,31 @@ pub fn redash(sql: &str) -> Result<Option<Map<String, Value>>, ExtractionError> 
     let mut metadata = Map::new();
     metadata.insert("tool".into(), Value::String("redash".into()));
     metadata.insert("user_id".into(), Value::from(user_id));
-    metadata.insert("query_id".into(), Value::from(query_id));
+    metadata.insert("query_id".into(), query_id);
     metadata.insert("job_id".into(), Value::String(job_id.into()));
     metadata.insert("query_hash".into(), Value::String(query_hash.into()));
     metadata.insert("scheduled".into(), Value::Bool(scheduled));
     Ok(Some(metadata))
 }
 
-/// Return a normalized remark from one of the observed PostgreSQL BI clients.
+/// Return a normalized remark from the observed PostgreSQL and Redshift BI clients.
 /// These values are diagnostic hints and must not be used as authenticated identity.
 pub fn observed_postgres_remark(sql: &str) -> Option<Map<String, Value>> {
     metabase_pg(sql)
         .ok()
         .flatten()
+        .or_else(|| metabase_rs(sql).ok().flatten())
         .or_else(|| redash(sql).ok().flatten())
 }
 
 /// Remove an observed BI remark before logging the SQL text itself.
 pub fn sql_without_observed_postgres_remark(sql: &str) -> &str {
     let leading = sql.trim_start();
+    if leading.starts_with("-- /* partner: \"metabase\", ")
+        && metabase_rs(sql).ok().flatten().is_some()
+    {
+        return leading.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+    }
     if let Some(comment) = leading.strip_prefix("-- Metabase::") {
         return comment
             .find('\n')
@@ -270,6 +268,26 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(scheduled["scheduled"], true);
+
+        let adhoc = "/* user_id: 1, query_id: adhoc, Job ID: 8a4cee94-0a4e-44e7-b640-8bd69dbf0f70, Query Hash: 7613f9e534ec59f2d3aaea6d9b60242d, Scheduled: False */ SELECT * FROM support_tickets LIMIT 1000";
+        let metadata = observed_postgres_remark(adhoc).unwrap();
+        assert_eq!(metadata["user_id"], 1);
+        assert_eq!(metadata["query_id"], "adhoc");
+        assert!(
+            redash(&adhoc.replace("user_id: 1", "user_id: adhoc"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            redash(&adhoc.replace("query_id: adhoc", "query_id: unknown"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            redash(&adhoc.replace("query_id: adhoc", "query_id: adhoc, query_id: 6"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -299,6 +317,9 @@ mod tests {
 
     #[test]
     fn removes_leading_bi_remark_from_logged_sql() {
+        let redshift = "-- /* partner: \"metabase\", {\"dashboard_id\":null,\"chart_id\":null,\"optional_user_id\":1,\"optional_account_id\":\"account-1\",\"filter_values\":{}} */ Metabase:: userID: 1 queryType: native queryHash: abc\nSELECT 1";
+        assert_eq!(observed_postgres_remark(redshift).unwrap()["user_id"], 1);
+        assert_eq!(sql_without_observed_postgres_remark(redshift), "SELECT 1");
         assert_eq!(
             sql_without_observed_postgres_remark(
                 "  -- Metabase:: userID: 42 queryType: native queryHash: abc\nSELECT 1"

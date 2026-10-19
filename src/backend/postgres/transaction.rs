@@ -68,13 +68,14 @@ impl PostgresTransaction<'_> {
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: Option<oneshot::Receiver<()>>,
-        setup: Option<&str>,
+        session: Option<&crate::discovery::SessionSettings>,
     ) -> PgWireResult<PgWireBackendMessage>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
+        super::execution::validate_input(query)?;
         query
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
@@ -82,8 +83,9 @@ impl PostgresTransaction<'_> {
         connection.query_complete = false;
         connection.cancel_requested = false;
         self.usable = false;
-        if let Some(setup) = setup {
-            let result = timeout(CONNECT_TIMEOUT, connection.control(setup))
+        if let Some(session) = session {
+            let setup = super::execution::session_sql(session);
+            let result = timeout(CONNECT_TIMEOUT, connection.control(&setup))
                 .await
                 .map_err(|_| error_response("08006", "PostgreSQL session setup timed out"))?;
             if let Err(error) = result {

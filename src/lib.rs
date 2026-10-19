@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod cache;
+pub mod catalog;
 pub mod config;
 pub mod datasets;
 pub mod discovery;
@@ -12,5 +13,6 @@ pub mod logger;
 pub mod policy;
 pub mod query;
 
+mod execution;
 mod tls;
 mod transport;

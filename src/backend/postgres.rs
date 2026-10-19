@@ -2,9 +2,13 @@
 //! the pool returns only verified idle sessions for reuse.
 
 pub(crate) mod cache;
+mod catalog;
 mod connection;
 mod discovery;
+mod execution;
 mod pool;
+mod result;
+pub(crate) use result::{NativeError, NativeResponse, Output};
 mod transaction;
 
 pub(crate) use transaction::PostgresTransaction;
@@ -39,7 +43,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET extra_float_digits = 3; SET default_transaction_read_only = on; SET default_transaction_isolation = 'read committed'; SET client_connection_check_interval = '1s'";
 
-/// One target/login pool. No organization routing or callback policy is embedded.
+/// One target/login pool. Clones share the pool, admission counters and budgets.
+/// No organization routing or callback policy is embedded.
+#[derive(Clone)]
 pub struct PostgresBackend {
     pool: Pool<PgManager>,
     target: String,
@@ -345,7 +351,7 @@ impl<'a> BackendLease<'a> {
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_with_setup(query, output, query_timeout, write_timeout, cancel, None)
+        self.execute_with_session(query, output, query_timeout, write_timeout, cancel, None)
             .await
     }
 
@@ -356,38 +362,39 @@ impl<'a> BackendLease<'a> {
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: futures::channel::oneshot::Receiver<()>,
-        setup: &str,
+        session: &crate::discovery::SessionSettings,
     ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
-        self.execute_with_setup(
+        self.execute_with_session(
             query,
             output,
             query_timeout,
             write_timeout,
             Some(cancel),
-            Some(setup),
+            Some(session),
         )
         .await
     }
 
-    pub(crate) async fn execute_with_setup<S>(
+    pub(crate) async fn execute_with_session<S>(
         self,
         query: &ParsedQuery,
         output: &mut S,
         query_timeout: Duration,
         write_timeout: Duration,
         cancel: Option<futures::channel::oneshot::Receiver<()>>,
-        setup: Option<&str>,
+        session: Option<&crate::discovery::SessionSettings>,
     ) -> PgWireResult<bool>
     where
         S: Sink<PgWireBackendMessage> + Unpin + Send,
         S::Error: fmt::Debug,
         PgWireError: From<S::Error>,
     {
+        execution::validate_input(query)?;
         query
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
@@ -395,7 +402,7 @@ impl<'a> BackendLease<'a> {
             .begin(query_timeout, query_timeout.max(write_timeout))
             .await?;
         let completion = transaction
-            .execute(query, output, query_timeout, write_timeout, cancel, setup)
+            .execute(query, output, query_timeout, write_timeout, cancel, session)
             .await;
         let reusable = transaction.usable();
         if let Err(error) = transaction.finish(false).await {
@@ -638,6 +645,11 @@ impl PostgresBackends {
             None if candidates.len() == 1 => candidates.first(),
             None => None,
         }
+    }
+
+    #[cfg(feature = "snowflake")]
+    pub(crate) fn selections(&self) -> impl Iterator<Item = &BackendSelection> {
+        self.pools.keys()
     }
 
     pub(crate) fn close(&self) {
