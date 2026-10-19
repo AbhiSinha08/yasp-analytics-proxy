@@ -211,6 +211,23 @@ impl Session {
         output: &mut S,
         settings: &GatewaySettings,
         session: &SessionSettings,
+        cancel: oneshot::Receiver<()>,
+    ) -> ExecutionResult<ResultEvent>
+    where
+        S: Sink<ResultEvent, Error = ExecutionError> + Send + Unpin,
+    {
+        self.execute_sql(query.sql(), output, settings, session, cancel)
+            .await
+    }
+
+    /// SQL constructed by this adapter's metadata provider also uses the same
+    /// worker, cancellation, conversion, and capacity lifetime as data reads.
+    pub(super) async fn execute_sql<S>(
+        &mut self,
+        sql: &str,
+        output: &mut S,
+        settings: &GatewaySettings,
+        session: &SessionSettings,
         mut cancel: oneshot::Receiver<()>,
     ) -> ExecutionResult<ResultEvent>
     where
@@ -226,7 +243,7 @@ impl Session {
         let (events, mut received) = mpsc::channel(1);
         self.commands
             .send(Command::Query {
-                sql: query.sql().into(),
+                sql: sql.into(),
                 events,
                 state,
                 bound: settings.max_message_bytes,

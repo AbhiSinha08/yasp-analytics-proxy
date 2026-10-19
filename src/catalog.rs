@@ -3,7 +3,10 @@
 
 mod model;
 mod rows;
-pub use model::{Column, ColumnId, NativeType, Relation, RelationId, RelationKind, Snapshot};
+pub use model::{
+    Column, ColumnId, Constraint, ConstraintKind, ForeignKey, NativeType, Relation, RelationId,
+    RelationKind, Snapshot,
+};
 pub(crate) use rows::Rows;
 
 use crate::{backend::PostgresBackend, query::SqlDialect};
@@ -25,6 +28,7 @@ pub struct SourceIdentity {
     pub principal: String,
     pub role: Option<String>,
     pub warehouse: Option<String>,
+    pub default_schema: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +125,7 @@ impl Source {
                 principal: source.database_user().into(),
                 role: None,
                 warehouse: None,
+                default_schema: None,
             },
             #[cfg(feature = "snowflake")]
             Self::Snowflake(source) => source.catalog_identity(),

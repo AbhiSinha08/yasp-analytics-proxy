@@ -27,3 +27,35 @@ fn redshift_redash_scan_uses_configured_catalog_without_application_access() {
         );
     });
 }
+
+#[cfg(feature = "snowflake")]
+#[path = "support/snowflake_host.rs"]
+mod snowflake_host;
+
+#[cfg(feature = "snowflake")]
+#[test]
+fn redash_schema_definitions_use_snowflake_in_both_profiles() {
+    for (profile, sql, expected) in [
+        (
+            "postgresql",
+            include_str!("../src/gateway/metadata/queries/redash_postgresql_columns.sql"),
+            "PUBLIC|USERS|ID|numeric(18,0)",
+        ),
+        (
+            "redshift",
+            include_str!("../src/gateway/metadata/queries/redash_redshift_columns.sql"),
+            "USERS|PUBLIC|ID|numeric(18,0)",
+        ),
+    ] {
+        snowflake_host::with_host(profile, |_, _, query| {
+            let output = query(sql);
+            support::assert_success(&output, "Redash Snowflake schema scan");
+            assert!(String::from_utf8(output.stdout).unwrap().contains(expected));
+            assert!(
+                !query(&format!("{sql}; SELECT * FROM PUBLIC.USERS"))
+                    .status
+                    .success()
+            );
+        });
+    }
+}

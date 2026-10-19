@@ -71,7 +71,11 @@ impl<'backend> QuerySession<'_, 'backend> {
         }
         if !options.native
             && let Some(catalog) = &self.source.catalog
-            && let Some(request) = super::metadata::Request::recognize(sql, self.source.profile)
+            && let Some(request) = (catalog.status().source_dialect
+                != crate::query::SqlDialect::Postgresql)
+                .then(|| super::metadata::Request::recognize_foreign(sql, self.source.profile))
+                .flatten()
+                .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
         {
             let query_id: String = Sha256::digest(sql.as_bytes())
                 .iter()

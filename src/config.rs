@@ -9,7 +9,7 @@ pub use crate::tls::{ClientTlsSettings, TargetTls};
 pub use catalog::SchemaCatalogSettings;
 pub use file::{
     ComputeInstanceSettings, ComputeSettings, ComputeTypeSettings, CredentialOverride, FileConfig,
-    LoginSettings, Logins, SchemaDiscoverySettings, TargetSettings,
+    LoginSettings, Logins, SchemaDiscoverySettings, SnowflakeSettings, TargetSettings,
 };
 pub use runtime::{BackendConfig, GatewayConfig};
 pub use settings::{
@@ -53,7 +53,7 @@ pub enum ConfigError {
     InvalidYaml,
     #[error("configuration version must be 1")]
     UnsupportedVersion,
-    #[error("at least one PostgreSQL target with one login is required")]
+    #[error("at least one target with one login is required")]
     MissingRoutes,
     #[error("connection() requires exactly one configured target with one login")]
     UnsupportedTopology,
@@ -67,8 +67,12 @@ pub enum ConfigError {
     InvalidDefaultBackend,
     #[error("passthrough fields must resolve to one configured target, login, and compute type")]
     MissingDefaultBackend,
-    #[error("target engine must be postgresql")]
+    #[error("target engine must be postgresql or snowflake, with engine-specific settings")]
     UnsupportedTarget,
+    #[error("Snowflake targets require the snowflake Cargo feature")]
+    SnowflakeDisabled,
+    #[error("invalid Snowflake target or login settings")]
+    InvalidSnowflake,
     #[error("gateway protocol must be postgresql or redshift")]
     UnsupportedGateway,
     #[error("the Redshift password authentication profile requires gateway TLS")]

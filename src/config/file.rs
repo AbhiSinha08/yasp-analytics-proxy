@@ -110,6 +110,8 @@ pub struct LoginSettings {
     pub username: String,
     pub password_env: String,
     #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
     pub allowed_computes: Option<Vec<String>>,
     #[serde(default)]
     pub overrides: BTreeMap<String, CredentialOverride>,
@@ -135,6 +137,23 @@ pub struct TargetSettings {
     pub tls: super::TargetTls,
     pub logins: Logins,
     pub compute: Option<ComputeSettings>,
+    pub snowflake: Option<SnowflakeSettings>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnowflakeSettings {
+    pub driver_library: std::path::PathBuf,
+    pub driver_sha256_env: String,
+    pub account: String,
+    pub schema: String,
+    pub warehouse: String,
+    pub emulator: Option<std::net::SocketAddr>,
+    #[serde(default = "snowflake_batch_bytes")]
+    pub max_batch_bytes: usize,
+}
+fn snowflake_batch_bytes() -> usize {
+    8 * 1024 * 1024
 }
 
 #[derive(Deserialize, Serialize)]
@@ -190,6 +209,11 @@ impl FileConfig {
         }
         for target in self.targets.values_mut() {
             target.tls.client.resolve(base);
+            if let Some(snowflake) = &mut target.snowflake
+                && snowflake.driver_library.is_relative()
+            {
+                snowflake.driver_library = base.join(&snowflake.driver_library);
+            }
         }
         self.cache.tls.resolve(base);
         self.application_contexts.tls.resolve(base);
@@ -243,11 +267,46 @@ impl FileConfig {
             ] {
                 validate_value(name, value)?;
             }
-            if target.engine != "postgresql" {
-                return Err(ConfigError::UnsupportedTarget);
+            match target.engine.as_str() {
+                "postgresql" if target.snowflake.is_none() => {}
+                "snowflake" => {
+                    if !cfg!(feature = "snowflake") {
+                        return Err(ConfigError::SnowflakeDisabled);
+                    }
+                    let sf = target
+                        .snowflake
+                        .as_ref()
+                        .ok_or(ConfigError::InvalidSnowflake)?;
+                    if !target.host.is_empty()
+                        || target.port != 0
+                        || target.compute.is_some()
+                        || target.tls.mode != "disable"
+                        || sf.max_batch_bytes == 0
+                        || sf.max_batch_bytes > 64 * 1024 * 1024
+                        || sf
+                            .emulator
+                            .is_some_and(|a| !a.ip().is_loopback() || a.port() == 0)
+                    {
+                        return Err(ConfigError::InvalidSnowflake);
+                    }
+                    for value in [
+                        &sf.account,
+                        &sf.schema,
+                        &sf.warehouse,
+                        &sf.driver_sha256_env,
+                    ] {
+                        validate_value("Snowflake setting", value)?;
+                    }
+                    validate_value(
+                        "Snowflake driver library",
+                        &sf.driver_library.to_string_lossy(),
+                    )?;
+                }
+                _ => return Err(ConfigError::UnsupportedTarget),
             }
             target.tls.validate()?;
             match (&target.compute, target.host.is_empty(), target.port) {
+                (None, true, 0) if target.engine == "snowflake" => {}
                 (None, false, port) if port != 0 => validate_endpoint(&target.host, port)?,
                 (Some(_), true, 0) => {}
                 _ => return Err(ConfigError::InvalidComputeTopology),
@@ -287,6 +346,14 @@ impl FileConfig {
                 }
             }
             for (login_name, login) in &target.logins {
+                if target.engine == "snowflake" {
+                    validate_value(
+                        "Snowflake role",
+                        login.role.as_deref().ok_or(ConfigError::InvalidSnowflake)?,
+                    )?;
+                } else if login.role.is_some() {
+                    return Err(ConfigError::InvalidSnowflake);
+                }
                 validate_value("backend login name", login_name)?;
                 validate_value("backend login username", &login.username)?;
                 validate_value("backend login password_env", &login.password_env)?;
@@ -338,7 +405,12 @@ impl FileConfig {
         if self.hooks.select_backend.rust_callback() == Some("builtin.select_backend.passthrough") {
             self.default_decision()?;
         }
-        self.discovery_backend()?;
+        let discovery = self.discovery_backend()?;
+        if self.targets[&discovery.target].engine == "snowflake"
+            && self.schema_discovery.catalog.is_none()
+        {
+            return Err(ConfigError::InvalidCatalog);
+        }
         self.discovery_compute()?;
         Ok(())
     }

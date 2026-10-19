@@ -1,0 +1,14 @@
+**
+!dev/
+!dev/snowflake/
+!dev/snowflake/**
+!tests/
+!tests/support/
+!tests/support/snowflake/
+!tests/support/snowflake/*.py
+!tests/support/snowflake/requirements.lock
+!tests/fixtures/
+!tests/fixtures/clients/
+!tests/fixtures/clients/sqlalchemy_probe.py
+**/__pycache__/
+**/*.py[cod]

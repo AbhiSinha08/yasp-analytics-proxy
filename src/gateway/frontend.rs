@@ -35,6 +35,18 @@ impl FrontendProfile {
         bound: usize,
         options: InputOptions,
     ) -> Result<ParsedQuery, QueryError> {
+        if let Some(native) = options.native_after_compatibility {
+            let frontend = self.parse_query(sql, bound, InputOptions::frontend(self.dialect()));
+            if let Ok(query) = &frontend
+                && (!matches!(query.statement(), sqlparser::ast::Statement::Query(_))
+                    || crate::discovery::classify(query).is_some()
+                    || self.setup(query.statement()).is_some()
+                    || self.fingerprint(query.statement()).is_some())
+            {
+                return frontend;
+            }
+            return ParsedQuery::parse_with_options(sql, bound, InputOptions::native(native));
+        }
         let parsed = ParsedQuery::parse_with_options(sql, bound, options);
         // Redshift JDBC emits PostgreSQL catalog vector subscripts such as
         // con.confkey[pos.n]. Its normal grammar treats [pos.n] as a quoted name.

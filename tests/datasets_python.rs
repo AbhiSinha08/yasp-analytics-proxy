@@ -101,13 +101,16 @@ def hook(request, params):
     if mode == "cancel":
         retained = datasets
         time.sleep(0.25)
+        closed = "open"
         try:
             retained.get("users", "alice")
         except retained.DatasetError as error:
-            Path(request["marker"]).write_text(str(error))
-            return {"closed": str(error)}
-        Path(request["marker"]).write_text("open")
-        return {"closed": "no"}
+            closed = str(error)
+        marker = Path(request["marker"])
+        pending = marker.with_suffix(".pending")
+        pending.write_text(closed)
+        pending.replace(marker)
+        return {"closed": closed}
     if mode == "many":
         for _ in range(33):
             datasets.get("users", "enabled")

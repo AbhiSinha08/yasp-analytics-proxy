@@ -230,6 +230,8 @@ fn worker_loop(
         } else {
             result
         };
+        // Completion makes the worker's input reservation available to the next call.
+        drop(job._bytes);
         let _ = job.reply.send(result);
     }
 }

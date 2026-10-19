@@ -1,6 +1,7 @@
+#![cfg(feature = "snowflake")]
 //! Network gate for the owned native connector, isolated from the Rust manager.
 
-#[path = "../../src/backend/snowflake/connection.rs"]
+#[path = "../src/backend/snowflake/connection.rs"]
 #[allow(dead_code)] // Probe only the connector gates, not the runtime worker API.
 mod snowflake_connection;
 
@@ -27,25 +28,17 @@ fn query(connection: &mut Connection, sql: &str) -> Result<usize, snowflake_conn
     Ok(rows)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = env::args().collect();
-    if !(3..=4).contains(&args.len())
-        || args[2].parse::<u16>().ok().filter(|p| *p != 0).is_none()
-        || args
-            .get(3)
-            .is_some_and(|v| !matches!(v.as_str(), "no-recovery" | "prefetch" | "fetch-cancel"))
-    {
-        return Err(
-            "usage: yasp-snowflake-ffi-probe DRIVER_LIBRARY LOOPBACK_PORT [no-recovery]".into(),
-        );
-    }
-    let mut connection = Driver::load(Path::new(&args[1]))?.open(
+fn open_connection() -> Result<Connection, Box<dyn std::error::Error>> {
+    let driver = env::var("YASP_SNOWFLAKE_DRIVER")?;
+    let endpoint: std::net::SocketAddr = env::var("YASP_SNOWFLAKE_ENDPOINT")?.parse()?;
+    let port = endpoint.port().to_string();
+    Ok(Driver::load(Path::new(&driver))?.open(
         &[
             ("adbc.snowflake.sql.account", "fakesnow"),
             ("username", "fake"),
             ("password", "snow"),
             ("adbc.snowflake.sql.uri.host", "127.0.0.1"),
-            ("adbc.snowflake.sql.uri.port", &args[2]),
+            ("adbc.snowflake.sql.uri.port", &port),
             ("adbc.snowflake.sql.uri.protocol", "http"),
             ("adbc.snowflake.sql.client_option.login_timeout", "5s"),
             ("adbc.snowflake.sql.client_option.request_timeout", "5s"),
@@ -56,13 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         ],
         None,
-    )?;
-    if let Some(mode) = args
-        .get(3)
-        .filter(|v| matches!(v.as_str(), "prefetch" | "fetch-cancel"))
-    {
-        return fetch_probe(connection, args[2].parse()?, mode);
-    }
+    )?)
+}
+
+#[test]
+fn driver_values_ownership_execution_and_fetch_recover() -> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = open_connection()?;
     let (exact, stale_cancel) = {
         let mut statement = connection
             .statement("SELECT 12345678901234567890.123456789::NUMBER(38,9) AS D, NULL AS Z")?;
@@ -99,7 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut statement = connection.statement("SELECT 1")?;
         statement.cancel_handle().request_cancel()?;
-        assert!(matches!(statement.execute(), Err(error) if error.status == 11), "cancellation before native execution is latched");
+        assert!(
+            matches!(statement.execute(), Err(error) if error.status == 11),
+            "cancellation before native execution is latched"
+        );
     }
 
     // Statement creation/execution errors retire all child handles normally.
@@ -161,24 +156,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         })?
     };
-    let recovery = if args.len() == 4 {
-        None
-    } else {
-        Some(query(&mut connection, "SELECT 42 AS N")? == 1)
-    };
+    let recovery = query(&mut connection, "SELECT 42 AS N")? == 1;
     // A retained inactive cancellation handle owns its native ancestors safely.
     // Dropping the public connection first cannot leave dangling driver pointers.
     drop(connection);
     assert!(stale_cancel.cancel().is_err());
     drop(stale_cancel);
-    println!(
-        "{}",
-        json!({"decimal_exact": exact, "read_only_transaction": read_only_transaction,
-        "connection_recovery": recovery, "execution_error_recovery": execution_error_recovery,
-        "inactive_cancel_rejected": inactive_rejected, "owned_handle_cleanup": true,
-        "cancel_returned_success": cancelled, "cancel_call_ms": cancel_ms,
-        "execute_status": status, "outcome": error.unwrap_or_else(|| "completed".into())})
-    );
+    assert!(exact && read_only_transaction && recovery && execution_error_recovery);
+    assert!(cancelled && inactive_rejected && cancel_ms < 1000);
+    assert_eq!(status, 9, "{error:?}");
+    let endpoint: std::net::SocketAddr = env::var("YASP_SNOWFLAKE_ENDPOINT")?.parse()?;
+    fetch_probe(open_connection()?, endpoint.port(), "prefetch")?;
+    fetch_probe(open_connection()?, endpoint.port(), "fetch-cancel")?;
     Ok(())
 }
 
@@ -202,9 +191,11 @@ fn fetch_probe(
     port: u16,
     mode: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut statement = connection.statement(
-        "SELECT 99::NUMBER(38,0) AS N FROM TABLE(GENERATOR(ROWCOUNT => 17)) /* yasp-fetch-probe */",
-    )?;
+    let sql = format!(
+        "SELECT 99::NUMBER(38,0) AS N FROM TABLE(GENERATOR(ROWCOUNT => 17)) /* yasp-fetch-probe yasp-{mode} */"
+    );
+    let baseline = status(port)?["chunk_requests"].as_u64().unwrap();
+    let mut statement = connection.statement(&sql)?;
     let handle = statement.cancel_handle();
     if mode == "prefetch" {
         let reader = statement.execute()?;
@@ -218,10 +209,11 @@ fn fetch_probe(
         let recovery = query(&mut connection, "SELECT 1 AS N")? == 1;
         drop(connection);
         drop(handle);
-        println!(
-            "{}",
-            json!({"mode": mode, "rows": rows, "before_consumption": before,
-            "recovery": recovery, "queue_size": 1, "prefetch_concurrency": 1})
+        assert_eq!(rows, 17);
+        assert!(recovery);
+        assert!(
+            before["chunk_requests"].as_u64().unwrap() - baseline <= 1,
+            "prefetch must stop until consumption: {before}"
         );
         return Ok(());
     }
@@ -259,6 +251,22 @@ fn fetch_probe(
     drop(handle);
     let mut result = result;
     result["recovery"] = json!(recovery);
-    println!("{result}");
+    assert_eq!(result["execute_returned"], true);
+    assert_eq!(result["cancel_returned_success"], true);
+    assert!(result["cancel_call_ms"].as_u64().unwrap() < 1000);
+    assert_ne!(result["outcome"], "completed");
+    assert!(recovery);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let counts = status(port)?;
+        if counts["chunk_active"] == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fetch worker did not stop: {counts}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
     Ok(())
 }

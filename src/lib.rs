@@ -16,3 +16,4 @@ pub mod query;
 mod execution;
 mod tls;
 mod transport;
+mod wire;

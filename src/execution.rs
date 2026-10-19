@@ -16,7 +16,7 @@ use crate::{
     discovery::{self, SessionSettings, SetupResponse},
     gateway::FrontendProfile,
     hooks::{ContextHook, ContextRequest, SelectionRequest},
-    query::{ParsedQuery, SqlDialect},
+    query::ParsedQuery,
 };
 use futures::{Sink, SinkExt, channel::oneshot};
 use serde_json::{Map, Value};
@@ -183,23 +183,20 @@ impl<'backend> QuerySession<'_, 'backend> {
                 .await
                 .map(|_| None);
         }
-        route
-            .execute(
-                crate::backend::execution::ExecutionRequest {
-                    selection: &request,
-                    frontend_database,
-                    settings: self.settings,
-                    session: self.session,
-                    cache: (self.source.profile == FrontendProfile::Postgres
-                        && query.input_options().dialect == SqlDialect::Postgresql)
-                        .then_some(self.source.cache)
-                        .flatten(),
-                },
-                output,
-                cancel,
-            )
-            .await
-            .map(|_| None)
+        crate::cache::execute(
+            &route,
+            crate::backend::execution::ExecutionRequest {
+                selection: &request,
+                settings: self.settings,
+                session: self.session,
+            },
+            frontend_database,
+            self.source.cache,
+            output,
+            cancel,
+        )
+        .await
+        .map(|_| None)
     }
 
     async fn derive_context(

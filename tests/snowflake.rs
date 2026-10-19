@@ -16,7 +16,6 @@ use yasp::{
 const NATIVE: &str = "-- Metabase:: userID: 7 queryType: native queryHash: abc\n";
 
 #[test]
-#[ignore = "use scripts/compatibility/runtime_probe.py with the pinned native driver"]
 fn native_snowflake_through_pgwire_routes_values_transactions_and_recovers() {
     let environment = support::TestEnvironment::load();
     let identity = environment.gateway();
@@ -119,7 +118,6 @@ fn snowflake_backend() -> Arc<SnowflakeBackend> {
 }
 
 #[test]
-#[ignore = "use scripts/compatibility/runtime_probe.py with the pinned native driver"]
 fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
     let environment = support::TestEnvironment::load();
     let identity = environment.gateway();
@@ -312,8 +310,9 @@ fn check_native_runtime(identity: &support::Identity, server: support::GatewaySe
         "transaction affinity includes the logical binding even when its physical adapter is shared"
     );
     assert!(String::from_utf8_lossy(&affinity.stdout).contains("ROLLBACK\n3"));
-    let denied = connection.query("SELECT 1");
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("translation is not enabled"));
+    let generated = connection.query("SELECT 1");
+    support::assert_success(&generated, "frontend SQL passes through unchanged");
+    assert_eq!(String::from_utf8_lossy(&generated.stdout).trim(), "1");
     let affinity = connection.query(&format!("{NATIVE}SELECT 1 /* route_postgres */"));
     assert!(String::from_utf8_lossy(&affinity.stderr).contains("does not match"));
     let catalog_sql =
@@ -412,4 +411,30 @@ fn cancellation_and_disconnect(address: std::net::SocketAddr, identity: &support
             .query(&format!("{NATIVE}SELECT 12")),
         "disconnect returns source capacity",
     );
+}
+
+#[path = "support/snowflake_host.rs"]
+mod snowflake_host;
+
+#[test]
+fn yaml_snowflake_only_host_routes_native_data_and_serves_bi_definitions() {
+    for profile in ["postgresql", "redshift"] {
+        snowflake_host::with_host(profile, |_, _, query| {
+            let result =
+                query("SELECT AMOUNT, \"MixedCase\", PAYLOAD FROM ANALYTICS.METADATA_TYPES");
+            support::assert_success(&result, "unmarked native Snowflake data");
+            assert_eq!(
+                String::from_utf8(result.stdout).unwrap().trim(),
+                "12345678901234567890.123456789||\\x00ff"
+            );
+            let result = query("SELECT version()");
+            support::assert_success(&result, "frontend version");
+            let result = query(
+                "-- Metabase:: userID: 1 queryType: MBQL queryHash: abc\nSELECT * FROM PUBLIC.USERS",
+            );
+            support::assert_success(&result, "frontend-generated Snowflake data");
+            assert_eq!(String::from_utf8_lossy(&result.stdout).lines().count(), 3);
+            assert!(!query("DELETE FROM PUBLIC.USERS").status.success());
+        });
+    }
 }

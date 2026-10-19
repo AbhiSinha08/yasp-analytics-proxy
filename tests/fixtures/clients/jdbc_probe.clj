@@ -26,15 +26,26 @@
       (.setString statement (int (inc i)) value))
     (result (.executeQuery statement))))
 
-(defn metabase-sync [connection]
+(defn snowflake-values [connection]
+  (with-open [statement (.createStatement connection)
+              rows (.executeQuery statement "SELECT AMOUNT, \"MixedCase\", PAYLOAD, CREATED FROM ANALYTICS.METADATA_TYPES")]
+    (when-not (.next rows) (throw (SQLException. "type-coverage row is missing")))
+    {:decimal (.toPlainString (.getBigDecimal rows 1))
+     :null (do (.getString rows 2) (.wasNull rows))
+     :binary (vec (.getBytes rows 3))
+     :timestamp (str (.toLocalDateTime (.getTimestamp rows 4)))}))
+
+(defn metabase-sync [connection schema table]
   (require 'metabase.driver.redshift)
   (let [tables ((ns-resolve 'metabase.driver.redshift 'get-tables-sql) nil)
         fields ((requiring-resolve 'metabase.driver.sql-jdbc.sync/describe-fields-sql)
-                :redshift :schema-names ["public"] :table-names ["users"])]
+                :redshift :schema-names [schema] :table-names [table])]
     [(attempt "metabase_tables" #(metabase-query connection tables))
      (attempt "metabase_fields" #(metabase-query connection fields))]))
 
 (let [profile (System/getenv "YASP_JDBC_PROFILE")
+      schema (or (System/getenv "YASP_JDBC_SCHEMA") "public")
+      table (or (System/getenv "YASP_JDBC_TABLE") "users")
       driver (if (= profile "redshift") "com.amazon.redshift.jdbc.Driver" "org.postgresql.Driver")
       scheme (if (= profile "redshift") "redshift" "postgresql")
       properties (doto (Properties.)
@@ -54,11 +65,11 @@
     (with-open [connection (DriverManager/getConnection url properties)]
       (let [metadata (.getMetaData connection)
             observations (into [(attempt "schemas" #(result (.getSchemas metadata)))
-                          (attempt "tables" #(result (.getTables metadata nil "public" "users" (into-array String ["TABLE" "VIEW"]))))
-                          (attempt "columns" #(result (.getColumns metadata nil "public" "users" "%")))
-                          (attempt "primary_keys" #(result (.getPrimaryKeys metadata nil "public" "users")))
-                          (attempt "foreign_keys" #(result (.getImportedKeys metadata nil "public" "orders")))
-                          (attempt "indexes" #(result (.getIndexInfo metadata nil "public" "users" false false)))
+                          (attempt "tables" #(result (.getTables metadata nil schema table (into-array String ["TABLE" "VIEW"]))))
+                          (attempt "columns" #(result (.getColumns metadata nil schema table "%")))
+                          (attempt "primary_keys" #(result (.getPrimaryKeys metadata nil schema table)))
+                          (attempt "foreign_keys" #(result (.getImportedKeys metadata nil schema (if (= schema "PUBLIC") "ORDERS" "orders"))))
+                          (attempt "indexes" #(result (.getIndexInfo metadata nil schema table false false)))
                           (attempt "preview" #(with-open [statement (.createStatement connection)]
                                                 (result (.executeQuery statement "SELECT id, full_name FROM public.users ORDER BY id LIMIT 5"))))
                           (attempt "transaction" #(do (.setReadOnly connection true)
@@ -68,7 +79,11 @@
                                                        (.rollback connection)
                                                        (.setAutoCommit connection true)
                                                        {:rolled_back true}))]
-                               (when (= profile "redshift") (metabase-sync connection)))]
+                               (concat (when (= profile "redshift") (metabase-sync connection schema table))
+                                       (when (= schema "PUBLIC")
+                                         [(attempt "native_values" #(snowflake-values connection))
+                                          (attempt "composite_primary_keys" #(result (.getPrimaryKeys metadata nil "ANALYTICS" "METADATA_TYPES")))
+                                          (attempt "composite_foreign_keys" #(result (.getImportedKeys metadata nil "ANALYTICS" "TYPE_REFERENCES")))])))]
         (println (str "RESULT " (json/generate-string {:profile profile :connected true
                                                       :driver_version (.getDriverVersion metadata)
                                                       :observations observations})))))

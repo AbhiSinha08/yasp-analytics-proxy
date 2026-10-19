@@ -34,7 +34,7 @@
   - [x] **External passthrough example** — Supplies a Python example under hooks/examples and configures ignored local.yml for manual use.
   - [x] **Runtime and routing verification** — Exercises arbitrary callbacks without a database, routed source logins, error recovery, and manual current_user selection.
 - [x] **PostgreSQL cancellation** — Handle client cancel requests and Forward backend cancellation safely.
-- [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only PostgreSQL results.
+- [x] **Redis result cache** — Adds an opt-in shared cache for complete read-only results across backend engines.
   - [x] **Cache settings and bounds** — Keeps caching disabled by default and limits cached rows and aggregate in-process buffers.
   - [x] **SQL-text cache eligibility** — Lets Rust or Python callbacks bypass freshness-sensitive queries using case-insensitive literal SQL fragments; normalized query hashes and configured target/login names identify cache entries.
 - [x] **Shared application datasets** — Loads bounded JSON datasets for consuming-host callbacks.
@@ -81,22 +81,28 @@
   - [x] **Native connector ownership gate** — Retain native parent handles through execution/fetch, permit concurrent operation-scoped cancellation, reject stale handles, and verify recovery and balanced session cleanup through the network fixture.
   - [x] **Fetch cancellation and read-ahead gate** — Verify blocked HTTP downloads stop and sessions recover. Build a pinned Apache driver with a stream-window patch; the unmodified wheel and Foundry 1.15.0 remain negative comparisons for their failing gates.
   - [ ] **Production connector gates** — Establish native-memory bounds, full value coverage, deployment packaging, and real Snowflake role/warehouse isolation before production acceptance.
-  - [x] **PostgreSQL execution ownership** — Keep cache replay/capture, source session SQL, and physical acquisition/execution in the PostgreSQL adapter while preserving existing tests and public entry points.
+  - [x] **PostgreSQL execution ownership** — Keep source session SQL and physical acquisition/execution in the PostgreSQL adapter while preserving existing tests and public entry points.
+  - [x] **Shared backend result caching** — Apply one bounded eligibility/capture/replay path to every backend and both frontends, isolating actual source identity, role/warehouse, dialect and session settings without adapter cache opt-ins.
   - [x] **Shared execution boundary** — Preserve PostgreSQL behavior and public entry points while separating typed execution/errors/results from frontend wire messages.
-  - [x] **Experimental native Snowflake runtime** — Add optional typed source bindings, mixed-engine selection, blocking worker admission, exact decimal/binary/date/time values, transaction affinity, timeout/cancel/disconnect recovery, and balanced network-session cleanup. Retain PostgreSQL as the discovery authority.
-  - [ ] **Snowflake host configuration** — Load Snowflake identities and warehouses through the repository host's validated configuration.
-  - [ ] **Snowflake execution and lifecycle** — Implement configured accounts/roles/warehouses, exact value conversion, bounded workers/prefetch, transaction affinity, cleanup, and real-source authorization tests.
+  - [x] **Experimental native Snowflake runtime** — Add optional typed source bindings, mixed-engine selection, blocking worker admission, exact decimal/binary/date/time values, transaction affinity, timeout/cancel/disconnect recovery, and balanced network-session cleanup.
+  - [x] **Snowflake host configuration** — Load Snowflake identities and warehouses through the repository host's validated configuration.
+  - [ ] **Cross-engine connection budget** — Share the total physical-connection limit across PostgreSQL pools and all Snowflake bindings. Snowflake admission is currently bounded per binding.
+  - [ ] **Real-source execution acceptance** — Validate authentication, role/warehouse isolation, value semantics, transactions, cancellation and cleanup against real Snowflake.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
-  - [x] **Client version inventory** — Record the deployed Metabase, Redash, Superset image digest and bundled PostgreSQL/Redshift JDBC/psycopg2 versions.
+  - [x] **Client version inventory** — Pin the Metabase image and bundled PostgreSQL/Redshift JDBC versions, plus SQLAlchemy/psycopg2 client dependencies used by reflection tests.
   - [x] **Bundled JDBC SQL corpus** — Capture TLS/simple-query setup, schemas/tables/columns/keys/indexes, previews, and transactions from PostgreSQL 42.7.12 and Redshift 2.2.5. Both drivers pass these captured operations with catalog-backed definitions and PostgreSQL key/index discovery.
   - [ ] **Driver traffic corpus** — Capture startup, sync, browsing, filters, aggregates, time buckets, native charts, downloads, and cancellation in both connection modes.
-  - [x] **Input SQL dialect** — Resolve host-owned remark hints before dialect-aware tokenization/parsing and enforce native engine affinity after selection.
+  - [x] **Input SQL dialect** — Resolve host-owned remark hints before dialect-aware tokenization/parsing and apply the selected adapter's input validation after selection.
   - [x] **Shared catalog generations** — Store filtered PostgreSQL/Snowflake schema facts in bounded memory; refresh periodically with atomic generations, source identity, age/status and qualified column coordinates. Keep old generations available to pinned readers.
   - [x] **Captured frontend metadata** — Render the pinned JDBC schema/table/column shapes for both profiles using normalized definitions. Verify Snowflake metadata through the HTTP connector and both frontend profiles.
-  - [ ] **Remaining virtual metadata** — Add declared keys and other captured driver shapes, virtual identifiers and unsupported-type coverage before complete Snowflake sync acceptance.
-  - [x] **Catalog host configuration** — Load explicit schema scope and refresh/age/bound settings from `schema_discovery.catalog`; reuse the PostgreSQL discovery identity and pool.
+  - [x] **Normalized warehouse metadata** — Import bounded Snowflake view/key definitions; serve captured JDBC, Metabase, Redash and SQLAlchemy reflection using native facts and stable virtual identifiers. Broader client/query-builder compatibility remains separate.
+  - [ ] **Redshift SQLAlchemy key identifiers** — Correct the pinned client dialect's retained SQL quotes before claiming automatic relationship matching for quoted source identifiers.
+  - [x] **Persistent development emulator** — Pin Fakesnow and Docker dependencies; seed two schemas through HTTP and preserve custom data, comments, string lengths, views and declared keys across container recreation.
+  - [x] **Unified optional-feature runner** — Keep PostgreSQL defaults; add `--full`, automatic Snowflake fixture/native setup, client-test gating, owned-resource cleanup and sequential Python/docs/client acceptance.
+  - [x] **Catalog host configuration** — Load explicit schema scope and refresh/age/bound settings from `schema_discovery.catalog`; reuse the configured discovery identity and adapter capacity.
   - [x] **BI Redshift schema scans** — Serve captured custom table/field scans from the catalog, including literal filters, comments and PostgreSQL primary-key membership; keep application reads on ordinary routing.
-  - [ ] **Standalone warehouse host** — Remove the required PostgreSQL discovery binding once frontend startup, fingerprints and remaining metadata are served independently of it.
+  - [x] **Standalone warehouse host** — Load engine-specific Snowflake YAML targets/discovery without a PostgreSQL placeholder, advertise frontend versions and resolve an explicit unmarked native-data default after compatibility handling.
+  - [x] **Snowflake data-query forwarding** — Execute native and frontend-generated data SQL unchanged through normal routing and read-only checks; return backend SQL errors without a local dialect gate.
   - [ ] **Bounded generated-query translation** — Validate the supported BI expression forms and explicit unsupported-feature errors against backend results.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
 - [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
@@ -118,6 +124,7 @@
 - [ ] **Additional load-distribution algorithms** — Add round-robin and least-busy allocation within a selected compute type, preserving access, capacity, and cancellation bounds.
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.
 - [ ] **Remaining BI client compatibility** — Prepared queries, Portals, limited SET support, resumable results, Binary Data formats
+- [ ] **Backend Target DB Supports** - Redshift, BigQuery, Databricks, MySQL
 - [ ] **Governance integration in UI** — Adds verified end-user context and external policy checks with privacy controls.
 - [ ] **Management API** — Provides authenticated configuration inspection, health, and scoped cache controls, Dataset refreshes, edits.
 - [ ] **Semantic caching** — Reuses compatible result supersets while preserving SQL ordering, filtering, NULL, limit, and aggregate semantics.

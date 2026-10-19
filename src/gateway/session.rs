@@ -56,7 +56,7 @@ pub(super) async fn connection(
     let address = socket.peer_addr()?;
     let tls = source.tls.as_ref();
     let secure = tls.is_some();
-    let (socket, mut observer, _bridge) = timeout_at(
+    let (socket, mut observer, mut bridge) = timeout_at(
         deadline,
         super::transport::negotiate(socket, tls, settings.max_message_bytes),
     )
@@ -262,11 +262,16 @@ pub(super) async fn connection(
         if let Err(error) = result {
             transaction.fail();
             socket.set_transaction_status(transaction.status().into());
-            tracing::error!(client_id, "client protocol operation failed");
             let mut info: ErrorInfo = error.into();
             if !authenticated {
                 info.severity = "FATAL".into();
             }
+            tracing::error!(
+                client_id,
+                sqlstate = %info.code,
+                phase = if authenticated { "session" } else { "startup" },
+                "client protocol operation failed"
+            );
             let fatal = info.is_fatal();
             if fatal {
                 // Startup failures end the connection without ReadyForQuery.
@@ -277,6 +282,18 @@ pub(super) async fn connection(
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "error response timed out"))?
                 .map_err(|_| io::Error::other("error response failed"))?;
+                if let Some(bridge) = bridge.as_mut() {
+                    // A duplex flush only reaches the bridge. Drain the final
+                    // response onto TLS before its abort-on-drop guard runs.
+                    timeout_at(response_deadline, async {
+                        socket.close().await.map_err(io::Error::other)?;
+                        bridge.finish().await
+                    })
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::TimedOut, "error response timed out")
+                    })??;
+                }
                 return Ok(());
             }
             timeout_at(

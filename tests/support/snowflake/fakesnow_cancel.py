@@ -15,12 +15,27 @@ from fakesnow import server as _serve
 
 
 @contextmanager
-def server(*, interrupt=True, chunk_mode=None):
+def server(*, interrupt=True, chunk_mode=None, host="127.0.0.1", port=None, db_path=None):
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
     module = importlib.import_module("fakesnow.server")
     original = list(module.app.router.routes)
+    from fakesnow.instance import FakeSnow
+    from fakesnow_metadata import metadata_fix
+    original_fs = module.shared_fs
+    module.shared_fs = FakeSnow(db_path=db_path)
+    if db_path is not None:
+        from pathlib import Path
+        from fakesnow import info_schema
+        from fakesnow.transforms import show
+        # Fakesnow otherwise persists table data but loses comments/type lengths
+        # kept in its separate in-memory metadata database.
+        path = str(Path(db_path) / ".metadata.duckdb").replace("'", "''")
+        module.shared_fs.duck_conn.execute("DETACH _fs_global")
+        module.shared_fs.duck_conn.execute(f"ATTACH '{path}' AS _fs_global")
+        module.shared_fs.duck_conn.execute(info_schema.fs_global_creation_sql())
+        module.shared_fs.duck_conn.execute(show.fs_global_creation_sql())
     active = {}
     counts = {"started": 0, "aborted": 0, "stopped": 0, "sessions_opened": 0, "sessions_closed": 0}
 
@@ -82,7 +97,7 @@ def server(*, interrupt=True, chunk_mode=None):
         return JSONResponse({"success": False, "message": "no matching active request"})
 
     module.app.router.routes = [
-        *(chunks.routes() if chunks else []),
+        *(chunks.routes() if chunks else [Route("/_yasp_probe/status", lambda _: JSONResponse(dict(counts)))]),
         Route("/session/v1/login-request", login, methods=["POST"]),
         Route("/session", session, methods=["POST"]),
         Route("/queries/v1/query-request", query, methods=["POST"]),
@@ -91,7 +106,9 @@ def server(*, interrupt=True, chunk_mode=None):
             "/session/v1/login-request", "/session", "/queries/v1/query-request", "/queries/v1/abort-request")],
     ]
     try:
-        with _serve() as settings:
+        with metadata_fix(), _serve(host=host, port=port) as settings:
             yield settings, counts
     finally:
         module.app.router.routes = original
+        module.shared_fs.duck_conn.close()
+        module.shared_fs = original_fs

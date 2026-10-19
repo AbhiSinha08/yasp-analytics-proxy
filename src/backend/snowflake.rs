@@ -3,6 +3,7 @@
 
 mod catalog;
 mod connection;
+mod execution;
 mod result;
 #[cfg(test)]
 mod tests;
@@ -49,6 +50,7 @@ struct Inner {
     catalog_identity: crate::catalog::SourceIdentity,
     database: String,
     database_user: String,
+    emulator: bool,
     driver: connection::Driver,
     options: Vec<(String, String)>,
     permits: Arc<Semaphore>,
@@ -63,10 +65,12 @@ impl SnowflakeBackend {
             endpoint: config
                 .emulator
                 .map(|a| a.to_string())
-                .unwrap_or_else(|| config.account.clone()),
+                .map(|endpoint| format!("{endpoint}/{}", config.database))
+                .unwrap_or_else(|| format!("{}/{}", config.account, config.database)),
             principal: config.username.clone(),
             role: Some(config.role.clone()),
             warehouse: Some(config.warehouse.clone()),
+            default_schema: Some(config.schema.clone()),
         };
         let database = config.database.clone();
         let database_user = config.username.clone();
@@ -155,6 +159,7 @@ impl SnowflakeBackend {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                emulator: config.emulator.is_some(),
                 catalog_identity,
                 database,
                 database_user,
@@ -178,13 +183,6 @@ impl SnowflakeBackend {
     }
 
     pub(crate) fn validate_input(&self, query: &ParsedQuery) -> ExecutionResult<()> {
-        let options = query.input_options();
-        if !options.native || options.dialect != SqlDialect::Snowflake {
-            return Err(ExecutionError::rejected(
-                "0A000",
-                "this Snowflake binding requires native Snowflake SQL; generated SQL translation is not enabled",
-            ));
-        }
         query
             .validate_read_only()
             .map_err(|_| ExecutionError::rejected("0A000", "only read-only queries are supported"))
@@ -199,7 +197,7 @@ impl SnowflakeBackend {
     }
 }
 
-fn validate_session(session: &SessionSettings) -> ExecutionResult<()> {
+pub(super) fn validate_session(session: &SessionSettings) -> ExecutionResult<()> {
     if session.search_path != SessionSettings::default().search_path {
         return Err(ExecutionError::rejected(
             "0A000",

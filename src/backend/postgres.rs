@@ -1,19 +1,17 @@
 //! PostgreSQL routes and read-only execution. Connections own wire I/O, while
 //! the pool returns only verified idle sessions for reuse.
 
-pub(crate) mod cache;
 mod catalog;
 mod connection;
 mod discovery;
 mod execution;
 mod pool;
 mod result;
-pub(crate) use result::{NativeError, NativeResponse, Output};
+pub(crate) use result::{NativeError, Output};
 mod transaction;
 
 pub(crate) use transaction::PostgresTransaction;
 
-use connection::validate_text_fields;
 pub(super) use discovery::{discover, prepare as prepare_discovery};
 use pool::{ConnectionBudget, InstanceState, PgManager};
 

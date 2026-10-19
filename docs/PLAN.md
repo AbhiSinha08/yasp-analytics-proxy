@@ -127,6 +127,13 @@ and bypass result caching.
 Verified TLS covers PostgreSQL clients, source/cancellation connections, and both
 Redis consumers; see [TLS setup](tls.md).
 
+An experimental Redshift profile shares the simple-query transport. The optional
+Snowflake backend forwards native and frontend-generated data SQL unchanged through the normal YAML host, with
+bounded schema snapshots serving captured PostgreSQL/Redshift metadata requests.
+The persistent local emulator and unified client tests are documented in
+[multi-engine compatibility](multi-engine.md). Generated data-query translation,
+real Snowflake access isolation and complete BI exploration remain separate gates.
+
 Use the [documentation index](README.md) for verified current
 [architecture and flows](architecture.md), [configuration](configuration.md),
 [extension contracts](extensions.md), [development](development.md), and
@@ -429,7 +436,8 @@ organization RBAC policy.
 
 ### Redis result cache
 
-- Caching is disabled by default. A hit does not contact PostgreSQL, so source grants,
+- Caching is disabled by default. Shared execution applies it to every backend and
+  both frontend profiles, without adapter opt-ins. A hit skips the source, so grants,
   row-level security, and disabled source logins are not rechecked until expiry.
   Configure `url_env` as `YASP_REDIS_URL`, a namespace, and a TTL (default one hour).
 - Every supported read-only query is eligible by default. Optional Rust or Python
@@ -442,11 +450,12 @@ organization RBAC policy.
   `pg_stat_activity` or `clock_timestamp()`. Normalized effective-SQL SHA-256 query
   IDs combine with configured target/login names under the namespace to identify
   cache entries; SQL-text fragments remain the exclusion policy.
-- Entries preserve PostgreSQL metadata and values in an opaque versioned payload.
-  Before replay, the envelope validates frontend identity/database, selected backend
-  endpoint/database and source user, fixed text settings, query/write timers, and codec
-  version. Partial, failed, cancelled, malformed, or mismatched entries are not
-  replayed. Redis failures and fixed 100 ms operation timeouts are cache misses.
+- Entries preserve exact frontend metadata and text values in an opaque versioned
+  payload. Before replay, scope validates frontend profile/identity/database, input
+  dialect/mode, actual backend endpoint/database/principal, role/warehouse/schema or
+  compute instance, fixed source/session settings, query/write timers, frame bound,
+  and codec/execution revision. Explicit transactions and metadata bypass caching.
+  Partial, failed, cancelled, malformed, or mismatched entries are not replayed. Redis failures and fixed 100 ms operation timeouts are cache misses.
 - `max_rows_per_query` defaults to 10,000 and bounds rows captured and replayed;
   larger results bypass caching and continue streaming. `max_buffered_bytes_total`
   defaults to 32 MiB and bounds aggregate in-process cache buffers, not Redis storage.
@@ -522,19 +531,17 @@ through a System 1 decision model, and authenticated management tools.
 | Configuration lifecycle      | Validate replacement settings and hook versions, then activate a consistent generation without exposing mixed policies.                                                                                                     |
 | Redis query queue            | Bound burst admission with deadlines, cancellation, worker ownership, and recovery. Current local acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns a capacity error. |
 
-Snowflake is the selected second-engine candidate. Its driver and emulator must
-pass the [compatibility gates](multi-engine.md) before runtime integration.
-Snowflake runtime dependencies are optional behind the `snowflake` feature. Frontend
-profile selection, host-owned pre-parse dialect hints, native source affinity, and
-PostgreSQL execution/cache extraction are implemented. The Snowflake native C ABI
-passes the local read-only cancellation comparison with a corrected Fakesnow test
-fixture. Native Snowflake execution through pgwire, typed configuration, bounded
-worker admission, value conversion, transaction affinity, timeout/cancel/disconnect
-recovery, and source cleanup have local network coverage. Virtual metadata,
-generated SQL translation, host YAML configuration, full value and native-memory
-bounds, and real-source role/warehouse acceptance remain pending. Adding another
-native client protocol is a separate gateway capability, not a prerequisite for
-every new backend.
+Snowflake runtime dependencies are optional behind the `snowflake` feature. The
+normal YAML host supports Snowflake-only discovery and data bindings through both
+frontend profiles. Source admission, exact values, transactions, cancellation,
+timeout/disconnect recovery, normalized metadata and persistent local fixtures have
+network coverage against the pinned native C ABI and corrected Fakesnow emulator.
+Shared execution applies one bounded result-cache path to every backend; adapters
+provide source identity and verified completion without cache opt-ins. Generated
+SQL executes unchanged after read-only checks. Broader SQL translation, hard native
+memory bounds and real-source authentication/role/warehouse acceptance remain
+separate gates. Adding a native client protocol is a separate gateway capability,
+not a prerequisite for each backend.
 
 ### Execution milestones
 

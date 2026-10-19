@@ -1,18 +1,10 @@
-//! PostgreSQL text response capture and validation for the shared result cache.
-//! Redis stores opaque bytes; only this adapter interprets protocol frames.
-
-use super::PostgresBackend;
+//! Bounded frontend response capture and validation, independent of the source driver.
 use crate::{
+    backend::result::{ExecutionError, ExecutionResult, ResultEvent},
     cache::{CacheBuffer, RedisCache},
-    config::GatewaySettings,
-    discovery::SessionSettings,
 };
 use futures::{Sink, SinkExt, channel::oneshot};
-use pgwire::{
-    error::{PgWireError, PgWireResult},
-    messages::{DecodeContext, Message, PgWireBackendMessage},
-};
-use sha2::{Digest, Sha256};
+use pgwire::messages::{DecodeContext, Message, PgWireBackendMessage};
 use std::{
     io,
     pin::Pin,
@@ -20,34 +12,6 @@ use std::{
     time::Duration,
 };
 use tokio::time::timeout;
-
-pub(crate) fn scope(
-    backend: &PostgresBackend,
-    user: &str,
-    database: &str,
-    settings: &GatewaySettings,
-    session: &SessionSettings,
-) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    for value in [
-        "postgresql:text:v1",
-        user,
-        database,
-        backend.target(),
-        backend.database_user(),
-        backend.compute_type().unwrap_or(""),
-        backend.compute(),
-        super::SESSION_DEFAULTS,
-        &session.search_path,
-        &session.application_name,
-    ] {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
-    }
-    hash.update(settings.query_timeout_ms.to_be_bytes());
-    hash.update(settings.write_timeout_ms.to_be_bytes());
-    hash.finalize().into()
-}
 
 pub(crate) struct CaptureSink<'a, S> {
     inner: &'a mut S,
@@ -72,26 +36,31 @@ impl<'a, S> CaptureSink<'a, S> {
         }
     }
 
-    pub(crate) fn captured(&self) -> Option<&CacheBuffer> {
-        self.buffer.as_ref()
+    pub(crate) fn captured(&mut self) -> Option<&mut CacheBuffer> {
+        self.buffer.as_mut()
     }
 }
 
-impl<S: Sink<PgWireBackendMessage> + Unpin> Sink<PgWireBackendMessage> for CaptureSink<'_, S> {
+impl<S: Sink<ResultEvent> + Unpin> Sink<ResultEvent> for CaptureSink<'_, S> {
     type Error = S::Error;
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut *self.get_mut().inner).poll_ready(cx)
     }
-    fn start_send(self: Pin<&mut Self>, message: PgWireBackendMessage) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, event: ResultEvent) -> Result<(), Self::Error> {
         let this = self.get_mut();
-        if this.buffer.is_some() && matches!(&message, PgWireBackendMessage::DataRow(_)) {
+        if this.buffer.is_none() {
+            return Pin::new(&mut *this.inner).start_send(event);
+        }
+        let response = crate::wire::encode(event);
+        let message = response.message();
+        if matches!(message, PgWireBackendMessage::DataRow(_)) {
             this.rows += 1;
             if this.rows > this.max_rows_per_query {
                 this.buffer = None;
             }
         }
         if let Some(buffer) = &mut this.buffer {
-            let size = match &message {
+            let size = match message {
                 PgWireBackendMessage::RowDescription(m) => Some(m.message_length() + 1),
                 PgWireBackendMessage::DataRow(m) => Some(m.message_length() + 1),
                 PgWireBackendMessage::NoticeResponse(m) => Some(m.message_length() + 1),
@@ -105,7 +74,7 @@ impl<S: Sink<PgWireBackendMessage> + Unpin> Sink<PgWireBackendMessage> for Captu
                 this.buffer = None;
             }
         }
-        Pin::new(&mut *this.inner).start_send(message)
+        Pin::new(&mut *this.inner).start_send(ResultEvent::Wire(response))
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut *self.get_mut().inner).poll_flush(cx)
@@ -122,18 +91,17 @@ pub(crate) async fn replay<S>(
     output: &mut S,
     write_timeout: Duration,
     cancel: &mut oneshot::Receiver<()>,
-) -> PgWireResult<()>
+) -> ExecutionResult<()>
 where
-    S: Sink<PgWireBackendMessage> + Unpin,
-    PgWireError: From<S::Error>,
+    S: Sink<ResultEvent, Error = ExecutionError> + Unpin,
 {
     while !buffer.bytes.is_empty() {
         if cancel.try_recv().ok().flatten().is_some() {
-            return Err(super::error_response("57014", "query cancelled"));
+            return Err(ExecutionError::cancelled());
         }
         let message = PgWireBackendMessage::decode(&mut buffer.bytes, &DecodeContext::default())?
             .expect("validated complete cache frame");
-        timeout(write_timeout, output.send(message))
+        timeout(write_timeout, output.send(message.into()))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frontend write timed out"))??;
     }
@@ -143,7 +111,7 @@ where
 // Validate raw frames before invoking pgwire's decoders, which assume their
 // field bodies are complete. A malformed cache entry is a miss, never a panic
 // or a partial response followed by a database fallback.
-pub(crate) fn valid_response(mut bytes: &[u8], max_rows: usize) -> bool {
+pub(crate) fn valid_response(mut bytes: &[u8], max_rows: usize, max_frame: usize) -> bool {
     let mut columns = None;
     let mut rows = 0usize;
     while bytes.len() >= 5 {
@@ -159,7 +127,7 @@ pub(crate) fn valid_response(mut bytes: &[u8], max_rows: usize) -> bool {
         if length as usize > native_limit {
             return false;
         }
-        if length < 4 || length as usize > 8 * 1024 * 1024 || length as usize >= bytes.len() {
+        if length < 4 || length as usize >= max_frame || length as usize >= bytes.len() {
             return false;
         }
         let (frame, rest) = bytes.split_at(length as usize + 1);
@@ -187,7 +155,8 @@ pub(crate) fn valid_response(mut bytes: &[u8], max_rows: usize) -> bool {
             }
             b'D' if body.len() >= 2 => {
                 let count = i16::from_be_bytes(body[..2].try_into().unwrap());
-                if columns != Some(count) || super::validate_text_fields(count, &body[2..]).is_err()
+                if columns != Some(count)
+                    || crate::wire::validate_text_fields(count, &body[2..]).is_err()
                 {
                     return false;
                 }

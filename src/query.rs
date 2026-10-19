@@ -40,11 +40,12 @@ impl SqlDialect {
     }
 }
 
-/// Native SQL retains engine affinity and never grants discovery access.
+/// Input grammar and native-query classification never grant discovery access.
 #[derive(Clone, Copy, Debug)]
 pub struct InputOptions {
     pub dialect: SqlDialect,
     pub native: bool,
+    pub(crate) native_after_compatibility: Option<SqlDialect>,
 }
 
 impl InputOptions {
@@ -52,6 +53,7 @@ impl InputOptions {
         Self {
             dialect,
             native: false,
+            native_after_compatibility: None,
         }
     }
 
@@ -59,6 +61,17 @@ impl InputOptions {
         Self {
             dialect,
             native: true,
+            native_after_compatibility: None,
+        }
+    }
+
+    /// An explicit host default for unmarked data SQL. Recognized frontend
+    /// setup/catalog requests still use their compatibility grammar and handlers.
+    pub fn native_after_compatibility(frontend: SqlDialect, native: SqlDialect) -> Self {
+        Self {
+            dialect: frontend,
+            native: false,
+            native_after_compatibility: Some(native),
         }
     }
 }

@@ -36,6 +36,13 @@ impl Observer {
 }
 
 pub(super) struct Bridge(JoinHandle<()>);
+impl Bridge {
+    pub async fn finish(&mut self) -> io::Result<()> {
+        (&mut self.0)
+            .await
+            .map_err(|_| io::Error::other("frontend TLS bridge failed"))
+    }
+}
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.0.abort();

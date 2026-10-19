@@ -18,7 +18,8 @@ import time
 
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parents[2]
+sys.path.insert(0, str(ROOT / "tests/support/snowflake"))
 VERSIONS = {
     "fakesnow": "0.11.22",
     "snowflake-connector-python": "4.8.0",
@@ -115,7 +116,7 @@ def main():
 
     versions = {name: importlib.metadata.version(name) for name in VERSIONS}
     if versions != VERSIONS:
-        raise RuntimeError("use the candidate versions pinned in scripts/compatibility/requirements.txt")
+        raise RuntimeError("use the candidate versions pinned in tests/support/snowflake/requirements.txt")
     import adbc_driver_snowflake
     from fakesnow_cancel import server as fixed_server
 
@@ -262,4 +263,4 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except importlib.metadata.PackageNotFoundError:
-        raise SystemExit("install scripts/compatibility/requirements.txt in an isolated virtual environment")
+        raise SystemExit("install tests/support/snowflake/requirements.txt in an isolated virtual environment")

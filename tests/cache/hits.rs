@@ -1,6 +1,62 @@
 use super::*;
 
 #[test]
+fn both_frontend_profiles_cache_postgres_results_with_separate_scopes() {
+    let fixture = CacheScenario::new();
+    let tls = std::path::PathBuf::from(std::env::var_os("YASP_TEST_TLS_DIR").unwrap());
+    let mut previous = None;
+    for profile in ["postgresql", "redshift", "postgresql"] {
+        let cache = Arc::new(
+            RedisCache::new(
+                settings(&fixture.namespace.name, 60, 5, 196608),
+                &fixture.redis_url,
+                None,
+            )
+            .unwrap(),
+        );
+        let gateway = fixture
+            .identity
+            .gateway_config()
+            .with_cache(cache)
+            .with_settings(yasp::config::GatewaySettings {
+                protocol: profile.into(),
+                tls: yasp::config::GatewayTls {
+                    mode: "enable".into(),
+                    cert_file: Some(tls.join("server.crt")),
+                    key_file: Some(tls.join("server.key")),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        let server = start_server(gateway, fixture.backends(), fixture.selector());
+        let query = |sql: &str| {
+            fixture
+                .identity
+                .connection(server.address)
+                .command()
+                .env("PGSSLMODE", "verify-full")
+                .env("PGSSLROOTCERT", tls.join("ca.crt"))
+                .args(["-c", sql])
+                .output()
+                .unwrap()
+        };
+        let first = query("SELECT clock_timestamp()");
+        let hit = query(" select clock_timestamp() ;");
+        assert_success(&first, "frontend cache miss");
+        assert_success(&hit, "frontend cache hit");
+        assert_eq!(first.stdout, hit.stdout);
+        if let Some(previous) = previous.take() {
+            assert_ne!(
+                first.stdout, previous,
+                "frontend profiles must not share responses"
+            );
+        }
+        previous = Some(first.stdout);
+        server.stop();
+    }
+}
+
+#[test]
 fn normalized_hits_expiry_and_source_scope() {
     let fixture = CacheScenario::new();
     let namespace = fixture.namespace.name.clone();

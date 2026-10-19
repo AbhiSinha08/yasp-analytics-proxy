@@ -1,7 +1,7 @@
 //! PostgreSQL message streaming, cancellation, and lossless text-row validation.
 
 use super::{CONNECT_TIMEOUT, error_response};
-use crate::transport::FrameGuard;
+use crate::{transport::FrameGuard, wire::validate_text_fields};
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use pgwire::{
     api::client::{ClientInfo, Config, ServerInformation},
@@ -257,30 +257,6 @@ async fn send_cancel_request(
 
 fn validate_text_row(row: &DataRow) -> PgWireResult<()> {
     validate_text_fields(row.field_count, row.data.as_ref())
-}
-
-pub(super) fn validate_text_fields(field_count: i16, mut data: &[u8]) -> PgWireResult<()> {
-    for _ in 0..field_count {
-        let length = data
-            .get(..4)
-            .ok_or_else(|| error_response("08006", "invalid PostgreSQL row"))?;
-        let length = i32::from_be_bytes(length.try_into().unwrap());
-        data = &data[4..];
-        if length == -1 {
-            continue;
-        }
-        if length < 0 || length as usize > data.len() {
-            return Err(error_response("08006", "invalid PostgreSQL row"));
-        }
-        let (value, rest) = data.split_at(length as usize);
-        std::str::from_utf8(value)
-            .map_err(|_| error_response("0A000", "PostgreSQL text must remain UTF8"))?;
-        data = rest;
-    }
-    if field_count < 0 || !data.is_empty() {
-        return Err(error_response("08006", "invalid PostgreSQL row"));
-    }
-    Ok(())
 }
 
 impl ClientInfo for PgConnection {

@@ -1,5 +1,4 @@
-//! Bounded intermediate rows shared by the two metadata providers. Their single
-//! statement returns schemas, relations and columns in one source observation.
+//! Bounded intermediate metadata accumulated before publishing a generation.
 
 use super::{CatalogError, CatalogSettings, SourceIdentity, model::*};
 use std::{
@@ -12,6 +11,7 @@ pub(crate) struct Rows {
     bytes: usize,
     max_rows: usize,
     max_bytes: usize,
+    facts: BTreeMap<RelationId, (Option<String>, Vec<Constraint>)>,
 }
 impl Rows {
     pub(crate) fn new(settings: &CatalogSettings) -> Self {
@@ -20,7 +20,31 @@ impl Rows {
             bytes: 0,
             max_rows: settings.max_rows,
             max_bytes: settings.max_bytes,
+            facts: BTreeMap::new(),
         }
+    }
+    #[cfg(feature = "snowflake")]
+    pub(crate) fn facts(
+        &mut self,
+        relation: RelationId,
+        view: Option<String>,
+        constraints: Vec<Constraint>,
+    ) -> Result<(), CatalogError> {
+        let bytes = fact_bytes(&relation, &view, &constraints);
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or(CatalogError::TooLarge)?;
+        if self.bytes > self.max_bytes
+            || self.rows.len()
+                + self.facts.values().map(|(_, c)| c.len()).sum::<usize>()
+                + constraints.len()
+                > self.max_rows
+        {
+            return Err(CatalogError::TooLarge);
+        }
+        self.facts.insert(relation, (view, constraints));
+        Ok(())
     }
     pub(crate) fn push(&mut self, row: Vec<Option<String>>) -> Result<(), CatalogError> {
         if row.len() != 22 {
@@ -77,6 +101,8 @@ impl Rows {
                 comment: comment.clone(),
                 native_id: native_id.clone(),
                 selectable,
+                view_definition: None,
+                constraints: None,
                 columns: Vec::new(),
             });
             if relation.kind != kind
@@ -114,6 +140,29 @@ impl Rows {
             });
         }
         for relation in relations.values_mut() {
+            if let Some((view, constraints)) = self.facts.get(&relation.id) {
+                if constraints.iter().any(|key| {
+                    key.name.is_empty()
+                        || key.columns.is_empty()
+                        || key
+                            .columns
+                            .iter()
+                            .any(|name| !relation.columns.iter().any(|c| c.id.name == *name))
+                        || key
+                            .references
+                            .as_ref()
+                            .is_some_and(|r| r.columns.len() != key.columns.len())
+                }) {
+                    return Err(CatalogError::InvalidMetadata);
+                }
+                relation.view_definition = view.clone();
+                relation.constraints = Some(constraints.clone());
+                for column in &mut relation.columns {
+                    column.primary_key = Some(constraints.iter().any(|c| {
+                        c.kind == ConstraintKind::PrimaryKey && c.columns.contains(&column.id.name)
+                    }));
+                }
+            }
             relation.columns.sort_by_key(|c| c.ordinal);
             if relation
                 .columns
@@ -127,6 +176,23 @@ impl Rows {
                     .len()
                     != relation.columns.len()
             {
+                return Err(CatalogError::InvalidMetadata);
+            }
+        }
+        if source.dialect == crate::query::SqlDialect::Snowflake {
+            let ids = relations
+                .keys()
+                .map(|r| r.frontend_oid())
+                .chain(schemas.iter().map(|(database, schema)| {
+                    RelationId {
+                        database: database.clone(),
+                        schema: schema.clone(),
+                        name: String::new(),
+                    }
+                    .frontend_schema_oid()
+                }));
+            let mut unique = BTreeSet::new();
+            if ids.into_iter().any(|id| !unique.insert(id)) {
                 return Err(CatalogError::InvalidMetadata);
             }
         }
@@ -154,6 +220,12 @@ impl Rows {
                             .sum::<usize>()
                 })
                 .sum::<usize>();
+        let bytes = bytes
+            + self
+                .facts
+                .iter()
+                .map(|(id, (view, constraints))| fact_bytes(id, view, constraints))
+                .sum::<usize>();
         if bytes > self.max_bytes {
             return Err(CatalogError::TooLarge);
         }
@@ -165,6 +237,26 @@ impl Rows {
             relations,
         })
     }
+}
+
+fn fact_bytes(relation: &RelationId, view: &Option<String>, constraints: &[Constraint]) -> usize {
+    let mut bytes = relation.database.len()
+        + relation.schema.len()
+        + relation.name.len()
+        + view.as_ref().map_or(0, String::len);
+    for key in constraints {
+        bytes += key.name.len() + key.columns.iter().map(String::len).sum::<usize>();
+        if let Some(reference) = &key.references {
+            bytes += reference.relation.database.len()
+                + reference.relation.schema.len()
+                + reference.relation.name.len()
+                + reference.columns.iter().map(String::len).sum::<usize>()
+                + reference.constraint_name.as_ref().map_or(0, String::len)
+                + reference.update_rule.len()
+                + reference.delete_rule.len();
+        }
+    }
+    bytes
 }
 
 fn number<T: std::str::FromStr>(value: &Option<String>) -> Result<Option<T>, CatalogError> {

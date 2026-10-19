@@ -13,6 +13,21 @@ pub(super) struct FrontendType {
     pub scale: Option<i32>,
 }
 impl FrontendType {
+    pub(super) fn sql_name(&self) -> String {
+        match self.oid {
+            1700 => self
+                .size
+                .zip(self.scale)
+                .map(|(p, s)| format!("numeric({p},{s})"))
+                .unwrap_or_else(|| "numeric".into()),
+            1043 => self
+                .size
+                .map(|n| format!("character varying({n})"))
+                .unwrap_or_else(|| "character varying".into()),
+            _ => self.name.clone(),
+        }
+    }
+
     pub(super) fn column(c: &Column) -> ExecutionResult<Self> {
         let t = &c.native_type;
         let (oid, jdbc, name, length, size) = match t.name.to_ascii_uppercase().as_str() {

@@ -1,9 +1,10 @@
-//! Capture the deployed JDBC drivers' SQL against disposable PostgreSQL data.
+//! Bundled JDBC drivers against disposable PostgreSQL and Snowflake bindings.
+#[path = "support/clients.rs"]
+mod clients;
 mod support;
+use clients::run_client;
 use std::{
-    io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 use yasp::{
@@ -13,7 +14,6 @@ use yasp::{
 };
 
 #[test]
-#[ignore = "requires the pinned Metabase Docker image; use scripts/compatibility/jdbc_probe.py"]
 fn bundled_jdbc_setup_and_metadata_corpus() {
     yasp::logger::init_with_level("DEBUG").unwrap();
     let environment = support::TestEnvironment::load();
@@ -69,78 +69,8 @@ fn bundled_jdbc_setup_and_metadata_corpus() {
             .unwrap();
             catalog.stop_refreshing().await;
         });
-        let name = support::unique_name("yasp-jdbc");
-        let mut command = Command::new("docker");
-        command.args([
-            "run",
-            "--rm",
-            "--pull=never",
-            "-i",
-            "--name",
-            &name,
-            "--label",
-            &format!(
-                "yasp.compatibility={}",
-                std::env::var("YASP_JDBC_RUN").unwrap()
-            ),
-        ]);
-        for key in [
-            "YASP_JDBC_PROFILE",
-            "YASP_JDBC_USER",
-            "YASP_JDBC_PASSWORD",
-            "YASP_JDBC_HOST",
-            "YASP_JDBC_PORT",
-            "YASP_JDBC_DATABASE",
-        ] {
-            command.args(["--env", key]);
-        }
-        command.args([
-            "--mount",
-            &format!(
-                "type=bind,src={},dst=/tmp/yasp-fixture-ca.crt,readonly",
-                directory.join("ca.crt").display()
-            ),
-        ]);
-        command
-            .args([
-                "--entrypoint",
-                "java",
-                &image,
-                "-Xmx256m",
-                "-cp",
-                "/app/metabase.jar",
-                "clojure.main",
-                "-",
-            ])
-            .env("YASP_JDBC_PROFILE", profile)
-            .env("YASP_JDBC_USER", &identity.user)
-            .env("YASP_JDBC_PASSWORD", &identity.password)
-            .env("YASP_JDBC_DATABASE", &identity.database)
-            .env("YASP_JDBC_PORT", server.address.port().to_string())
-            .env(
-                "YASP_JDBC_HOST",
-                std::env::var("YASP_JDBC_HOST").unwrap_or_else(|_| "host.docker.internal".into()),
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().expect("Docker client starts");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(include_bytes!("../scripts/compatibility/jdbc_probe.clj"))
-            .unwrap();
-        let result = child.wait_with_output().unwrap();
-        // The name belongs exclusively to this run; --rm normally removed it.
-        let _ = Command::new("docker").args(["rm", "-f", &name]).output();
+        let report = run_client(profile, &identity, server.address, "public", "users", false);
         server.stop();
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let report = stdout
-            .lines()
-            .find_map(|line| line.strip_prefix("RESULT "))
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap());
-        let report = report.unwrap_or_else(|| serde_json::json!({"connected":false, "error":String::from_utf8_lossy(&result.stderr)}));
         let queries = observed.lock().unwrap();
         std::fs::write(output.join(format!("jdbc-{profile}.json")), serde_json::to_vec_pretty(&serde_json::json!({"profile":profile,"image":image,"client":report,"queries":*queries})).unwrap()).unwrap();
         let mut required = vec![
@@ -223,4 +153,53 @@ fn bundled_jdbc_setup_and_metadata_corpus() {
         connected.iter().all(|(_, connected)| *connected),
         "JDBC connection gate failed: {connected:?}; see target/compatibility/jdbc-*.json"
     );
+}
+
+#[cfg(feature = "snowflake")]
+#[path = "support/snowflake_host.rs"]
+mod snowflake_host;
+
+#[cfg(feature = "snowflake")]
+#[test]
+fn bundled_jdbc_metadata_uses_snowflake_only_yaml_host() {
+    for profile in ["postgresql", "redshift"] {
+        snowflake_host::with_host(profile, |identity, address, _| {
+            let report = run_client(profile, identity, address, "PUBLIC", "USERS", false);
+            assert_eq!(report["connected"], true, "{report}");
+            for observation in report["observations"].as_array().unwrap() {
+                assert_eq!(observation["passed"], true, "{profile}: {observation}");
+                match observation["operation"].as_str().unwrap() {
+                    "native_values" => {
+                        assert_eq!(observation["decimal"], "12345678901234567890.123456789");
+                        assert_eq!(observation["null"], true);
+                        assert_eq!(observation["binary"], serde_json::json!([0, -1]));
+                        assert_eq!(observation["timestamp"], "2026-01-01T12:34:56.123456");
+                    }
+                    "primary_keys" => {
+                        assert_eq!(observation["rows"][0][3], "ID");
+                        assert_eq!(observation["rows"][0][4], "1");
+                    }
+                    "composite_primary_keys" => {
+                        let mut columns = observation["rows"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|row| (row[4].as_str().unwrap(), row[3].as_str().unwrap()))
+                            .collect::<Vec<_>>();
+                        columns.sort();
+                        assert_eq!(columns, [("1", "TENANT_ID"), ("2", "ID")]);
+                    }
+                    "tables" | "columns" | "foreign_keys" | "composite_foreign_keys" => assert!(
+                        !observation["rows"].as_array().unwrap().is_empty(),
+                        "{observation}"
+                    ),
+                    "indexes" => assert!(
+                        observation["rows"].as_array().unwrap().is_empty(),
+                        "Snowflake has no PostgreSQL indexes"
+                    ),
+                    _ => {}
+                }
+            }
+        });
+    }
 }

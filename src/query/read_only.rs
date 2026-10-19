@@ -1,4 +1,4 @@
-//! Inspect the complete PostgreSQL tree before source execution.
+//! Inspect the complete input tree before source execution.
 //! Database roles and read-only transactions still enforce database access.
 
 use sqlparser::ast::{

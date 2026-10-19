@@ -4,7 +4,7 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer, Whitespace},
 };
 
-/// Only bounded string literals can occupy capture slots, including IN lists.
+/// Capture slots accept bounded strings/IN lists, or an explicit unsigned OID literal.
 /// Repeated slots must have identical values across UNION branches.
 pub(crate) fn capture<'a>(
     actual: &'a [Token],
@@ -22,6 +22,8 @@ pub(crate) fn capture<'a>(
                         | "__YASP_COLUMN__"
                         | "__YASP_SCHEMAS__"
                         | "__YASP_TABLES__"
+                        | "__YASP_OID__"
+                        | "__YASP_RELATION__"
                 ) =>
             {
                 marker.as_str()
@@ -45,8 +47,17 @@ pub(crate) fn capture<'a>(
                     return None;
                 }
             }
-            let Token::SingleQuotedString(value) = actual.next()? else {
-                return None;
+            let value = match actual.next()? {
+                Token::Number(value, false)
+                    if marker == "__YASP_OID__"
+                        && value.len() <= 10
+                        && value.bytes().all(|b| b.is_ascii_digit())
+                        && value.parse::<u32>().is_ok() =>
+                {
+                    value
+                }
+                Token::SingleQuotedString(value) if marker != "__YASP_OID__" => value,
+                _ => return None,
             };
             if value.len() > 1024 || value.contains('\0') || values.len() >= 256 {
                 return None;

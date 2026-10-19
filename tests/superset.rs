@@ -1,4 +1,4 @@
-//! Replay SQLAlchemy Redshift reflection used by Superset through the host.
+//! Superset SQLAlchemy reflection through PostgreSQL and Snowflake host bindings.
 #[path = "support/catalog_host.rs"]
 mod catalog_host;
 mod support;
@@ -64,4 +64,68 @@ fn redshift_superset_reflection_uses_discovery_and_preserves_source_facts() {
         }
         assert!(!query("SELECT * FROM public.users").status.success());
     });
+}
+
+#[cfg(all(feature = "snowflake", feature = "client-tests"))]
+#[path = "support/clients.rs"]
+mod clients;
+#[cfg(all(feature = "snowflake", feature = "client-tests"))]
+#[path = "support/snowflake_host.rs"]
+mod snowflake_host;
+
+#[cfg(all(feature = "snowflake", feature = "client-tests"))]
+#[test]
+fn sqlalchemy_reflection_uses_snowflake_only_yaml_host() {
+    for profile in ["postgresql", "redshift"] {
+        snowflake_host::with_host(profile, |identity, address, _| {
+            // sqlalchemy-redshift 0.8.14 returns quoted SQL identifier tokens
+            // from condef; PostgreSQL's dialect decodes them into column names.
+            let key_name = |name: &str| {
+                if profile == "redshift" {
+                    format!("\"{name}\"")
+                } else {
+                    name.to_owned()
+                }
+            };
+            let report = clients::run_client(profile, identity, address, "PUBLIC", "USERS", true);
+            std::fs::write(
+                support::root().join(format!("target/compatibility/sqlalchemy-{profile}.json")),
+                serde_json::to_vec_pretty(&report).unwrap(),
+            )
+            .unwrap();
+            for observation in report["observations"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{report}"))
+            {
+                assert_eq!(observation["passed"], true, "{profile}: {observation}");
+                let result = &observation["result"];
+                match observation["operation"].as_str().unwrap() {
+                    "schemas" => assert!(result.as_array().unwrap().iter().any(|s| s == "PUBLIC")),
+                    "tables" => assert!(result.as_array().unwrap().iter().any(|s| s == "USERS")),
+                    "views" => assert_eq!(result[0], "DAILY_SALES"),
+                    "columns" => {
+                        assert_eq!(result[0]["name"], "ID");
+                        assert_eq!(result[0]["comment"], "Customer identifier");
+                    }
+                    "primary_keys" => {
+                        assert_eq!(
+                            result["constrained_columns"],
+                            serde_json::json!([key_name("ID")])
+                        )
+                    }
+                    "foreign_keys" => assert_eq!(result.as_array().unwrap().len(), 2),
+                    "composite_keys" => assert_eq!(
+                        result[0]["constrained_columns"],
+                        serde_json::json!([key_name("TENANT_ID"), key_name("TYPE_ID")])
+                    ),
+                    "indexes" => assert!(result.as_array().unwrap().is_empty()),
+                    "uniques" => {
+                        assert_eq!(result[0]["column_names"], serde_json::json!(["EMAIL"]))
+                    }
+                    "comments" => assert_eq!(result["text"], "Demo customers"),
+                    _ => {}
+                }
+            }
+        });
+    }
 }

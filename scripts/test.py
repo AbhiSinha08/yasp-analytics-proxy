@@ -3,6 +3,9 @@
 
 import argparse
 import contextlib
+import hashlib
+import uuid
+import urllib.request
 import json
 import os
 from pathlib import Path
@@ -190,26 +193,140 @@ def stop_test_processes(process):
 
 def run_tests(arguments, environment):
     command = ["cargo", "test", "--locked", *arguments]
+    print("Running", *command, flush=True)
     process = subprocess.Popen(command, cwd=ROOT, env=environment, start_new_session=True)
     try:
-        return process.wait()
+        return process.wait(timeout=1800)
     finally:
         stop_test_processes(process)
 
 
+
+def requested_features(arguments):
+    features = set()
+    for i, argument in enumerate(arguments):
+        if argument == "--all-features":
+            features.update(["python", "snowflake", "client-tests"])
+        elif argument == "--features" and i + 1 < len(arguments):
+            features.update(arguments[i + 1].replace(",", " ").split())
+        elif argument.startswith("--features="):
+            features.update(argument.partition("=")[2].replace(",", " ").split())
+    return features
+
+
+@contextlib.contextmanager
+def external_services(environment, features):
+    """Own only this run's Docker resources; never touch the developer volume."""
+    if not features.intersection({"snowflake", "client-tests"}):
+        yield environment
+        return
+    subprocess.run(["docker", "info"], check=True, stdout=subprocess.DEVNULL)
+    run_id = uuid.uuid4().hex
+    environment = environment | {"YASP_JDBC_RUN": run_id}
+    container = None
+    images = []
+    try:
+        if "client-tests" in features:
+            inventory = json.loads((ROOT / "tests/fixtures/clients/clients.json").read_text())
+            image = inventory["metabase"]["image_digests"][0]
+            if subprocess.run(["docker", "image", "inspect", image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+                subprocess.run(["docker", "pull", image], check=True)
+            client_image = "yasp-bi-clients-test:" + run_id
+            images.append(client_image)
+            subprocess.run(["docker", "build", "--target", "clients", "-f", "dev/snowflake/Dockerfile", "-t", client_image, "."], cwd=ROOT, check=True)
+            environment["YASP_SQLALCHEMY_IMAGE"] = client_image
+            environment |= {"YASP_JDBC_IMAGE": image, "YASP_JDBC_HOST": os.environ.get("YASP_JDBC_HOST", "host.docker.internal")}
+        if "snowflake" in features:
+            build = ROOT / "target/compatibility/native-build/build.json"
+            patch = ROOT / "scripts/snowflake/snowflake-v1.11.0-prefetch.patch"
+            native = json.loads(build.read_text()) if build.exists() else {}
+            library = Path(native.get("library", "/missing"))
+            digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+            if not library.is_file() or native.get("library_sha256") != digest(library) or native.get("patch_sha256") != digest(patch):
+                subprocess.run([sys.executable, str(ROOT / "scripts/snowflake/build_native_driver.py")], check=True)
+                native = json.loads(build.read_text())
+                library = Path(native["library"])
+            environment |= {"YASP_SNOWFLAKE_DRIVER": str(library), "YASP_SNOWFLAKE_DRIVER_SHA256": digest(library)}
+            snowflake_image = "yasp-fakesnow-test:" + run_id
+            images.append(snowflake_image)
+            subprocess.run(["docker", "build", "--target", "server", "-f", "dev/snowflake/Dockerfile", "-t", snowflake_image, "."], cwd=ROOT, check=True)
+            environment["YASP_SNOWFLAKE_IMAGE"] = snowflake_image
+            container = "yasp-snowflake-test-" + run_id
+            subprocess.run(["docker", "run", "-d", "--name", container,
+                "--label", "yasp.compatibility=" + run_id,
+                "-p", "127.0.0.1::64616", "--tmpfs", "/data:rw,size=256m",
+                environment["YASP_SNOWFLAKE_IMAGE"], "--test"], check=True, stdout=subprocess.DEVNULL)
+            port = subprocess.check_output(["docker", "inspect", container, "--format",
+                '{{(index (index .NetworkSettings.Ports "64616/tcp") 0).HostPort}}'], text=True).strip()
+            endpoint = "127.0.0.1:" + port
+            environment["YASP_SNOWFLAKE_ENDPOINT"] = endpoint
+            environment["YASP_SNOWFLAKE_FIXTURE"] = endpoint
+            deadline = time.monotonic() + 90
+            while True:
+                state = subprocess.check_output(["docker", "inspect", container, "--format", "{{.State.Running}}"], text=True).strip()
+                if state != "true":
+                    subprocess.run(["docker", "logs", container], check=False)
+                    raise RuntimeError("disposable Snowflake fixture exited during startup")
+                try:
+                    ready = subprocess.run(["docker", "exec", container, "python", "sql.py", "--health"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8).returncode == 0
+                except subprocess.TimeoutExpired:
+                    ready = False
+                if ready:
+                    break
+                if time.monotonic() >= deadline:
+                    subprocess.run(["docker", "logs", container], check=False)
+                    raise RuntimeError("disposable Snowflake fixture did not become ready")
+                time.sleep(0.2)
+        yield environment
+        if container:
+            deadline = time.monotonic() + 5
+            while True:
+                with urllib.request.urlopen("http://" + environment["YASP_SNOWFLAKE_ENDPOINT"] + "/_yasp_probe/status", timeout=3) as response:
+                    counts = json.load(response)
+                if counts["started"] == counts["stopped"] and counts["sessions_opened"] == counts["sessions_closed"]:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Snowflake workers or sessions did not stop: " + json.dumps(counts))
+                time.sleep(0.05)
+    finally:
+        owned = subprocess.check_output(["docker", "ps", "-aq", "--filter", "label=yasp.compatibility=" + run_id], text=True).split()
+        if owned:
+            subprocess.run(["docker", "rm", "-f", "-v", *owned], check=True, stdout=subprocess.DEVNULL)
+        volumes = subprocess.check_output(["docker", "volume", "ls", "-q", "--filter", "label=yasp.compatibility=" + run_id], text=True).split()
+        if volumes:
+            subprocess.run(["docker", "volume", "rm", *volumes], check=True, stdout=subprocess.DEVNULL)
+        for image in images:
+            subprocess.run(["docker", "image", "rm", image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--configured", action="store_true", help="use existing services and YASP_TEST_CONFIG/.env")
+    parser.add_argument("--configured", action="store_true", help="use existing PostgreSQL/Redis services and YASP_TEST_CONFIG/.env")
+    parser.add_argument("--full", action="store_true", help="default, Python, Snowflake and pinned JDBC functional/documentation matrix")
     parser.add_argument("cargo_arguments", nargs=argparse.REMAINDER, help="cargo test arguments after --")
     arguments = parser.parse_args()
     cargo_arguments = arguments.cargo_arguments
     if cargo_arguments[:1] == ["--"]:
         cargo_arguments = cargo_arguments[1:]
-    cargo_arguments = cargo_arguments or ["--all-targets"]
-    if arguments.configured:
-        return run_tests(cargo_arguments, os.environ.copy())
-    with services() as environment:
-        return run_tests(cargo_arguments, environment)
+    if arguments.full and cargo_arguments:
+        parser.error("--full runs the fixed acceptance matrix; use Cargo arguments for focused runs")
+    matrix = [["--all-targets"], ["--doc"],
+        ["--all-targets", "--features", "python"], ["--doc", "--features", "python"],
+        ["--all-targets", "--all-features"], ["--doc", "--all-features"]] if arguments.full else [cargo_arguments or ["--all-targets"]]
+    features = set().union(*(requested_features(args) for args in matrix))
+    with contextlib.ExitStack() as stack:
+        environment = os.environ.copy() if arguments.configured else stack.enter_context(services())
+        if "python" in features:
+            interpreter = environment.get("PYO3_PYTHON", sys.executable)
+            library = subprocess.check_output([interpreter, "-c", "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"], text=True).strip()
+            environment |= {"PYO3_PYTHON": interpreter,
+                "LD_LIBRARY_PATH": library + (":" + environment["LD_LIBRARY_PATH"] if environment.get("LD_LIBRARY_PATH") else "")}
+        environment = stack.enter_context(external_services(environment, features))
+        for args in matrix:
+            result = run_tests(args, environment)
+            if result:
+                raise SystemExit(result)
+    return 0
 
 
 if __name__ == "__main__":

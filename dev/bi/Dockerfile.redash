@@ -1,0 +1,7 @@
+FROM redash/redash:26.9.0@sha256:fced015dbdb8bf171cbffe73e7841c9331c088b0fbf9542427cf4e72daa7f3c3
+USER root
+RUN cp /app/redash/query_runner/files/redshift-ca-bundle.crt /app/redshift-ca-base.crt \
+    && chown redash /app/redash/query_runner/files/redshift-ca-bundle.crt
+COPY --chmod=755 redash-entrypoint.sh /app/yasp-entrypoint
+USER redash
+ENTRYPOINT ["/app/yasp-entrypoint"]

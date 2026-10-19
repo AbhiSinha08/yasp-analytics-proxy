@@ -8,6 +8,8 @@ publish = false
 
 [features]
 default = []
+# External JDBC integration tests, prepared by scripts/test.py.
+client-tests = []
 # Rust-only hosts do not need a Python installation or libpython.
 python = ["dep:pyo3"]
 snowflake = ["dep:adbc_ffi", "dep:arrow-array", "dep:arrow-schema", "dep:libloading", "dep:chrono"]
@@ -46,3 +48,7 @@ required-features = ["python"]
 [[example]]
 name = "snowflake_gateway"
 required-features = ["snowflake"]
+
+[[test]]
+name = "jdbc"
+required-features = ["client-tests"]

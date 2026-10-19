@@ -200,10 +200,11 @@ def custom_behavior(request, params):
         edge_values
     );
     for name in ["missing", "not_callable", "asynchronous"] {
-        assert!(matches!(
-            runtime.register(&script, name, params.clone()).await,
-            Err(Error::Registration)
-        ));
+        let error = runtime.register(&script, name, params.clone()).await.err();
+        assert!(
+            matches!(error, Some(Error::Registration)),
+            "{name}: {error:?}"
+        );
     }
     let missing_import = scripts.write("missing_import.py", "import yasp_nonexistent_dependency\n");
     assert!(matches!(

@@ -75,7 +75,7 @@ pub async fn serve_routed(
 type FrontendSocket = Framed<FrameGuard, PgWireMessageServerCodec<String>>;
 
 /// Serve PostgreSQL and Snowflake bindings through one frontend and selection
-/// hook. This initial mixed-engine path uses a PostgreSQL discovery authority.
+/// hook, with a configured discovery authority in either engine.
 #[cfg(feature = "snowflake")]
 pub async fn serve_backends(
     listener: TcpListener,
@@ -84,18 +84,15 @@ pub async fn serve_backends(
     selector: impl Into<RoutedSelector>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
-    let discovery = backends
-        .postgres
-        .discovery_route(config.schema_discovery.as_ref())?;
+    let discovery = backends.discovery_selection(config.schema_discovery.as_ref())?;
     let discovery_compute = config.schema_discovery_compute.clone();
     if backends
-        .postgres
-        .get_discovery(&discovery, discovery_compute.as_deref())
+        .discovery(&discovery, discovery_compute.as_deref())
         .is_none()
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "discovery requires a configured PostgreSQL binding",
+            "discovery requires a configured backend binding",
         ));
     }
     serve_sessions(

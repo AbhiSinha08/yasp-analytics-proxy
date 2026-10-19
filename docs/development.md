@@ -4,6 +4,9 @@ Use the [documentation index](README.md) for current architecture, configuration
 and extension contracts. The [plan](PLAN.md) defines phase scope; implementation
 proceeds only through requested slices.
 
+The [development containers](../dev/README.md) cover the BI tools and Snowflake
+emulator, including host-service prerequisites, ports, and persistent state.
+
 ## Toolchain and checks
 
 Use Rust 1.89.0 with rustfmt and Clippy as pinned in
@@ -18,6 +21,8 @@ cargo check --locked --all-targets
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/test.py
+# Includes optional Snowflake/client fixtures and Python/docs:
+python3 scripts/test.py --full
 ```
 
 The runner provisions disposable PostgreSQL 18 and Redis instances and executes
@@ -95,6 +100,7 @@ application's resolved versions. Library consumers resolve their own graph.
 | Rustls 0.23 and rustls-native-certs 0.8      | TLS 1.2/1.3, certificate/hostname verification, PEM parsing, and system trust roots; Ring matches pgwire.               |
 | sha2 0.11, bytes 1                           | Query/cache scope hashes and bounded native protocol buffers.                                                           |
 | PyO3 0.29, optional                          | Trusted embedded Python; Rust-only builds do not link CPython.                                                          |
+| ADBC FFI 0.24, Arrow 59, libloading 0.8 and chrono 0.4, optional | Snowflake native driver loading, owned result batches and exact value conversion; enabled by `snowflake`. |
 
 Additional backend/model SDKs and management frameworks belong to
 their active milestones. Choose compatible versions/features and prove native type,

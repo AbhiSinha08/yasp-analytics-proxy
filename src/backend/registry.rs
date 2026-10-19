@@ -1,5 +1,4 @@
-//! Configured engine bindings. PostgreSQL remains the discovery authority until
-//! the Snowflake virtual catalog is enabled.
+//! Configured engine bindings and their explicit discovery authority.
 
 use super::{
     PostgresBackends,
@@ -15,15 +14,89 @@ use std::{
 };
 
 pub struct Backends {
-    pub(crate) postgres: Arc<PostgresBackends>,
+    pub(crate) postgres: Option<Arc<PostgresBackends>>,
     snowflake: BTreeMap<BackendSelection, Arc<SnowflakeBackend>>,
 }
 impl Backends {
     pub fn new(postgres: Arc<PostgresBackends>) -> Self {
         Self {
-            postgres,
+            postgres: Some(postgres),
             snowflake: BTreeMap::new(),
         }
+    }
+
+    /// A Snowflake-only registry; add its configured bindings before serving.
+    pub fn without_postgres() -> Self {
+        Self {
+            postgres: None,
+            snowflake: BTreeMap::new(),
+        }
+    }
+
+    fn selections(&self) -> impl Iterator<Item = &BackendSelection> {
+        self.postgres
+            .iter()
+            .flat_map(|pg| pg.selections())
+            .chain(self.snowflake.keys())
+    }
+
+    pub(crate) fn discovery_selection(
+        &self,
+        configured: Option<&BackendSelection>,
+    ) -> io::Result<BackendSelection> {
+        if let Some(selection) = configured {
+            if self.selections().any(|s| s == selection) {
+                return Ok(selection.clone());
+            }
+        } else {
+            let mut selections = self.selections();
+            if let Some(first) = selections.next()
+                && selections.all(|s| s.target == first.target)
+            {
+                return Ok(first.clone());
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "discovery requires a configured target and login",
+        ))
+    }
+
+    pub(crate) fn discovery(
+        &self,
+        selection: &BackendSelection,
+        compute: Option<&str>,
+    ) -> Option<super::discovery::DiscoverySource<'_>> {
+        if compute.is_none()
+            && let Some((binding, backend)) = self.snowflake.get_key_value(selection)
+        {
+            return Some(super::discovery::DiscoverySource::Snowflake(
+                backend, binding,
+            ));
+        }
+        self.postgres
+            .as_ref()?
+            .get_discovery(selection, compute)
+            .map(|pg| pg.discovery())
+    }
+
+    pub async fn catalog(
+        &self,
+        selection: &BackendSelection,
+        compute: Option<&str>,
+        settings: crate::catalog::CatalogSettings,
+    ) -> Result<Arc<crate::catalog::Catalog>, crate::catalog::CatalogError> {
+        if compute.is_none()
+            && let Some(source) = self.snowflake.get(selection)
+        {
+            return crate::catalog::Catalog::snowflake(source.clone(), settings).await;
+        }
+        let source = self
+            .postgres
+            .as_ref()
+            .and_then(|pg| pg.get_discovery(selection, compute))
+            .ok_or(crate::catalog::CatalogError::InvalidSettings)?;
+        crate::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await
     }
 
     pub fn with_snowflake(
@@ -36,7 +109,8 @@ impl Backends {
             .any(|s| s.is_empty() || s.len() > 256 || s.contains('\0'))
             || self
                 .postgres
-                .selections()
+                .iter()
+                .flat_map(|pg| pg.selections())
                 .any(|s| s.target == selection.target)
             || self.snowflake.contains_key(&selection)
         {
@@ -54,7 +128,7 @@ impl Backends {
         decision: &BackendDecision,
     ) -> ExecutionResult<(BackendSelection, Route<'_>)> {
         let rejected = || ExecutionError::rejected("42501", "backend selection is not configured");
-        let keys = || self.postgres.selections().chain(self.snowflake.keys());
+        let keys = || self.selections();
         let targets: BTreeSet<_> = keys().map(|s| s.target.as_str()).collect();
         let target = decision
             .target
@@ -86,13 +160,17 @@ impl Backends {
             compute_type: decision.compute_type.clone(),
         };
         self.postgres
+            .as_ref()
+            .ok_or_else(rejected)?
             .resolve(&decision)
             .map(|route| (selection, Route::Postgres(route)))
             .map_err(|_| rejected())
     }
 
     pub(crate) fn close(&self) {
-        self.postgres.close();
+        if let Some(postgres) = &self.postgres {
+            postgres.close();
+        }
         for backend in self.snowflake.values() {
             backend.close();
         }

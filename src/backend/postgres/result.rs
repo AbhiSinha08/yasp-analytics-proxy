@@ -9,18 +9,6 @@ use std::{
     task::{Context, Poll},
 };
 
-pub(crate) struct NativeResponse(PgWireBackendMessage);
-impl NativeResponse {
-    pub(crate) fn into_wire(self) -> PgWireBackendMessage {
-        self.0
-    }
-}
-impl From<PgWireBackendMessage> for ResultEvent {
-    fn from(value: PgWireBackendMessage) -> Self {
-        Self::Postgres(NativeResponse(value))
-    }
-}
-
 pub(crate) struct NativeError(PgWireError);
 impl fmt::Debug for NativeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

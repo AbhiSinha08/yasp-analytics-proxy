@@ -1,0 +1,5 @@
+**
+!Dockerfile.superset
+!Dockerfile.redash
+!superset_config.py
+!redash-entrypoint.sh

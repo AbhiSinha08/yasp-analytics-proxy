@@ -1,4 +1,8 @@
-//! Bounded, opt-in Redis storage for complete adapter-owned response bytes.
+//! Shared, bounded result caching for every backend and pgwire frontend.
+
+mod execution;
+mod response;
+pub(crate) use execution::execute;
 
 use crate::{
     config::CacheSettings,

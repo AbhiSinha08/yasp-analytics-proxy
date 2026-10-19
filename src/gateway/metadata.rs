@@ -1,8 +1,10 @@
 //! Exact bundled-driver SQL shapes over shared source definitions. Parameters
 //! can only replace designated string predicates; client SQL is never executed
 //! by these handlers, including strings containing SQL or catalog names.
+mod foreign;
 mod metabase;
 mod redash;
+mod sqlalchemy;
 mod types;
 use super::FrontendProfile;
 use crate::discovery::template::{capture, tokens};
@@ -22,6 +24,7 @@ use types::FrontendType;
 
 #[derive(Clone, Copy)]
 enum Kind {
+    Foreign,
     Schemas,
     Tables,
     Columns,
@@ -35,6 +38,7 @@ struct Template {
     tokens: Vec<Token>,
 }
 pub(super) struct Request {
+    foreign: Option<foreign::Request>,
     kind: Kind,
     schema: String,
     table: String,
@@ -70,6 +74,7 @@ impl Request {
                         .collect()
                 };
                 return Some(Self {
+                    foreign: None,
                     kind: template.kind,
                     schema: scalar("__YASP_SCHEMA__"),
                     table: scalar("__YASP_TABLE__"),
@@ -80,6 +85,18 @@ impl Request {
             }
         }
         None
+    }
+
+    pub(super) fn recognize_foreign(sql: &str, profile: FrontendProfile) -> Option<Self> {
+        Some(Self {
+            foreign: Some(foreign::Request::recognize(sql, profile)?),
+            kind: Kind::Foreign,
+            schema: String::new(),
+            table: String::new(),
+            column: String::new(),
+            schemas: Vec::new(),
+            tables: Vec::new(),
+        })
     }
 
     pub(super) async fn execute<S>(
@@ -98,6 +115,14 @@ impl Request {
             send_event(output, ResultEvent::Columns(columns), settings).await?;
             let mut count = 0;
             match self.kind {
+                Kind::Foreign => {
+                    count = self
+                        .foreign
+                        .as_ref()
+                        .expect("foreign request")
+                        .serve(self, snapshot, output, settings)
+                        .await?;
+                }
                 Kind::MetabaseTables | Kind::MetabaseColumns => {
                     count = metabase::serve(self, snapshot, output, settings).await?;
                 }
@@ -212,7 +237,11 @@ impl Request {
     }
 
     fn columns(&self, profile: FrontendProfile) -> Vec<ResultColumn> {
+        if let Some(request) = &self.foreign {
+            return request.columns(profile);
+        }
         let names = match self.kind {
+            Kind::Foreign => unreachable!("foreign request columns"),
             Kind::MetabaseTables | Kind::MetabaseColumns => metabase::columns(self.kind),
             Kind::RedashColumns => ["table_name", "table_schema", "column_name", "data_type"]
                 .into_iter()

@@ -3,7 +3,7 @@
 Library hosts can attach a shared, periodically refreshed schema catalog with
 `GatewayConfig::with_catalog`. Its source identity, schema scope, refresh/age and
 row/byte limits are described in [Shared schema catalog](catalog.md). The YAML host
-enables the PostgreSQL provider through `schema_discovery.catalog`.
+enables the configured source provider through `schema_discovery.catalog`.
 
 The host loads ignored `config/local.yml`; `--config PATH` selects another file.
 [config/example.yml](../config/example.yml) is the full loadable reference. Its
@@ -20,9 +20,9 @@ cargo run --locked -- --config config/local.yml
 
 ## Secrets and targets
 
-The repository YAML host currently accepts PostgreSQL targets. The optional
-Snowflake library host below uses typed configuration; adding `engine: snowflake`
-to this YAML is not yet supported.
+The YAML host accepts PostgreSQL targets and, with `--features snowflake`, Snowflake
+targets. Each engine has its own settings. A Snowflake-only configuration uses its
+own discovery binding and normalized catalog; no PostgreSQL placeholder is needed.
 
 The process environment takes precedence over optional `.env` in the working
 directory. The host parses `.env` without mutating the process environment. Keep
@@ -162,17 +162,21 @@ Prepared-statement and portal settings remain future configuration.
 
 The Redshift profile requires `tls.mode: enable`. It advertises version 8.0.2,
 implements simple-query framing, and leaves Redshift protocol extensions disabled.
-The YAML host uses PostgreSQL backends. Captured JDBC and Metabase Redshift
-metadata queries have focused coverage; full query-builder compatibility remains
+The YAML host supports PostgreSQL and optional Snowflake backends. Captured JDBC
+and BI metadata queries have focused coverage; full query-builder compatibility remains
 unvalidated. See [multi-engine support](multi-engine.md).
 
 `hooks.input_options` optionally registers the compiled
 `builtin.input_options.metabase` resolver with a required `native_dialect` param
 (`postgresql`, `redshift`, or `snowflake`). Only a valid leading Metabase remark
 whose `queryType` is `native` selects that dialect. MBQL, absent, malformed, and
-unknown remarks retain the listener's dialect. Input is byte-bounded before this
-callback. Native SQL still runs read-only validation, context, and selection;
-source-engine mismatch returns `0A000` after selection. Native hints never select
+unknown remarks retain the listener's dialect by default. Optional
+`unmarked_data_dialect` selects a native data default after recognized frontend
+setup/metadata handling; explicit MBQL still uses the frontend dialect. Input is
+byte-bounded before this callback. Data SQL still runs read-only validation, context,
+and selection. PostgreSQL rejects a mismatched explicit native dialect after selection.
+Snowflake forwards accepted data SQL unchanged, including MBQL; backend SQL errors
+are returned to the client. Native hints never select
 the discovery identity. An omitted resolver preserves the listener's input grammar.
 
 ## Shared application datasets
@@ -256,7 +260,7 @@ names; it is required when the catalog is enabled. Initial loading must succeed
 before the listener accepts clients. Omit `catalog` to retain PostgreSQL discovery
 forwarding. Redshift Metabase's captured table/column scans require the catalog;
 Redshift-specific views are answered locally rather than forwarded to PostgreSQL.
-See [catalog configuration](catalog.md#yaml-host) for refresh, age and memory bounds.
+See [catalog configuration](catalog.md#refresh-and-failure-behavior) for refresh, age and memory bounds.
 
 ### JDBC clients
 
@@ -358,6 +362,8 @@ connection after clearing any JDBC-only parameters.
 
 Connection testing, native SQL and the captured table/column/constraint reflection
 queries work with this local combination and a PostgreSQL discovery source.
+Snowflake discovery supports the captured reflection surface through normalized
+catalog facts; see [the local environment](../dev/snowflake/README.md).
 The Redshift dialect queries fields such as `pg_class.reldiststyle`, late-binding
 view columns and external catalogs. YASP recognizes the complete captured SQL,
 accepts only bounded literal schema/table filters, and translates these metadata
@@ -365,10 +371,11 @@ requests inside the PostgreSQL adapter. They bypass ordinary context, selection
 and result caching. Types, comments, defaults, view definitions, declared keys,
 owners and ACLs come from PostgreSQL; Redshift distribution, encoding and sort-key
 properties are NULL. Unknown SQL remains outside this compatibility surface.
-These live discovery responses use the configured discovery identity rather than
-the snapshot's imported schema list. A Snowflake catalog rejects this live
-PostgreSQL metadata fallback explicitly; Snowflake reflection needs its own
-provider support before this client combination is supported there.
+These live PostgreSQL discovery responses use the configured identity rather than
+the snapshot's imported schema list. Snowflake reflection instead uses the snapshot
+scope, virtual identifiers and declared key definitions. Unknown source owners,
+privileges and physical Redshift properties remain NULL. Unknown catalog requests
+fail explicitly.
 
 Redash 26.9's **Redshift** runner has an SSL-mode field but no CA-upload or JDBC
 properties field. It supplies its bundled CA file at
@@ -381,7 +388,7 @@ copying a CA to `/tmp` does not configure this runner to trust it. Select
 ad-hoc and scheduled query-group fields empty: those fields prepend a second
 statement, outside the current single-statement query surface.
 
-The captured Redash Redshift schema query is served from the configured PostgreSQL
+The captured Redash schema queries use the configured PostgreSQL or Snowflake
 catalog snapshot. Refresh Redash's cached schema after restarting YASP with
 catalog support. Saved query remarks contain a numeric `query_id`; new queries
 contain `query_id: adhoc`. Both retain their numeric `user_id` for the example
@@ -425,6 +432,11 @@ cancellation remains supported.
 
 ## Redis result cache
 
+The engine applies caching to ordinary autocommit reads for every backend and both
+frontend profiles. `cache.enabled` is the only opt-in; there is no backend-specific
+cache setting. Metadata/setup requests and explicit transactions bypass reads and
+writes. Backend SQL errors and incomplete results are never cached.
+
 | Setting under `cache`      | Default                                                              |
 | -------------------------- | -------------------------------------------------------------------- |
 | `enabled`                  | `false`; the only cache opt-in.                                      |
@@ -440,11 +452,15 @@ Redis keys use `<namespace>:<target>_<login>:<query-id>`, for example
 Within target and login names, `%`, `:`, and `_` are percent-escaped so the pair
 occupies one Redis path segment and cannot collide with another pair.
 Different named pairs keep separate entries even when they share source credentials.
-Compute-instance and physical source settings remain part of entry scope validation.
+Scope validates frontend profile, input dialect/mode, authenticated user/database,
+actual backend endpoint/database/principal, role/warehouse/schema or compute instance,
+fixed source settings, session search path/application name, query/write timers,
+frame bound and response codec/execution revision. Different scopes may replace
+the same query slot; a scope mismatch always executes against the selected source.
 Dynamic masking will still load the selected source pair's cache entry and apply
 current masks before output; masking is not implemented yet.
 
-Hits skip PostgreSQL, so source grants and RLS can remain stale until expiry. Scope
+Hits skip the backend, so source grants and row-level security can remain stale until expiry. Scope
 checks isolate identity, source, and fixed execution context. Redis transport is
 plaintext `redis://` TCP or verified `rediss://` TLS with a fixed 100 ms operation
 deadline, including connection establishment; runtime failures become
@@ -472,14 +488,50 @@ file. Limits must be positive, a payload must fit the byte budget, and counters 
 fit their platform bounds. Build with `--features python`; install and expose the
 matching interpreter and packages as described in [development](development.md#python-embedding).
 
+## Snowflake targets
+
+Build the normal host with `--features snowflake`. The checked-in
+[demo YAML](../config/snowflake-demo.yml) connects either frontend to the persistent
+[Docker emulator](../dev/snowflake/README.md) on a separate gateway port, 6433.
+Gateway credentials and TLS retain their ordinary configuration.
+
+A target uses `engine: snowflake`, `database`, and a `snowflake` mapping:
+
+| Field | Meaning |
+| --- | --- |
+| `driver_library` | Trusted native shared library; relative paths resolve from the YAML directory. |
+| `driver_sha256_env` | Environment variable containing its exact SHA-256 digest. |
+| `account`, `schema`, `warehouse` | Explicit Snowflake connection coordinates. |
+| `emulator` | Optional numeric loopback HTTP endpoint for local tests only; omit for verified Snowflake HTTPS. |
+| `max_batch_bytes` | Post-allocation Arrow batch bound, default 8 MiB, maximum 64 MiB. |
+
+Each named login supplies `username`, `password_env`, and `role`. PostgreSQL
+host/port/TLS/compute settings cannot be mixed into a Snowflake target. Native
+connection capacity is bounded per binding by the smaller configured backend pool
+and total limit; acquisition uses `backend.acquire_timeout_ms`. It is not a shared
+cross-engine physical connection budget. Snowflake bindings have fresh connections,
+with a transaction retaining its connection until completion/abandonment.
+
+Snowflake accepts routed native and frontend-generated data queries after normal
+read-only validation. The adapter does not require a native remark or perform SQL
+translation. The configured input dialect still controls parsing before routing.
+
+Snowflake discovery requires `schema_discovery.catalog` with exact source schema
+spelling. Catalog refreshes use the same configured source identity and adapter
+capacity. An unavailable initial catalog prevents startup. Snowflake data results
+use the shared cache when enabled. Configuration without the compiled feature fails
+explicitly.
+
 ## Experimental Snowflake library host
 
 Build with `--features snowflake` and construct a `SnowflakeConfig` for each
 configured source identity. Register it with `Backends::with_snowflake`, then call
 `gateway::serve_backends` using the existing selection hook. The PostgreSQL
-registry supplies the designated discovery authority. Eligible data bindings must
+registry can supply the designated discovery authority, or construct
+`Backends::without_postgres()` and register Snowflake discovery. Eligible data bindings must
 expose the same logical schema. A binding fixes the role and warehouse; remarks
-only select SQL grammar. Snowflake results bypass the result cache.
+only select SQL grammar. Snowflake results use the same engine-owned cache as
+PostgreSQL results.
 
 The compiled [Snowflake host example](../examples/snowflake_gateway.rs) reads
 `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, and `PGDATABASE` for metadata,
@@ -488,7 +540,7 @@ the frontend, and `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`,
 `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_ROLE`, and
 `SNOWFLAKE_WAREHOUSE` for data execution. `YASP_SNOWFLAKE_DRIVER` names a trusted
 native library and `YASP_SNOWFLAKE_DRIVER_SHA256` must match its bytes.
-Use the patched artifact validated by the compatibility probes; a matching digest
+Use the patched artifact validated by the native functional tests; a matching digest
 identifies the library and does not establish compatibility for a replacement driver.
 
 ```sh
@@ -501,5 +553,5 @@ is reserved for explicit loopback HTTP fixtures. Capacity and acquisition timeou
 apply to each binding; worker ownership retains admission during cancellation and
 cleanup. Fresh connections isolate identities and transaction state. The Arrow
 batch check runs after allocation, so it does not hard cap native RSS.
-The [network runtime gate](../scripts/compatibility/README.md#native-runtime-gate)
-uses Fakesnow to test the actual connector path.
+The [normal functional runner](../tests/README.md) owns Fakesnow network fixtures
+and the accepted native-driver checks; `python3 scripts/test.py --full` includes them.

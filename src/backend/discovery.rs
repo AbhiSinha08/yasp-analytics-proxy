@@ -26,35 +26,52 @@ pub(crate) struct DiscoveryRequest<'a> {
 /// Engine identity comes from the configured backend, independently of client SQL.
 pub(crate) enum DiscoverySource<'a> {
     Postgres(&'a PostgresBackend),
+    #[cfg(feature = "snowflake")]
+    Snowflake(
+        &'a super::snowflake::SnowflakeBackend,
+        &'a crate::hooks::BackendSelection,
+    ),
 }
 
 impl<'a> DiscoverySource<'a> {
     pub(crate) fn catalog_identity(&self) -> crate::catalog::SourceIdentity {
         match self {
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(source, _) => source.catalog_identity(),
             Self::Postgres(source) => crate::catalog::SourceIdentity {
                 dialect: crate::query::SqlDialect::Postgresql,
                 endpoint: source.target().into(),
                 principal: source.database_user().into(),
                 role: None,
                 warehouse: None,
+                default_schema: None,
             },
         }
     }
     pub(crate) fn route(&self) -> Route<'a> {
         match self {
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(backend, selection) => Route::Snowflake(backend, selection),
             Self::Postgres(backend) => Route::Postgres(backend.route()),
         }
     }
 
     pub(crate) fn prepare(&self, query: &ParsedQuery) -> ExecutionResult<ParsedQuery> {
         match self {
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(_, _) => Err(ExecutionError::rejected(
+                "0A000",
+                "metadata query is outside the virtual catalog compatibility surface",
+            )),
             Self::Postgres(_) => postgres::prepare_discovery(query)
                 .map_err(|_| ExecutionError::rejected("54000", "metadata query exceeds its bound")),
         }
     }
-    /// The source handler supplies the PostgreSQL version advertised to clients.
+    /// PostgreSQL preserves its source version; foreign sources use the frontend profile.
     pub(crate) async fn server_version(&self) -> ExecutionResult<String> {
         match self {
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(_, _) => Ok("18.0".into()),
             Self::Postgres(backend) => backend.server_version().await.map_err(Into::into),
         }
     }
@@ -71,6 +88,11 @@ impl<'a> DiscoverySource<'a> {
         S: Sink<ResultEvent, Error = ExecutionError> + Unpin + Send,
     {
         match self {
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(_, _) => Err(ExecutionError::rejected(
+                "0A000",
+                "metadata query is outside the virtual catalog compatibility surface",
+            )),
             Self::Postgres(backend) => {
                 postgres::discover(backend, request, &mut postgres::Output(output), cancel)
                     .await

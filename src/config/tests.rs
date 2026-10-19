@@ -574,3 +574,48 @@ fn rejects_invalid_default_and_non_postgresql_target() {
         Err(ConfigError::UnsupportedTarget)
     ));
 }
+
+#[test]
+fn snowflake_yaml_requires_its_feature_catalog_and_engine_specific_identity() {
+    let mut config = make_config(
+        "custom.selector",
+        r#"  primary:
+    engine: snowflake
+    database: YASP_DEMO
+    snowflake:
+      driver_library: driver.so
+      driver_sha256_env: DRIVER_SHA
+      account: fakesnow
+      schema: PUBLIC
+      warehouse: LOCAL
+      emulator: 127.0.0.1:64616
+    logins:
+      reader:
+        username: fake
+        password_env: SNOW_PASSWORD
+        role: PUBLIC"#,
+        "  {}",
+    );
+    if !cfg!(feature = "snowflake") {
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::SnowflakeDisabled)
+        ));
+        return;
+    }
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidCatalog)
+    ));
+    config.schema_discovery.catalog = Some(SchemaCatalogSettings {
+        schemas: vec!["PUBLIC".into()],
+        ..Default::default()
+    });
+    config.validate().unwrap();
+    assert_eq!(config.discovery_backend().unwrap().backend_login, "reader");
+    config.targets.get_mut("primary").unwrap().host = "localhost".into();
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidSnowflake)
+    ));
+}

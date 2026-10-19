@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the pinned Apache Snowflake driver with bounded stream prefetch.
 
-This candidate build is separate from the gateway. It needs Linux x86-64, a C/C++
+This native build is separate from the gateway. It needs Linux x86-64, a C/C++
 compiler and patch. Go, upstream sources, dependencies and output stay under target.
 """
 
@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=ROOT / "target/compatibility/native-build")
     args = parser.parse_args()
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
-        raise RuntimeError("the pinned candidate build supports Linux x86-64, including WSL")
+        raise RuntimeError("the pinned native build supports Linux x86-64, including WSL")
     directory = args.output_dir.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     go_archive = directory / f"go{GO_VERSION}.linux-amd64.tar.gz"

@@ -31,11 +31,13 @@ pub(super) async fn serve_sessions(
         FrontendProfile::from_protocol(&config.settings.protocol).map_err(io::Error::other)?;
     if let Some(catalog) = &config.catalog {
         let snapshot = catalog.snapshot().map_err(io::Error::other)?;
-        if snapshot.source.dialect == crate::query::SqlDialect::Postgresql
+        if (snapshot.source.dialect == crate::query::SqlDialect::Postgresql
+            || execution.discovery().catalog_identity().dialect
+                == crate::query::SqlDialect::Snowflake)
             && snapshot.source != execution.discovery().catalog_identity()
         {
             return Err(io::Error::other(
-                "PostgreSQL catalog and discovery identities must match",
+                "catalog and discovery identities must match",
             ));
         }
     }

@@ -49,7 +49,7 @@ class ChunkFixture:
         for row in range(1, 17):
             key = uuid.uuid4().hex
             payload = ipc(row)
-            self.payloads[key] = payload
+            self.payloads[key] = (payload, self.mode == "cancel" or (self.mode == "dynamic" and "yasp-fetch-cancel" in sql))
             data["chunks"].append({"url": str(request.base_url).rstrip("/") + "/_yasp_probe/chunks/" + key,
                                    "rowCount": 1, "uncompressedSize": len(payload), "compressedSize": len(payload)})
         return JSONResponse(body)
@@ -59,14 +59,14 @@ class ChunkFixture:
         self.counts["chunk_requests"] += 1
         self.counts["chunk_active"] += 1
         try:
-            if self.mode == "cancel":
+            if self.payloads[request.path_params["key"]][1]:
                 deadline = time.monotonic() + 8
                 while time.monotonic() < deadline:
                     if await request.is_disconnected():
                         self.counts["chunk_cancelled"] += 1
                         return Response(status_code=499)
                     await asyncio.sleep(0.01)
-            return Response(self.payloads[request.path_params["key"]], media_type="application/octet-stream")
+            return Response(self.payloads[request.path_params["key"]][0], media_type="application/octet-stream")
         finally:
             self.counts["chunk_active"] -= 1
             self.counts["chunk_stopped"] += 1

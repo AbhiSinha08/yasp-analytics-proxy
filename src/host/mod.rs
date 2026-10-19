@@ -55,24 +55,58 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let discovery = host.file.discovery_backend()?;
             let discovery_compute = host.file.discovery_compute()?;
+            #[cfg(not(feature = "snowflake"))]
             let backends = Arc::new(PostgresBackends::with_bindings(
                 host.backends,
                 host.file.backend,
             )?);
+            #[cfg(feature = "snowflake")]
+            let backends = {
+                let mut backends = if host.backends.is_empty() {
+                    yasp::backend::Backends::without_postgres()
+                } else {
+                    yasp::backend::Backends::new(Arc::new(PostgresBackends::with_bindings(
+                        host.backends,
+                        host.file.backend,
+                    )?))
+                };
+                for (selection, settings) in host.snowflake {
+                    backends = backends.with_snowflake(
+                        selection,
+                        Arc::new(yasp::backend::snowflake::SnowflakeBackend::new(settings)?),
+                    )?;
+                }
+                Arc::new(backends)
+            };
             let catalog = match &host.file.schema_discovery.catalog {
                 Some(settings) => {
-                    let source = backends
-                        .get_discovery(&discovery, discovery_compute.as_deref())
-                        .ok_or_else(|| {
-                            io::Error::other("catalog discovery binding is unavailable")
-                        })?;
-                    Some(
-                        yasp::catalog::Catalog::postgres(
-                            Arc::new(source.clone()),
-                            settings.runtime()?,
+                    #[cfg(feature = "snowflake")]
+                    {
+                        Some(
+                            backends
+                                .catalog(
+                                    &discovery,
+                                    discovery_compute.as_deref(),
+                                    settings.runtime()?,
+                                )
+                                .await?,
                         )
-                        .await?,
-                    )
+                    }
+                    #[cfg(not(feature = "snowflake"))]
+                    {
+                        let source = backends
+                            .get_discovery(&discovery, discovery_compute.as_deref())
+                            .ok_or_else(|| {
+                                io::Error::other("catalog discovery binding is unavailable")
+                            })?;
+                        Some(
+                            yasp::catalog::Catalog::postgres(
+                                Arc::new(source.clone()),
+                                settings.runtime()?,
+                            )
+                            .await?,
+                        )
+                    }
                 }
                 None => None,
             };
@@ -83,7 +117,7 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             let serving = async {
                 let listener = TcpListener::bind(gateway.settings().listen).await?;
                 tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
-                gateway::serve_routed(listener, gateway, backends, selector, async {
+                let shutdown = async {
                     #[cfg(unix)]
                     {
                         let mut terminate = tokio::signal::unix::signal(
@@ -97,8 +131,15 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     #[cfg(not(unix))]
                     let _ = tokio::signal::ctrl_c().await;
-                })
-                .await
+                };
+                #[cfg(feature = "snowflake")]
+                {
+                    gateway::serve_backends(listener, gateway, backends, selector, shutdown).await
+                }
+                #[cfg(not(feature = "snowflake"))]
+                {
+                    gateway::serve_routed(listener, gateway, backends, selector, shutdown).await
+                }
             }
             .await;
             if let Some(catalog) = catalog {

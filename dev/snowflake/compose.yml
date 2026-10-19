@@ -1,0 +1,20 @@
+services:
+  snowflake:
+    build:
+      context: ../..
+      dockerfile: dev/snowflake/Dockerfile
+      target: server
+    image: yasp-fakesnow:0.11.22
+    ports:
+      - "127.0.0.1:64616:64616"
+    volumes:
+      - snowflake-data:/data
+    healthcheck:
+      test: ["CMD", "python", "sql.py", "--health"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    stop_grace_period: 15s
+volumes:
+  snowflake-data:

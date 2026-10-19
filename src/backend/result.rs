@@ -1,7 +1,7 @@
-//! Typed execution failures and adapter-owned response values. PostgreSQL payloads
-//! stay opaque here so their text values and error fields survive unchanged.
+//! Typed execution failures and source result events. Pre-encoded frontend
+//! responses remain opaque so native metadata and text values survive unchanged.
 
-use super::postgres::{NativeError, NativeResponse};
+use super::postgres::NativeError;
 use std::io;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,7 +33,7 @@ impl ExecutionError {
 pub(crate) type ExecutionResult<T> = Result<T, ExecutionError>;
 
 pub(crate) enum ResultEvent {
-    Postgres(NativeResponse),
+    Wire(crate::wire::Response),
     Parameter { name: String, value: String },
     Columns(Vec<ResultColumn>),
     Row(Vec<Option<bytes::Bytes>>),
@@ -51,6 +51,7 @@ pub(crate) enum ColumnType {
     Int16,
     Int32,
     Int64,
+    Int16Array,
     Float64,
     Decimal { precision: u8, scale: i8 },
     Text,

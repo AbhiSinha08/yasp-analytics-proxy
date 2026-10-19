@@ -1,4 +1,4 @@
-//! Input grammar hints never authorize discovery or change source-engine affinity.
+//! Input grammar hints never authorize discovery or change PostgreSQL input validation.
 mod support;
 
 use std::{

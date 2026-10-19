@@ -1,0 +1,62 @@
+# Start dev/snowflake/compose.yml, build the native driver, then export its SHA-256.
+# Gateway credentials and local TLS certificates use the normal host setup.
+version: 1
+gateway:
+  protocol: redshift # postgresql uses the same Snowflake target.
+  listen: "127.0.0.1:6433"
+  query_timeout_ms: 60000
+  tls:
+    mode: enable
+    cert_file: local-tls/server.crt
+    key_file: local-tls/server.key
+backend:
+  max_connections_per_pool: 4
+  max_connections_total: 4
+  acquire_timeout_ms: 10000
+targets:
+  snowflake:
+    engine: snowflake
+    database: YASP_DEMO
+    snowflake:
+      driver_library: ../target/compatibility/native-build/libadbc_driver_snowflake.so
+      driver_sha256_env: YASP_SNOWFLAKE_DRIVER_SHA256
+      account: fakesnow
+      schema: PUBLIC
+      warehouse: LOCAL
+      emulator: "127.0.0.1:64616" # HTTP is restricted to numeric loopback endpoints.
+      max_batch_bytes: 8388608
+    logins:
+      reader:
+        username: fake
+        password_env: YASP_SNOWFLAKE_PASSWORD
+        role: PUBLIC
+schema_discovery:
+  target: snowflake
+  backend_login: reader
+  catalog:
+    schemas: [PUBLIC, ANALYTICS]
+    refresh_interval_seconds: 30
+    refresh_timeout_ms: 10000
+    max_age_seconds: 120
+    max_rows: 10000
+    max_bytes: 16777216
+hooks:
+  input_options:
+    type: rust
+    callback: builtin.input_options.metabase
+    params:
+      native_dialect: snowflake
+      unmarked_data_dialect: snowflake
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
+      target: snowflake
+      backend_login: reader
+cache:
+  enabled: true
+  url_env: YASP_REDIS_URL
+  ttl_seconds: 60
+  namespace: "yasp:cache"
+  max_rows_per_query: 10000
+  max_buffered_bytes_total: 33554432

@@ -1,0 +1,6 @@
+FROM apache/superset:latest-py312@sha256:477b16cf3c28bf573e6686605564bf1c680b5febac50c036d49566f5e59c4ca9
+USER root
+RUN uv pip install --python /app/.venv/bin/python --no-cache \
+    SQLAlchemy==1.4.54 psycopg2-binary==2.9.13 sqlalchemy-redshift==0.8.14
+COPY superset_config.py /app/superset_config.py
+USER superset

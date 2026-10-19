@@ -1,0 +1,78 @@
+name: yasp-bi
+
+x-host: &host
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - type: bind
+      source: ${YASP_CA_FILE:-../../config/local-tls/ca.crt}
+      target: /tmp/yasp-ca.crt
+      read_only: true
+      bind:
+        create_host_path: false
+
+x-redash: &redash
+  <<: *host
+  image: yasp-redash-dev:26.9.0
+  restart: unless-stopped
+  environment: &redash-env
+    REDASH_DATABASE_URL: ${REDASH_DATABASE_URL:-postgresql://local:password@host.docker.internal:5432/redash}
+    REDASH_REDIS_URL: ${REDASH_REDIS_URL:-redis://host.docker.internal:6379/0}
+    REDASH_SECRET_KEY: ${REDASH_SECRET_KEY:?Run python3 dev/bi/configure.py first}
+    REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:?Run python3 dev/bi/configure.py first}
+
+services:
+  metabase:
+    <<: *host
+    image: metabase/metabase:v0.64.x@sha256:3b968d64944840ec0ed452a94fb58301a0a8d8e4fe6d632a5956014a91a2b635
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: host.docker.internal
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: local
+      MB_DB_PASS: ${METABASE_DB_PASSWORD:-password}
+      MB_PASSWORD_COMPLEXITY: weak
+
+  superset:
+    <<: *host
+    image: yasp-superset-dev:6.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile.superset
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8088"
+    environment:
+      SUPERSET_CONFIG_PATH: /app/superset_config.py
+      SUPERSET_METADATA_DATABASE_URI: ${SUPERSET_METADATA_DATABASE_URI:-postgresql+psycopg2://local:password@host.docker.internal:5432/superset}
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Run python3 dev/bi/configure.py first}
+    command: ["/app/docker/entrypoints/run-server.sh"]
+
+  redash-server:
+    <<: *redash
+    build:
+      context: .
+      dockerfile: Dockerfile.redash
+    command: ["server"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      <<: *redash-env
+      REDASH_HOST: http://localhost:5000
+      REDASH_WEB_WORKERS: "1"
+
+  redash-worker:
+    <<: *redash
+    command: ["worker"]
+    environment:
+      <<: *redash-env
+      WORKERS_COUNT: "2"
+      QUEUES: queries,scheduled_queries,schemas,periodic,emails,default
+
+  redash-scheduler:
+    <<: *redash
+    command: ["scheduler"]

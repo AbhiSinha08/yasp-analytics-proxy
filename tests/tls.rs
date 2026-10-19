@@ -547,6 +547,52 @@ async fn certificate_validation_and_channel_binding() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_rejections_reach_tls_clients_before_disconnect() {
+    let env = support::TestEnvironment::load();
+    let identity = env.gateway();
+    for profile in ["postgresql", "redshift"] {
+        let backend = Arc::new(PostgresBackend::new(backend(&env, outbound())).unwrap());
+        let config = GatewaySettings {
+            protocol: profile.into(),
+            max_sessions: 8,
+            startup_timeout_ms: 5_000,
+            ..settings("server")
+        };
+        let server = support::GatewayServer::fixed(
+            identity.gateway_config().with_settings(config).unwrap(),
+            backend,
+        );
+        for (field, message) in [
+            ("database", "unknown gateway database"),
+            ("user", "authentication failed"),
+            ("password", "authentication failed"),
+            ("application_name", "unsupported startup setting"),
+        ] {
+            let mut client = identity.connection(server.address);
+            match field {
+                "database" => client.identity.database = "unknown_database".into(),
+                "user" => client.identity.user = "unknown_user".into(),
+                "password" => client.identity.password = "wrong_password".into(),
+                _ => {}
+            }
+            let mut command = client.command();
+            command
+                .env("PGSSLMODE", "verify-full")
+                .env("PGSSLROOTCERT", file("ca.crt"))
+                .env("PGCHANNELBINDING", "prefer");
+            if field == "application_name" {
+                command.env("PGAPPNAME", "x".repeat(64));
+            }
+            let output = command.args(["-c", "SELECT 1"]).output().unwrap();
+            assert!(!output.status.success());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains(message), "{profile} {field}: {error}");
+        }
+        server.stop();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_tls_refusal_and_invalid_certificates_never_send_credentials() {
     use pgwire::tokio::TlsAcceptor;
     use rustls::pki_types::PrivateKeyDer;

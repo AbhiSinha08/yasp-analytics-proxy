@@ -2,8 +2,8 @@
 
 YASP accepts PostgreSQL clients over independently configured TLS or plaintext connections
 and offers an experimental Redshift password profile over TLS. Both execute supported read-only
-simple queries against configured PostgreSQL target/login pairs. PostgreSQL roles
-enforce source access. Application-specific identity mapping and policy belong to
+simple queries against configured PostgreSQL or optional Snowflake bindings.
+Source roles enforce access. Application-specific identity mapping and policy belong to
 the consuming host. See the [plan](PLAN.md) for the multi-engine product direction.
 
 ## Component ownership
@@ -19,10 +19,10 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                           |
 | Shared schema catalog          | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work. |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; metadata dispatch in `backend/discovery`.                                                                                            |
-| PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and cached PostgreSQL response validation.                                       |
+| PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                       |
 | Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional native ADBC connector, typed identities, blocking workers, cancellation, Arrow-to-text conversion, transaction ownership, and normalized schema provider. Mixed bindings use `backend::Backends`. |
-| Shared cache                    | [cache.rs](../src/cache.rs)                                                                      | Bounded opaque Redis storage, expiry, connection reuse, eligibility invocation, and miss-on-error behavior.                                                        |
-| Support                         | [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                               | Frame bounds before payload allocation and shared redacted logging setup. `policy.rs` is a future component placeholder.                                           |
+| Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                                      | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                                        |
+| Support                         | [wire.rs](../src/wire.rs), [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                               | Shared pgwire value encoding, frame bounds before payload allocation and redacted logging setup. `policy.rs` is a future component placeholder.                                           |
 
 ```mermaid
 flowchart LR
@@ -33,6 +33,7 @@ flowchart LR
     Host -->|Optional discovery catalog configuration| Catalog[Periodically refreshed schema catalog]
     Catalog -->|Captured frontend metadata| Gateway
     Catalog -->|Source identity and shared admission| Adapter
+    Catalog -->|Source identity and shared admission| Snowflake
     Client[BI client or psql] -->|Configured TLS or plaintext| Gateway
     Gateway --> SQL[Bounded dialect-aware parsing]
     SQL --> Core[Shared query and transaction policy]
@@ -44,9 +45,10 @@ flowchart LR
     Snowflake --> Events
     Snowflake --> Warehouse[(Snowflake)]
     Adapter --> Events[Typed events with adapter-owned values]
-    Events --> Encode[Frontend response encoding]
+    Core --> Cache[Shared cache policy and response capture]
+    Events --> Cache
+    Cache --> Encode[Shared frontend response encoding]
     Encode --> Gateway
-    Adapter --> Cache[Opaque cache storage]
     Datasets -->|Verified TLS or plaintext| Redis[(Redis)]
     Adapter -->|Verified TLS or plaintext| PG[(PostgreSQL)]
     Cache -->|Verified TLS or plaintext| Redis
@@ -59,10 +61,10 @@ source SQL, or native connection objects. The frontend owns authenticated passwo
 and TLS material and passes only identity and bounded services into execution.
 
 The PostgreSQL adapter owns native value/error representations, pool admission,
-read-only transaction setup, cache replay/capture, and source cleanup. Its response
-and error values pass through the shared layer opaquely and are unwrapped only by
-the pgwire encoder; no JSON conversion, extra response buffer, row copy, or worker
-channel is introduced. Existing public PostgreSQL library entry points retain their
+read-only transaction setup and source cleanup. Its response/error values pass
+through the shared layer opaquely, retaining native field metadata and text without
+JSON conversion. Shared frontend encoding also handles converted source events; the
+engine captures that response only when caching is enabled and budget is available. Existing public PostgreSQL library entry points retain their
 wire-oriented signatures. Adding another source extends the concrete dispatcher and
 provides its own result/session implementation after its connector gates pass.
 
@@ -77,7 +79,10 @@ flowchart TD
     CatalogState -->|yes| CatalogResponse[Pin generation and render frontend metadata]
     CatalogResponse --> Ready
     CatalogState -->|no| Aborted
-    CatalogMatch -->|no| Parse[Dialect-aware tokenize and parse]
+    CatalogMatch -->|no| Fallback{Configured native default for unmarked data?}
+    Fallback -->|yes| Compatibility[Keep recognized frontend setup and metadata; select native grammar for data]
+    Fallback -->|no| Parse[Dialect-aware tokenize and parse]
+    Compatibility --> Parse
     Parse --> Control{Transaction control?}
     Control -->|yes| TxControl[Begin pending transaction or finish pinned work]
     Control -->|no| Usable{Transaction usable?}
@@ -92,17 +97,17 @@ flowchart TD
     Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
     DatasetRead --> Context[Derive optional bounded context]
     Context --> Route[Resolve target, login, and optional compute type]
-    Route --> Affinity[Validate native source-engine affinity]
+    Route --> Affinity[Validate selected adapter input]
     Affinity --> Explicit{Explicit transaction?}
     Explicit -->|yes| Pin[Validate affinity and pin first backend]
-    Explicit -->|no| Eligible{PostgreSQL profile/dialect and cache eligible?}
+    Explicit -->|no| Eligible{Shared cache enabled and query eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
-    Lookup -->|hit| Replay[Replay PostgreSQL response]
+    Lookup -->|hit| Replay[Replay validated frontend response]
     Lookup -->|miss or no budget| Allocate[Acquire source capacity]
     Eligible -->|no| Allocate
     Allocate --> Engine{Selected engine}
     Engine -->|PostgreSQL| Execute[Acquire backend lease and execute]
-    Engine -->|Snowflake| Native[Open owned worker and execute native SQL]
+    Engine -->|Snowflake| Native[Open owned worker and execute unchanged data SQL]
     Native --> NativeRows[Convert bounded columns and rows]
     NativeRows --> NativeCleanup[Close source session and check cleanup]
     NativeCleanup --> Complete
@@ -131,11 +136,10 @@ flowchart TD
 
 `ParsedQuery` keeps original SQL, typed input options, and an immutable statement
 tree. A host resolver may select a native grammar before tokenization and parsing;
-unknown/missing Metabase remarks retain the listener's grammar. Native SQL always
+unknown/missing Metabase remarks retain the listener's grammar unless an explicit native-data default is configured. Native SQL always
 uses ordinary context and routing and never borrows discovery access. PostgreSQL
 source affinity is enforced before cache or pool acquisition. Frontend fingerprints
-for the Redshift profile describe its compatibility version. PostgreSQL's existing
-source-backed version behavior is preserved. Supported reads
+describe the configured frontend. PostgreSQL discovery preserves its source version; Snowflake discovery advertises PostgreSQL 18.0 or Redshift 8.0.2. Supported reads
 include SELECT, read-only WITH/subqueries/joins/aggregates/unions, catalog queries,
 and supported SHOW requests. Application query rewrites are not implemented; the
 metadata adapter does rewrite catalog SQL. Parsing has a default
@@ -191,11 +195,11 @@ Redis query queuing is future work. Cache replay acquires no compute lease.
 
 The optional [shared catalog](catalog.md) imports bounded PostgreSQL or Snowflake
 schema definitions and periodically publishes immutable generations. Exact captured
-JDBC schema/table/column requests and Metabase's custom Redshift table/field scans
+JDBC schema/table/column/key requests and the captured BI definition-discovery scans
 use frontend-specific snapshot responses before general parsing. The PostgreSQL
 provider includes declared primary-key membership for the field scans. The YAML
 host attaches a catalog when `schema_discovery.catalog` defines an explicit schema
-scope, using the discovery binding's pool and identity.
+scope, using the discovery binding's adapter capacity and identity.
 Native SQL skips this path. Responses pin a generation and use no
 backend transaction, context hook, selector or result cache. Unknown warehouse
 metadata requests fail explicitly. The schema model also exposes qualified column
@@ -216,7 +220,8 @@ bounded literal schema/table predicates; the PostgreSQL adapter produces native
 catalog SQL and preserves source types, definitions and declared keys. Physical
 Redshift storage properties remain NULL. This path uses discovery-source
 permissions independently of snapshot schema scope. A Snowflake catalog rejects
-this PostgreSQL fallback explicitly. Client fixtures are in
+this PostgreSQL fallback explicitly and serves supported reflection from normalized
+facts, virtual identifiers, view definitions and declared keys. Client fixtures are in
 [`superset_redshift.json`](../tests/fixtures/superset_redshift.json).
 The PostgreSQL handler qualifies native names, limits database listings to the
 source database, and applies discovery session state inside the existing read-only
@@ -306,21 +311,26 @@ acceptance gates are in [multi-engine compatibility](multi-engine.md).
 
 PostgreSQL column metadata and text rows stream without conversion through JSON or
 a Rust numeric model. NULLs, type identifiers, and text values retain their native
-representation. The adapter validates text row framing and owns response capture,
-cache scope, validation, and replay in `backend/postgres/cache.rs`.
+representation. The adapter validates text row framing. `wire.rs` encodes both
+frontend profiles; `cache/execution.rs` owns cache policy/scope and
+`cache/response.rs` captures, validates and replays the complete frontend response
+for every backend. Adapters supply source identity and verified completion, with
+no per-backend cache switch.
 
 Shared Redis code stores a versioned opaque payload under a namespace and normalized
 SQL SHA-256 identifier together with configured target/login names. Separate named
 pairs retain separate entries. Scope also validates frontend identity/database,
-compute instance, backend endpoint/database/user, fixed text settings, effective
-search path and application name, query/write timers, and codec version.
+frontend profile and input dialect/mode, compute instance, backend
+endpoint/database/principal, Snowflake role/warehouse/schema, fixed text settings,
+effective search path/application name, query/write timers, frame bound and
+codec/execution revision. Overflow fills record the actual physical source.
 Different physical scopes within a named pair can
 replace its SQL slot; validation prevents cross-scope replay. Derived context does
 not partition cache entries.
 
 Only complete successful results within row and byte limits are stored. Oversized
 results continue streaming. Redis errors, deadlines, malformed entries, and scope
-mismatches become misses. Hits do not contact PostgreSQL, so grants and row-level
+mismatches become misses. Hits do not contact the backend, so grants and row-level
 security are not rechecked until expiry. Buffer accounting and cache settings are in
 [configuration](configuration.md#redis-result-cache). Future policy and masking must
 process both hits and misses before client output.

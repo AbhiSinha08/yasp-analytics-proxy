@@ -2,13 +2,13 @@
 //! Source connections remain owned by backend adapters.
 
 use super::result::{ExecutionError, ExecutionResult, ResultEvent};
+use crate::config::GatewaySettings;
 use crate::discovery::SessionSettings;
 use crate::query::ParsedQuery;
 use crate::{
     backend::{PostgresBackend, PostgresBackends, discovery::DiscoverySource, postgres},
     hooks::{RoutedSelector, SelectionError, SelectionRequest},
 };
-use crate::{cache::RedisCache, config::GatewaySettings};
 use futures::{Sink, channel::oneshot};
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,10 +48,11 @@ impl Execution {
                 discovery,
                 discovery_compute,
                 ..
-            } => backends
-                .postgres
-                .get_discovery(discovery, discovery_compute.as_deref())
-                .expect("validated discovery binding"),
+            } => {
+                return backends
+                    .discovery(discovery, discovery_compute.as_deref())
+                    .expect("validated discovery binding");
+            }
         };
         backend.discovery()
     }
@@ -140,12 +141,11 @@ impl Execution {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct ExecutionRequest<'a, 'query> {
     pub selection: &'a SelectionRequest<'query>,
-    pub frontend_database: &'a str,
     pub settings: &'a GatewaySettings,
     pub session: &'a SessionSettings,
-    pub cache: Option<&'a RedisCache>,
 }
 
 #[derive(Clone, Copy)]
@@ -239,47 +239,47 @@ impl<'a> Route<'a> {
         }
     }
 
+    pub(crate) fn selection(&self) -> &crate::hooks::BackendSelection {
+        match self {
+            Self::Postgres(route) => route.selection(),
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(_, selected) => selected,
+        }
+    }
+
+    pub(crate) fn identity(&self) -> [u8; 32] {
+        match self {
+            Self::Postgres(route) => route.preferred().execution_identity(),
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(backend, _) => backend.execution_identity(),
+        }
+    }
+
+    pub(crate) fn validate_session(&self, session: &SessionSettings) -> ExecutionResult<()> {
+        match self {
+            Self::Postgres(_) => {
+                let _ = session;
+                Ok(())
+            }
+            #[cfg(feature = "snowflake")]
+            Self::Snowflake(_, _) => super::snowflake::validate_session(session),
+        }
+    }
+
+    /// Return the actual source identity only after a complete response and
+    /// verified cleanup. A successful but interrupted source is not reusable.
     pub(crate) async fn execute<S>(
         &self,
         request: ExecutionRequest<'_, '_>,
         output: &mut S,
         cancel: oneshot::Receiver<()>,
-    ) -> ExecutionResult<()>
+    ) -> ExecutionResult<Option<[u8; 32]>>
     where
         S: Sink<ResultEvent, Error = ExecutionError> + Unpin + Send,
     {
         match self {
             #[cfg(feature = "snowflake")]
-            Self::Snowflake(backend, _) => {
-                backend.validate_input(request.selection.query)?;
-                backend.log_query(request.selection.query, request.selection.client_id);
-                let mut cancel = cancel;
-                let mut session = tokio::select! {
-                    biased;
-                    _ = &mut cancel => return Err(ExecutionError::cancelled()),
-                    session = backend.open(request.settings, false) => session?,
-                };
-                let completion = session
-                    .execute(
-                        request.selection.query,
-                        output,
-                        request.settings,
-                        request.session,
-                        cancel,
-                    )
-                    .await?;
-                session.finish(false).await?;
-                use futures::SinkExt;
-                tokio::time::timeout(request.settings.write_timeout(), output.send(completion))
-                    .await
-                    .map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "frontend write timed out",
-                        )
-                    })??;
-                Ok(())
-            }
+            Self::Snowflake(backend, _) => backend.execute_query(request, output, cancel).await,
             Self::Postgres(route) => route
                 .execute_query(request, &mut postgres::Output(output), cancel)
                 .await
@@ -350,4 +350,16 @@ impl PinnedSession<'_> {
             }
         }
     }
+}
+
+/// Fingerprint the effective source and its fixed execution settings without
+/// retaining credentials in cache metadata.
+pub(crate) fn identity(values: &[&str]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    for value in values {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    hash.finalize().into()
 }

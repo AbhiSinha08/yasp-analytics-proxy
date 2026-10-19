@@ -12,6 +12,25 @@ pub struct RelationId {
     pub schema: String,
     pub name: String,
 }
+impl RelationId {
+    pub(crate) fn frontend_oid(&self) -> u32 {
+        frontend_oid(&self.database, &self.schema, &self.name)
+    }
+    pub(crate) fn frontend_schema_oid(&self) -> u32 {
+        frontend_oid(&self.database, &self.schema, "")
+    }
+}
+fn frontend_oid(database: &str, schema: &str, name: &str) -> u32 {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    for part in [database, schema, name] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part.as_bytes());
+    }
+    let digest = hash.finalize();
+    (u32::from_be_bytes(digest[..4].try_into().expect("four hash bytes")) & 0x3fff_ffff)
+        | 0x4000_0000
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ColumnId {
@@ -61,8 +80,35 @@ pub struct Relation {
     pub native_id: Option<String>,
     /// Whole-relation SELECT privilege for the discovery identity; None if unknown.
     pub selectable: Option<bool>,
+    pub view_definition: Option<String>,
+    /// Declared keys, not a statement that the source enforces them. None means unknown.
+    pub constraints: Option<Vec<Constraint>>,
     /// Ordered by source ordinal, including gaps left by dropped columns.
     pub columns: Vec<Column>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConstraintKind {
+    PrimaryKey,
+    Unique,
+    ForeignKey,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForeignKey {
+    pub relation: RelationId,
+    pub columns: Vec<String>,
+    pub constraint_name: Option<String>,
+    pub update_rule: String,
+    pub delete_rule: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Constraint {
+    pub name: String,
+    pub kind: ConstraintKind,
+    pub columns: Vec<String>,
+    pub references: Option<ForeignKey>,
 }
 
 #[derive(Debug)]

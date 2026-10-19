@@ -14,8 +14,10 @@ Hosts can also construct a shared [schema catalog](catalog.md), attach it with
 Catalog source identity and refresh settings belong to the host; core owns bounded
 loading, atomic publication, expiry and frontend response handling. Schema coordinates
 are facts, not an authorization or masking decision.
-The repository host attaches the PostgreSQL provider through
-`schema_discovery.catalog`, sharing its configured discovery identity and pool.
+The repository host attaches the PostgreSQL or Snowflake provider through
+`schema_discovery.catalog`, sharing its configured discovery identity and adapter
+capacity. Mixed or Snowflake-only hosts register bindings in `backend::Backends`
+and use `gateway::serve_backends`.
 
 For encrypted deployments, see [TLS setup](tls.md#library-applications) and the
 [standalone library example](../examples/tls_gateway.rs). The application owns
@@ -30,7 +32,7 @@ and Python examples are under [hooks/examples](../hooks/examples).
 
 | Stage             | Binding and data                                                                                                                              | Result/failure policy                                                                                                                                                                           |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Input options | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect. | Typed input grammar and native affinity. No credentials, routing decisions, or discovery privileges. |
+| Input options | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect. | Typed input grammar and native-query classification. No credentials, routing decisions, or discovery privileges. |
 | Context           | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query.                   | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query.                                                                                      |
 | Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
 | Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
@@ -60,12 +62,17 @@ See [binding examples](../hooks/README.md).
 
 Input options run before tokenization and parsing. The callback must be cheap and
 nonblocking. Repository hosts can bind `hooks::builtin::input_options::metabase`
-with their logical database's native dialect; other consumers can supply their
+with their logical database's native dialect, or `metabase_with_default` with an
+optional unmarked-data dialect. `InputOptions::native_after_compatibility` preserves
+frontend setup/catalog handling before using the configured native grammar for data.
+Explicit MBQL stays in the frontend grammar. Other consumers can supply their
 own closure without interpreting BI comments in the core engine. Original SQL,
 immutable AST, and `ParsedQuery::input_options()` reach context and selection.
-Native source affinity is checked after ordinary routing and before pool
-acquisition or cache lookup. New frontend/dialect combinations bypass the
-PostgreSQL result cache.
+Adapter input validation runs after ordinary routing and before pool acquisition
+or cache lookup. PostgreSQL enforces explicit native source affinity; Snowflake
+forwards read-only data SQL without a dialect gate or translation. All backends and
+frontend/dialect combinations use the shared cache path when enabled; adapter
+validation still runs before a hit can replay.
 
 
 ## Owning shared datasets
@@ -190,7 +197,7 @@ to that future contract. See [Phase 2](PLAN.md#phase-2--additional-engines-dynam
 
 | Capability                                | Local ownership and required proof                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Another backend                           | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and cache encoding/scope before declaring support. |
+| Another backend                           | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and source-identity cache isolation before declaring support. Shared execution supplies cache policy and response encoding; adapters do not opt into caching. |
 | Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders.             |
 | RBAC and identity mapping                 | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output.                                                                                                                    |
 | Query/result/lifecycle hooks              | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry.                                                                                                                                    |

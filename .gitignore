@@ -1,11 +1,11 @@
 /target/
 /scripts/compatibility/target/
+/tests/diagnostics/snowflake/target/
 /.venv/
 __pycache__/
 *.py[cod]
 .env
 .env.*
 !.env.example
-/config/local.yml
 /config/local-tls/
 /logs/

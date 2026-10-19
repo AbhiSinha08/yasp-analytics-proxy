@@ -1,66 +1,54 @@
 # Shared schema catalog
 
-The library stores source schema definitions in memory and refreshes them
-periodically. PostgreSQL and optional Snowflake providers use their real backend
-adapters, configured source identities, admission limits and cleanup. They read
-only metadata. There is no additional database service or disk snapshot.
+YASP stores source definitions in bounded memory and refreshes immutable generations
+periodically. Providers read metadata through the real backend adapters, using the
+configured discovery identity, admission limits, deadlines and cleanup. Catalogs
+contain no application rows and require no additional database service or disk snapshot.
 
-Hosts construct `catalog::Catalog::postgres` or, with the `snowflake` feature,
-`catalog::Catalog::snowflake`, then attach the returned `Arc<Catalog>` using
-`GatewayConfig::with_catalog`. One handle can be shared by frontend listeners and
-later AST consumers. The repository YAML host can attach a PostgreSQL catalog from
-its configured discovery binding.
-Existing PostgreSQL forwarding remains the default without a catalog.
-Current gateway entry points still require a PostgreSQL discovery binding for
-startup and legacy services, including when a Snowflake catalog is attached.
+Construct `Catalog::postgres` or feature-gated `Catalog::snowflake`, then attach its
+`Arc` with `GatewayConfig::with_catalog`. The YAML host constructs either provider
+from `schema_discovery`; a Snowflake-only host needs no PostgreSQL discovery binding.
+`Backends::catalog` exposes the same configured-source construction to library hosts.
+One handle can serve both frontend listeners and later AST consumers.
 
-```rust,no_run
-use std::sync::Arc;
-use yasp::{backend::PostgresBackend, catalog::{Catalog, CatalogSettings}, config::GatewayConfig};
+## Scope and source facts
 
-async fn attach(config: GatewayConfig, source: Arc<PostgresBackend>) -> Result<(GatewayConfig, Arc<Catalog>), yasp::catalog::CatalogError> {
-    let settings = CatalogSettings::new(vec!["public".into()]);
-    let catalog = Catalog::postgres(source, settings).await?;
-    Ok((config.with_catalog(catalog.clone()), catalog))
-}
-```
+Each catalog has an explicit schema list preserving source spelling and one source
+identity. PostgreSQL identifies endpoint/database and principal. Snowflake identifies
+account or emulator endpoint/database, principal, role, warehouse and default schema.
+Catalog identities are not implicitly shared across roles or warehouses. PostgreSQL
+catalogs must match PostgreSQL discovery; a Snowflake discovery binding must match
+its catalog before the listener starts.
 
-## Scope and stored facts
+Both providers import schemas, relations, kinds, comments, columns, ordinals,
+nullability, defaults, and native type details including available length/precision/
+scale. PostgreSQL reports native OIDs/modifiers, declared primary-key membership,
+and whole-relation SELECT privilege. Its source grants also filter schemas/columns.
 
-Each catalog belongs to one source identity and an explicit list of schemas with
-their exact source spelling. PostgreSQL records endpoint/database and principal;
-Snowflake records account or emulator endpoint, principal, role and warehouse.
-Handles are not shared across these identities implicitly. A PostgreSQL catalog
-must match the listener's configured discovery identity before startup succeeds.
-Source grants remain authoritative; PostgreSQL column grants filter the imported
-columns, and Snowflake uses its role-visible information-schema views.
+Snowflake additionally imports view definitions and declared primary, unique and
+foreign keys, with ordered local/referenced columns and referential actions. These
+are declarations, not enforcement guarantees. Snowflake datetime precision and
+generated-column status remain unknown; its information-schema datetime precision
+is not applicable. Whole-table SELECT privilege is unknown for a real Snowflake
+source: role-visible metadata alone is insufficient. The explicit local emulator
+has unrestricted visibility and SELECT access; those facts do not establish real
+Snowflake grants. Physical PostgreSQL indexes, owners, ACLs, distribution, encoding,
+sort properties and row statistics are not fabricated.
 
-A snapshot records database/schema names, relations, relation kind, comments,
-columns, ordinals, nullability, defaults and native type details including available
-length/precision/scale. PostgreSQL also reports native OIDs and type modifiers.
-Snowflake datetime precision and generated-column status are unknown in this
-provider; its documented [`DATETIME_PRECISION`](https://docs.snowflake.com/en/sql-reference/info-schema/columns)
-field is not applicable. PostgreSQL reports declared primary-key membership per
-column and the discovery identity's whole-relation SELECT privilege; Snowflake
-leaves these properties unknown. Full constraints, view definitions, physical indexes, statistics and general privilege listings
-are not part of the normalized model yet. No missing property is synthesized as
-an enforcement guarantee.
-
-`RelationId` is the exact `(database, schema, relation)` coordinate. `ColumnId`
-contains that coordinate and the exact column name. Refreshes preserve coordinates
-for unchanged names; these are not durable IDs across drops/recreates or renames.
-Retain source identity and snapshot generation alongside any bound column reference.
+`RelationId` is the exact `(database, schema, relation)` coordinate. `ColumnId` adds
+the column name. Virtual frontend schema/relation OIDs derive from these coordinates;
+collisions reject the candidate generation. They remain stable for unchanged names,
+but are not durable identities across drops/recreates. Retain source identity and
+generation with a future bound column reference.
 
 ## Refresh and failure behavior
 
-### YAML host
-
 ```yaml
 schema_discovery:
-  target: primary
+  target: snowflake
   backend_login: reader
   catalog:
-    schemas: [public]
+    schemas: [PUBLIC, ANALYTICS]
     refresh_interval_seconds: 60
     refresh_timeout_ms: 10000
     max_age_seconds: 300
@@ -68,111 +56,72 @@ schema_discovery:
     max_bytes: 16777216
 ```
 
-Omitting `catalog` disables snapshots. When enabled, `schemas` is required and the
-remaining fields use the defaults shown. The source is the existing discovery
-binding, including `schema_discovery.compute` when configured. Its pool and
-admission budgets are shared with live discovery. Invalid settings or an initial
-load failure prevent startup; listener shutdown joins the refresh task.
-This host currently configures PostgreSQL providers only. The typed library API
-also accepts the optional Snowflake provider.
+`schemas` is required when enabling a catalog. Other fields above are defaults.
+Omitting `catalog` retains live PostgreSQL discovery; Snowflake discovery requires
+one. Scope is exact and bounded to 256 schema names, not an application access policy.
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `schemas` | Required | Exact schema names, at most 256; not an access policy. |
-| `refresh_interval` | 60 seconds | One periodic worker per catalog, with missed ticks skipped. |
-| `refresh_timeout` | 10 seconds | Includes source acquisition, fetch, conversion and publication. |
-| `max_age` | 300 seconds | Reads fail after the last successful generation exceeds this age. |
-| `max_rows` | 100,000 | Maximum metadata rows in the candidate load. |
-| `max_bytes` | 16 MiB | Bounds intermediate row payloads and snapshot-owned strings separately. |
+Initial loading must succeed before accepting clients. PostgreSQL uses one bounded
+metadata statement. Snowflake reads definitions and scoped SHOW KEYS through one
+native session. Row/byte bounds cover the combined candidate. Only a complete,
+validated result becomes a generation; this does not promise stronger DDL consistency
+than the source supplies. No partially loaded candidate is published.
 
-Initial loading must succeed. Providers issue one bounded statement for the chosen
-schemas; the extra limit row detects truncation. Only a complete, validated result
-becomes the next immutable generation. This is one source observation, not a
-guarantee of DDL consistency stronger than the source engine provides.
+A response pins `Arc<Snapshot>`. Refreshes preserve pinned readers. `status()` reports
+generation, age, last attempt, refresh state and typed error. Failed/interrupted loads
+retain the previous generation without resetting its age. Reads fail once `max_age`
+is exceeded; an empty schema remains distinguishable from a load failure.
+`refresh()` rejects overlapping attempts. `stop_refreshing().await` joins the periodic
+worker; hosts call it before releasing backend resources.
 
-`Catalog::snapshot()` returns an `Arc<Snapshot>`. A metadata response pins that Arc
-through completion. Existing readers retain their generation during a refresh.
-`Catalog::status()` exposes generation, age, last attempt, refresh-in-progress state
-and a typed error. A failed, timed-out or interrupted refresh retains the previous
-generation without resetting its age. A valid empty schema differs from a failed
-load. `Catalog::refresh()` permits a host-triggered refresh; overlapping refreshes
-are rejected. `Catalog::stop_refreshing().await` stops and joins the periodic worker;
-manual refreshes remain available. Hosts should await this before releasing catalog
-and backend resources. Dropping the final catalog handle also aborts the task, with
-asynchronous source cleanup. Generations are local to one catalog lifetime and are
-not durable identifiers across process restarts.
-
-The byte limit excludes allocator/collection overhead and connector allocations.
-Old pinned generations and a candidate can coexist. Host code must bound the
-lifetime and number of retained generations. Snowflake's native-memory production
-gate remains open; dropping a timed-out refresh retains native capacity until its
-underlying worker has actually stopped.
+The byte limit covers owned payloads/strings, excluding allocator and connector
+memory. Old pinned generations and a candidate can coexist. Hosts must bound retained
+generations. Native capacity remains occupied until underlying work actually stops,
+including after a refresh timeout. Arrow batch bounds apply after native allocation.
 
 ## Frontend responses
 
-Both profiles recognize the captured PostgreSQL 42.7.12 and Redshift 2.2.5 JDBC
-schema, table and column SQL shapes. Matching covers the entire token stream;
-only designated literal schema/table/column predicates may vary. Metabase
-v0.64.2.8's custom Redshift table and field scans are also recognized, including
-optional literal schema/table IN lists of at most 256 entries. They return its
-expected aliases, booleans, zero-based column positions, comments, types and
-PostgreSQL declared primary-key membership. These custom scans currently require
-a PostgreSQL catalog, whose provider filters for SELECT privileges. The scans are recorded in
-[`metabase_redshift.json`](../tests/fixtures/metabase_redshift.json). The table
-handler excludes the driver's internal schemas. A provider without primary-key
-facts rejects Metabase field scans explicitly rather than reporting missing keys
-as false. Source case and SQL LIKE escapes are preserved. Metabase field scans
-retain PostgreSQL's native type names. JDBC tables and columns use frontend-specific result
-columns and supported scalar type mappings. Unknown types fail explicitly. Snowflake
-bounded text maps to frontend `varchar` with its declared character length; unknown
-octet length remains NULL rather than being inferred from character count.
+Exact whole-statement handlers reproduce captured PostgreSQL/Redshift JDBC metadata,
+Metabase PostgreSQL/Redshift sync, Redash PostgreSQL/Redshift autocomplete and SQLAlchemy
+reflection. They return expected aliases, types, ordering, defaults, comments and
+keys. Source identifiers and LIKE escapes retain their case. Unsupported source
+types or missing facts needed for a response fail explicitly.
 
-Matching occurs after SQL byte bounds and the host's typed input-options resolver,
-before the general SQL parser. This permits the pinned Redshift driver's metadata
-SQL, including syntax its source PostgreSQL cannot execute. Fixed templates contain
-no application-row reads. Native input options skip these handlers; SQL comments
-cannot elevate a query. Nested/altered queries and additional statements do not
-match. Responses bypass context hooks, routing callbacks and result caching.
+Metabase's Redshift driver lowercases schema/table filters for field discovery.
+For Snowflake catalogs, these handlers resolve those filters against source names
+without changing returned identifiers. Case-distinct names that make a folded
+filter ambiguous fail explicitly. PostgreSQL-backed matching remains exact.
+Both frontend profiles support the driver's inherited bulk foreign-key query.
 
-PostgreSQL catalogs retain the existing discovery fallback for other classified
-metadata, using the same source identity. With a Snowflake catalog, unknown
-classified metadata fails with `0A000` rather than borrowing PostgreSQL discovery
-access. Full key definitions and other driver metadata therefore still need normalized handlers
-before complete Snowflake schema-sync acceptance. Local snapshot responses acquire
-no backend transaction; application data continues to use existing transaction
-affinity. Failed frontend transactions reject catalog responses until rollback.
+Capture slots accept designated bounded literal strings/IN lists. SQLAlchemy's
+virtual relation OID slot accepts only a bounded unsigned integer. Nested SQL,
+additional statements, changed catalog sources and nonliteral filters never match.
+Native remarks bypass metadata handling; comments never grant discovery access.
 
-Redash 26.9's captured Redshift `svv_columns`/`SVV_EXTERNAL_SCHEMAS` schema query
-also has an exact handler. It returns `table_name`, `table_schema`, `column_name`
-and source-native `data_type` names, ordered by table and column ordinal. It uses
-the PostgreSQL discovery identity's schema USAGE and whole-table SELECT facts;
-column-only grants do not satisfy its table privilege predicate. Its internal and
-temporary schema exclusions are retained. It currently requires a PostgreSQL
-provider; no external-schema privileges are inferred for Snowflake. Additional
-statements and queries modified to read application tables never match this handler.
+Snapshot responses bypass application context, selection and result caching. Failed
+frontend transactions reject metadata until rollback. Previews and value scans stay
+on ordinary routing, including when initiated by schema synchronization.
 
-Superset 6.1.0 with `sqlalchemy-redshift` 0.8.14 uses additional relation, column
-and constraint reflection queries. Their complete captured shapes, with optional
-literal schema/table filters, use the live discovery adapter rather than expanding
-the snapshot with driver-specific catalog fields. The PostgreSQL adapter returns
-real relation identifiers, owners, ACLs, view definitions, column types/defaults
-and declared constraints. It checks the discovery identity's schema and SELECT
-visibility, including column grants. Redshift-only physical storage properties
-are NULL. PostgreSQL foreign tables use their local catalog definitions; no
-Redshift external-table keys are synthesized. These reads use discovery-source
-permissions and are independent of the snapshot's configured schema list.
-They retain normal discovery transaction affinity, cancellation, deadlines and
-cleanup, and bypass application context, routing callbacks and result caching.
-The SQL corpus is [`superset_redshift.json`](../tests/fixtures/superset_redshift.json).
-Unknown queries keep ordinary routing; attaching a Snowflake catalog rejects the
-PostgreSQL discovery fallback. Equivalent Snowflake reflection remains unsupported.
+PostgreSQL retains live discovery for other classified metadata. SQLAlchemy Redshift
+reflection over PostgreSQL uses real owners, ACLs, view definitions, source identifiers
+and declared constraints through that adapter. Snowflake responses instead use the
+configured snapshot, including its explicit schema scope; unknown catalog requests
+fail with `0A000`. Snowflake has no physical PostgreSQL indexes or user-defined
+PostgreSQL domains/enums. Compatible empty results describe that absence rather
+than inventing source objects. SQLAlchemy identity-option reflection is explicitly
+unsupported when the required sequence details are unavailable.
+
+The pinned `sqlalchemy-redshift` 0.8.14 dialect retains SQL quotes in primary and
+foreign key identifiers parsed from constraint definitions: its reflection API
+returns `"ID"` including the quote characters for an uppercase source column.
+JDBC metadata and PostgreSQL SQLAlchemy reflection return `ID`. The catalog keeps
+the exact source name and valid quoted definitions. Redshift SQLAlchemy consumers
+must decode these identifier tokens; automatic key/relationship matching in a BI
+application may require a client dialect correction.
 
 ## AST lineage and masking
 
-The catalog supplies schema facts for a future AST binder: wildcard expansion,
-qualified-column lookup and native types. A binder must pin a generation for its
-whole analysis and resolve aliases, joins, CTEs, subqueries, expressions, ambiguity
-and view boundaries. Coordinates alone do not establish the base-table origin of
-a view or computed result column. Unknown or ambiguous lineage must remain explicit.
-Dynamic masking, policy interpretation, result rewriting and their cache semantics
-are separate planned work; no masking is implemented by this catalog.
+The catalog provides qualified coordinates, keys, views and native types for future
+AST binding. A binder must pin a generation and resolve wildcards, aliases, joins,
+CTEs, subqueries, expressions, ambiguity and view boundaries. Coordinates alone do
+not establish base-column lineage. Dynamic masking and its policy/cache behavior
+remain separate planned work.

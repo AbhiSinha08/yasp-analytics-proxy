@@ -10,6 +10,8 @@ use yasp::{
 pub(super) struct HostConfig {
     pub(super) gateway: GatewayConfig,
     pub(super) backends: Vec<PostgresBinding>,
+    #[cfg(feature = "snowflake")]
+    pub(super) snowflake: Vec<(BackendSelection, yasp::backend::snowflake::SnowflakeConfig)>,
     pub(super) file: FileConfig,
     pub(super) log_level: String,
     pub(super) cache_url: Option<String>,
@@ -67,11 +69,14 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         #[serde(deny_unknown_fields)]
         struct Params {
             native_dialect: yasp::query::SqlDialect,
+            #[serde(default)]
+            unmarked_data_dialect: Option<yasp::query::SqlDialect>,
         }
         let params: Params =
             serde_json::from_value(serde_json::Value::Object(hook.params.clone()))?;
-        gateway.with_input_options(yasp::hooks::builtin::input_options::metabase(
+        gateway.with_input_options(yasp::hooks::builtin::input_options::metabase_with_default(
             params.native_dialect,
+            params.unmarked_data_dialect,
         ))
     } else {
         gateway
@@ -94,7 +99,41 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         })
         .transpose()?;
     let mut backends = Vec::new();
+    #[cfg(feature = "snowflake")]
+    let mut snowflake = Vec::new();
     for (target_name, target) in &file.targets {
+        #[cfg(feature = "snowflake")]
+        if let Some(sf) = &target.snowflake {
+            for (name, login) in &target.logins {
+                snowflake.push((
+                    BackendSelection {
+                        target: target_name.clone(),
+                        backend_login: name.clone(),
+                    },
+                    yasp::backend::snowflake::SnowflakeConfig {
+                        driver_library: sf.driver_library.clone(),
+                        driver_sha256: required(&sf.driver_sha256_env, "Snowflake driver digest")?,
+                        account: sf.account.clone(),
+                        username: login.username.clone(),
+                        password: required(&login.password_env, "Snowflake login password")?,
+                        database: target.database.clone(),
+                        schema: sf.schema.clone(),
+                        warehouse: sf.warehouse.clone(),
+                        role: login.role.clone().expect("validated Snowflake role"),
+                        emulator: sf.emulator,
+                        max_connections: file
+                            .backend
+                            .max_connections_per_pool
+                            .min(file.backend.max_connections_total),
+                        acquire_timeout: std::time::Duration::from_millis(
+                            file.backend.acquire_timeout_ms,
+                        ),
+                        max_batch_bytes: sf.max_batch_bytes,
+                    },
+                ));
+            }
+            continue;
+        }
         let make_backend = |host, port, username, password| {
             if target.tls.mode == "enable" {
                 BackendConfig::new_with_tls(
@@ -172,6 +211,8 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
     Ok(HostConfig {
         gateway,
         backends,
+        #[cfg(feature = "snowflake")]
+        snowflake,
         file,
         log_level,
         cache_url,

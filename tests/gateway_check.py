@@ -741,11 +741,11 @@ def derive(request, params):
         return {'deny': True}
     if 'context_helpers' in sql:
         metabase = yasp_extractors.metabase_pg(
-            '-- Metabase:: userID: 42 queryType: native queryHash: abcdef\nSELECT 1')
+            '-- Metabase:: userID: 42 queryType: native queryHash: abcdef\\nSELECT 1')
         assert metabase == {'tool': 'metabase', 'user_id': 42,
                             'query_type': 'native', 'query_hash': 'abcdef'}
         redshift = yasp_extractors.metabase_rs(
-            '-- /* partner: "metabase", {"dashboard_id":null,"chart_id":57,"optional_user_id":1,"optional_account_id":"account-1","filter_values":{"region":"west"}} */ Metabase:: userID: 1 queryType: MBQL queryHash: rs-hash\nSELECT 1')
+            '-- /* partner: "metabase", {"dashboard_id":null,"chart_id":57,"optional_user_id":1,"optional_account_id":"account-1","filter_values":{"region":"west"}} */ Metabase:: userID: 1 queryType: MBQL queryHash: rs-hash\\nSELECT 1')
         assert redshift == {'tool': 'metabase', 'user_id': 1, 'query_type': 'MBQL',
                             'query_hash': 'rs-hash', 'dashboard_id': None,
                             'chart_id': 57, 'optional_user_id': 1,

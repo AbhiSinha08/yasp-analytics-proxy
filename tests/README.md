@@ -58,7 +58,7 @@ scenario and verifies resource removal.
 | `gateway`                 | Compiled host startup, authentication, simple-query forwarding, native values/metadata, read-only enforcement, protocol limits, pools, timeouts, cleanup, and config validation.                                                       |
 | `routing`                 | Metadata classification/replay, selected credentials and source ACLs, errors and same-session recovery, separate pools, cancellation, and discarded cancelled leases.                                                                  |
 | `tls`                     | Verified frontend/source/Redis connections, outbound client certificates, SCRAM channel binding, encrypted cancellation, disconnect/bounds recovery, relative certificate paths, compute/discovery, cache replay, and dataset refresh. |
-| `cache`                   | Normalized hits, expiry, selected-login scope, current selector denial, context order, metadata bypass, malformed entries, row/byte bounds, lossless values, cancelled fills, eligibility failures, and Redis outages.                 |
+| `cache`                   | Both frontend profiles with PostgreSQL, normalized hits, expiry, selected-login scope, current selector denial, context order, metadata bypass, malformed entries, row/byte bounds, lossless values, cancelled fills, eligibility failures, and Redis outages.                 |
 | `context_gateway`         | Fixed-backend context fallback, cancellation, disconnect, and shutdown.                                                                                                                                                                |
 | `context`, `python_hooks` | Database-free hook contracts, bounds, worker capacity, failure defaults, and shutdown.                                                                                                                                                 |
 | `datasets`                | Redis dataset startup/replacement, JSON fidelity, lookup limits, refresh coordination, failure recovery, and lease/revision fencing.                                                                                                   |
@@ -73,22 +73,35 @@ connections, route/discovery/compute conflicts, transactional setup, cache bypas
 and session scope, cancellation, disconnects, and idle/partial-message deadlines.
 The captured psycopg2/SQLAlchemy driver sequence is replayed by `gateway`.
 Captured protocol replay does not establish full BI-client compatibility.
-The separate [multi-engine probes](../scripts/compatibility/README.md) record
-candidate Snowflake driver and Metabase/JDBC versions. Standalone probes are not
-run by the PostgreSQL test runner. The optional `snowflake` feature has value and
-native-cleanup regression checks; its ignored HTTP integration test is launched
-by `scripts/compatibility/runtime_probe.py`. Synthetic write rollback remains a
-separate emulator diagnostic. Real Snowflake and Metabase/JDBC acceptance remain
-required.
-The ignored `jdbc` test uses disposable client containers from the pinned Metabase
-image. `scripts/compatibility/jdbc_probe.py` records its supported operations and
-catalog-backed table/column definitions for both drivers; it does not run Metabase's MBQL compiler.
+`python3 scripts/test.py --full` runs default/Python functional and documentation
+checks, then combined Snowflake and external-client checks, sequentially. Python
+runs use `PYO3_PYTHON` when set, otherwise the runner's interpreter, and expose its
+matching shared-library directory to subprocesses.
+
+The `snowflake` feature automatically prepares the verified native driver and
+starts an owned Fakesnow container. Its normal tests cover the native connector,
+gateway values/transactions/cancellation/recovery, both profiles' metadata, the
+Snowflake-only YAML host, shared-cache hits through both profiles, lossless replay,
+profile/dialect/role/warehouse scope, malformed entries, transaction bypass,
+row/byte bounds, expiry, and persistent data/definitions across container recreation.
+Tests never use the developer emulator volume. Explicitly requested prerequisites
+fail the run when unavailable; these functional tests are not ignored.
+Test image tags, containers and volumes belong to one run and are removed on exit;
+rebuilding the developer image cannot replace an active test fixture's image.
+
+The test-only `client-tests` feature enables pinned Metabase JDBC and SQLAlchemy
+client containers. No running BI application is required. Capture manifests and
+workloads live under `fixtures/clients`; client-specific SQL regressions remain in
+the corresponding BI test module. Captured metadata/native-read acceptance does
+not establish arbitrary query-builder or real Snowflake compatibility.
 
 The `catalog` test covers periodic DDL refresh, pinned generation stability, source
-spelling/types, column-grant isolation, bounded-load failures and expiry. The ignored
-Snowflake network test also loads schema definitions through the native connector
-and renders both frontend profiles. Normalized keys and complete Metabase sync
-remain separate acceptance work.
+spelling/types, column-grant isolation, bounded-load failures and expiry.
+Optional [connector diagnostics](diagnostics/snowflake/README.md) compare rejected
+approaches separately from functional acceptance. Driver construction and inventory
+utilities remain under `scripts/`; fixture setup is owned by the normal runner.
+See [the persistent development setup](../dev/snowflake/README.md).
+
 Future phase coverage belongs in [the plan](../docs/PLAN.md).
 
 ## Existing test services
