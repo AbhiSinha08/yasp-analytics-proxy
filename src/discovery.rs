@@ -1,9 +1,11 @@
-//! PostgreSQL client metadata recognition and local session setup.
+//! Frontend metadata recognition and local session setup.
 //! Backend discovery adapters own execution and source-specific rewriting.
 
 mod catalog;
 mod classify;
+pub(crate) mod redshift;
 mod session;
+pub(crate) mod template;
 
 pub(crate) use catalog::{catalog_relation, helper, name};
 pub use classify::{DiscoveryKind, classify};

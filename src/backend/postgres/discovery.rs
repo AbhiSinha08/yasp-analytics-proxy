@@ -1,4 +1,5 @@
-//! PostgreSQL source rules for PostgreSQL client metadata requests.
+//! PostgreSQL source rules for supported frontend metadata requests.
+mod redshift;
 
 use super::{PostgresBackend, error_response};
 use crate::backend::discovery::DiscoveryRequest;
@@ -58,9 +59,12 @@ where
         .map(|_| ())
 }
 
-/// Qualify native catalogs/helpers and restrict every database listing to its source.
+/// Adapt frontend metadata, qualify native names, and restrict database listings.
 /// Only statements accepted by the frontend discovery classifier enter this path.
 pub(in crate::backend) fn prepare(query: &ParsedQuery) -> Result<ParsedQuery, QueryError> {
+    if let Some(request) = crate::discovery::redshift::Request::recognize(query) {
+        return redshift::prepare(&request);
+    }
     let mut statement = query.statement().clone();
     static LISTING: std::sync::OnceLock<sqlparser::ast::Query> = std::sync::OnceLock::new();
     let listing = LISTING.get_or_init(|| {

@@ -151,6 +151,22 @@ temporary schema exclusions are retained. It currently requires a PostgreSQL
 provider; no external-schema privileges are inferred for Snowflake. Additional
 statements and queries modified to read application tables never match this handler.
 
+Superset 6.1.0 with `sqlalchemy-redshift` 0.8.14 uses additional relation, column
+and constraint reflection queries. Their complete captured shapes, with optional
+literal schema/table filters, use the live discovery adapter rather than expanding
+the snapshot with driver-specific catalog fields. The PostgreSQL adapter returns
+real relation identifiers, owners, ACLs, view definitions, column types/defaults
+and declared constraints. It checks the discovery identity's schema and SELECT
+visibility, including column grants. Redshift-only physical storage properties
+are NULL. PostgreSQL foreign tables use their local catalog definitions; no
+Redshift external-table keys are synthesized. These reads use discovery-source
+permissions and are independent of the snapshot's configured schema list.
+They retain normal discovery transaction affinity, cancellation, deadlines and
+cleanup, and bypass application context, routing callbacks and result caching.
+The SQL corpus is [`superset_redshift.json`](../tests/fixtures/superset_redshift.json).
+Unknown queries keep ordinary routing; attaching a Snowflake catalog rejects the
+PostgreSQL discovery fallback. Equivalent Snowflake reflection remains unsupported.
+
 ## AST lineage and masking
 
 The catalog supplies schema facts for a future AST binder: wildcard expansion,

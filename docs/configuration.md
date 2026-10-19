@@ -356,14 +356,19 @@ accepts the engine options directly; the surrounding `engine_params` key belongs
 only in the full Extra JSON representation shown above. Test and save the
 connection after clearing any JDBC-only parameters.
 
-Connection testing and native SQL execution work with this local combination.
-The Redshift dialect's table reflection also queries Redshift-only catalog fields
-such as `pg_class.reldiststyle`; that SQL is outside the current captured metadata
-handlers and fails against a PostgreSQL backend. Use the PostgreSQL SQLAlchemy
-dialect (`postgresql+psycopg2://...`) against the same listener for the existing
-PostgreSQL metadata surface when table browsing is required. This does not change
-the listener's Redshift profile. Redshift-specific Superset reflection needs its
-own captured query handlers before full dataset browsing is supported.
+Connection testing, native SQL and the captured table/column/constraint reflection
+queries work with this local combination and a PostgreSQL discovery source.
+The Redshift dialect queries fields such as `pg_class.reldiststyle`, late-binding
+view columns and external catalogs. YASP recognizes the complete captured SQL,
+accepts only bounded literal schema/table filters, and translates these metadata
+requests inside the PostgreSQL adapter. They bypass ordinary context, selection
+and result caching. Types, comments, defaults, view definitions, declared keys,
+owners and ACLs come from PostgreSQL; Redshift distribution, encoding and sort-key
+properties are NULL. Unknown SQL remains outside this compatibility surface.
+These live discovery responses use the configured discovery identity rather than
+the snapshot's imported schema list. A Snowflake catalog rejects this live
+PostgreSQL metadata fallback explicitly; Snowflake reflection needs its own
+provider support before this client combination is supported there.
 
 Redash 26.9's **Redshift** runner has an SSL-mode field but no CA-upload or JDBC
 properties field. It supplies its bundled CA file at

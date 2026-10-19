@@ -87,7 +87,7 @@ flowchart TD
     Setup -->|no| ReadOnly[Validate read-only statement]
     ReadOnly --> Descriptor{Exact frontend descriptor query?}
     Descriptor -->|yes| Local
-    Descriptor -->|no| Metadata{Generated metadata query?}
+    Descriptor -->|no| Metadata{Classified PostgreSQL or captured Redshift metadata?}
     Metadata -->|yes| Discovery[Configured discovery source]
     Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
     DatasetRead --> Context[Derive optional bounded context]
@@ -115,7 +115,11 @@ flowchart TD
     Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
     TxControl --> Ready
     Aborted --> Ready
-    Discovery --> MetadataTxn{Explicit transaction?}
+    Discovery --> MetadataAuthority{Catalog permits live discovery fallback?}
+    MetadataAuthority -->|yes| MetadataNative[Source adapter prepares native metadata SQL]
+    MetadataAuthority -->|no| UnsupportedMetadata[Reject unsupported metadata]
+    UnsupportedMetadata --> Ready
+    MetadataNative --> MetadataTxn{Explicit transaction?}
     MetadataTxn -->|yes| Pin
     MetadataTxn -->|no| DiscoverOnce[Execute metadata and clean up]
     DiscoverOnce --> Ready
@@ -206,6 +210,14 @@ without a catalog table or when their functions appear in FROM.
 Mixed application/catalog reads, recursive CTEs, CTEs that shadow native catalog
 names, TABLE set expressions, and unrecognized helpers follow ordinary routing.
 Source-role visibility still applies.
+Captured SQLAlchemy Redshift relation, column and constraint reflection queries
+also use this live discovery path. Complete statement templates accept only
+bounded literal schema/table predicates; the PostgreSQL adapter produces native
+catalog SQL and preserves source types, definitions and declared keys. Physical
+Redshift storage properties remain NULL. This path uses discovery-source
+permissions independently of snapshot schema scope. A Snowflake catalog rejects
+this PostgreSQL fallback explicitly. Client fixtures are in
+[`superset_redshift.json`](../tests/fixtures/superset_redshift.json).
 The PostgreSQL handler qualifies native names, limits database listings to the
 source database, and applies discovery session state inside the existing read-only
 transaction. The source must be reachable at startup to supply its server version.

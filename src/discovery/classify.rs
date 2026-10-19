@@ -1,4 +1,4 @@
-//! Recognize metadata-only PostgreSQL statements over the complete parsed tree.
+//! Recognize supported metadata statements over the complete query.
 //! Unknown expressions and application data retain ordinary routing.
 
 use super::{
@@ -23,6 +23,9 @@ pub enum DiscoveryKind {
 pub fn classify(query: &ParsedQuery) -> Option<DiscoveryKind> {
     if query.validate_read_only().is_err() {
         return None;
+    }
+    if super::redshift::Request::recognize(query).is_some() {
+        return Some(DiscoveryKind::Catalog);
     }
     if let Statement::ShowVariable { variable } = query.statement() {
         let name = variable

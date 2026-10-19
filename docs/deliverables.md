@@ -87,7 +87,7 @@
   - [ ] **Snowflake host configuration** — Load Snowflake identities and warehouses through the repository host's validated configuration.
   - [ ] **Snowflake execution and lifecycle** — Implement configured accounts/roles/warehouses, exact value conversion, bounded workers/prefetch, transaction affinity, cleanup, and real-source authorization tests.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
-  - [x] **Client version inventory** — Record the deployed Metabase image digest and bundled PostgreSQL/Redshift JDBC versions.
+  - [x] **Client version inventory** — Record the deployed Metabase, Redash, Superset image digest and bundled PostgreSQL/Redshift JDBC/psycopg2 versions.
   - [x] **Bundled JDBC SQL corpus** — Capture TLS/simple-query setup, schemas/tables/columns/keys/indexes, previews, and transactions from PostgreSQL 42.7.12 and Redshift 2.2.5. Both drivers pass these captured operations with catalog-backed definitions and PostgreSQL key/index discovery.
   - [ ] **Driver traffic corpus** — Capture startup, sync, browsing, filters, aggregates, time buckets, native charts, downloads, and cancellation in both connection modes.
   - [x] **Input SQL dialect** — Resolve host-owned remark hints before dialect-aware tokenization/parsing and enforce native engine affinity after selection.
@@ -95,18 +95,18 @@
   - [x] **Captured frontend metadata** — Render the pinned JDBC schema/table/column shapes for both profiles using normalized definitions. Verify Snowflake metadata through the HTTP connector and both frontend profiles.
   - [ ] **Remaining virtual metadata** — Add declared keys and other captured driver shapes, virtual identifiers and unsupported-type coverage before complete Snowflake sync acceptance.
   - [x] **Catalog host configuration** — Load explicit schema scope and refresh/age/bound settings from `schema_discovery.catalog`; reuse the PostgreSQL discovery identity and pool.
-  - [x] **Metabase Redshift schema scans** — Serve captured custom table/field scans from the catalog, including literal filters, comments and PostgreSQL primary-key membership; keep application reads on ordinary routing.
+  - [x] **BI Redshift schema scans** — Serve captured custom table/field scans from the catalog, including literal filters, comments and PostgreSQL primary-key membership; keep application reads on ordinary routing.
   - [ ] **Standalone warehouse host** — Remove the required PostgreSQL discovery binding once frontend startup, fingerprints and remaining metadata are served independently of it.
-  - [ ] **Bounded generated-query translation** — Validate the supported Metabase expression forms and explicit unsupported-feature errors against backend results.
+  - [ ] **Bounded generated-query translation** — Validate the supported BI expression forms and explicit unsupported-feature errors against backend results.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
 - [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
 - [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [ ] **AST Based Dynamic Masking**
   - [ ] **Column binding and lineage** — Pin a catalog generation, expand wildcards, resolve aliases/joins/CTEs/subqueries/expressions and expose ambiguous origins before policy-driven masking.
-- [ ] **Redshift Gateway**
+- [x] **Redshift Gateway**
   - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.
-  - [ ] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
+  - [x] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.

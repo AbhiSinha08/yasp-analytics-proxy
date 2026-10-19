@@ -23,12 +23,12 @@ Cargo arguments follow `--`, including individual scenarios:
 ```sh
 python3 scripts/test.py -- --test routing
 python3 scripts/test.py -- --test cache context_and_metadata_bypass
-python3 scripts/test.py -- --test metabase --test redash
+python3 scripts/test.py -- --test metabase --test redash --test superset
 python3 scripts/test.py -- --test bi_context --features python
 python3 scripts/test.py -- --all-targets --features python
 ```
 
-Tool-specific schema scenarios live in `metabase.rs` and `redash.rs`.
+Tool-specific schema scenarios live in `metabase.rs`, `redash.rs` and `superset.rs`.
 `bi_context.rs` verifies the shared example context and role mapping across BI
 remark formats. The schema tests share host setup in `support/catalog_host.rs`.
 
