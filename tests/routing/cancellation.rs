@@ -162,7 +162,7 @@ pub(super) fn cancellation_discards_backend(
     address: std::net::SocketAddr,
     identity: &Identity,
 ) {
-    let route_two_pid_before = client(&["SELECT pg_backend_pid() /* route_two */"]);
+    let route_two_pid_before = client(&["SELECT pg_backend_pid() AS source_pid /* route_two */"]);
     assert!(route_two_pid_before.status.success());
     let route_two_pid_before = String::from_utf8_lossy(&route_two_pid_before.stdout)
         .trim()
@@ -174,7 +174,7 @@ pub(super) fn cancellation_discards_backend(
         &identity.password,
         &identity.database,
     );
-    let route_two_pid_after = client(&["SELECT pg_backend_pid() /* route_two */"]);
+    let route_two_pid_after = client(&["SELECT pg_backend_pid() AS source_pid /* route_two */"]);
     assert!(route_two_pid_after.status.success());
     let route_two_pid_after = String::from_utf8_lossy(&route_two_pid_after.stdout)
         .trim()

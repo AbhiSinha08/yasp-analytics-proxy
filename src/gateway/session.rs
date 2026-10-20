@@ -87,6 +87,7 @@ pub(super) async fn connection(
     let scram_auth = Arc::new(
         SASLAuthStartupHandler::new(Arc::new(parameters))
             .with_scram(scram)
+            .with_pid_secret_key_generator(source.pid_generator.clone())
             .with_connection_manager(cancel_manager.clone()),
     );
     let password_auth = Arc::new(
@@ -98,6 +99,7 @@ pub(super) async fn connection(
             parameters.time_zone = "UTC".into();
             parameters
         })
+        .with_pid_secret_key_generator(source.pid_generator.clone())
         .with_connection_manager(cancel_manager.clone()),
     );
     let noop = Arc::new(NoopHandler);

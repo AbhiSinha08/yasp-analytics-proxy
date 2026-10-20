@@ -3,6 +3,7 @@
 use super::{FrontendSocket, protocol_error, server::Credentials};
 use crate::{
     backend::execution::Execution,
+    backend::result::{ColumnType, ResultColumn, ResultEvent},
     config::GatewaySettings,
     discovery::{SessionSettings, SetupResponse},
     execution::Transaction,
@@ -11,6 +12,7 @@ use crate::{
 };
 use futures::{SinkExt, channel::oneshot};
 use pgwire::{
+    api::ClientInfo,
     error::PgWireResult,
     messages::{
         PgWireBackendMessage,
@@ -213,6 +215,19 @@ async fn send_setup_response(
 ) -> PgWireResult<()> {
     let messages =
         match response {
+            SetupResponse::BackendPid => [
+                ResultEvent::Columns(vec![ResultColumn {
+                    name: "pg_backend_pid".into(),
+                    kind: ColumnType::Int32,
+                }]),
+                ResultEvent::Row(vec![Some(bytes::Bytes::from(
+                    socket.pid_and_secret_key().0.to_string(),
+                ))]),
+                ResultEvent::Complete(1),
+            ]
+            .into_iter()
+            .map(|event| crate::wire::encode(event).into_wire())
+            .collect(),
             SetupResponse::EmptyInteger { name } => vec![
                 PgWireBackendMessage::RowDescription(RowDescription::new(vec![
                     FieldDescription::new(name.into(), 0, 0, 23, 4, -1, 0),

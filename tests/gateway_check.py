@@ -355,7 +355,8 @@ def backend_recovery_checks(schema):
             assert [kind for kind, _ in result] == [b"T", b"D", b"C", b"Z"], result
             assert result[1][1] == b"\0\1\0\0\0\2\xc3\xa9", result
 
-    pids = {psql("SELECT pg_backend_pid()").stdout.strip() for _ in range(4)}
+    # Aliased expressions follow ordinary source execution, not the session probe.
+    pids = {psql("SELECT pg_backend_pid() AS source_pid").stdout.strip() for _ in range(4)}
     assert len(pids) == 1, "sequential queries did not reuse a pooled connection"
     original = psql("SHOW application_name").stdout
     result = psql("SELECT set_config('application_name', 'yasp_test_leak', false)", "SHOW application_name")
@@ -372,7 +373,7 @@ def backend_recovery_checks(schema):
         assert len(result.stderr) < 8192, "backend failure exposed a large payload"
         health()
     with authenticated_socket() as stream:
-        stream.sendall(packet(b"Q", b"SELECT pg_backend_pid()\0"))
+        stream.sendall(packet(b"Q", b"SELECT pg_backend_pid() AS source_pid\0"))
         result = responses(stream)
         assert [kind for kind, _ in result] == [b"T", b"D", b"C", b"Z"], result
         pid = int(result[1][1][6:])
@@ -859,7 +860,7 @@ def gateway_settings_checks(directory):
                 with authenticated_socket() as idle_transaction:
                     idle_transaction.sendall(packet(b"Q", b"BEGIN\0"))
                     assert responses(idle_transaction)[-1] == (b"Z", b"T")
-                    idle_transaction.sendall(packet(b"Q", b"SELECT pg_backend_pid()\0"))
+                    idle_transaction.sendall(packet(b"Q", b"SELECT pg_backend_pid() AS source_pid\0"))
                     result = responses(idle_transaction)
                     pid = int(next(value for kind, value in result if kind == b"D")[6:])
                     if partial_message:
@@ -916,7 +917,7 @@ def gateway_settings_checks(directory):
             health()
 
             with authenticated_socket() as slow:
-                slow.sendall(packet(b"Q", b"SELECT pg_backend_pid()\0"))
+                slow.sendall(packet(b"Q", b"SELECT pg_backend_pid() AS source_pid\0"))
                 pid = int(responses(slow)[1][1][6:])
                 slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
                 slow.sendall(packet(b"Q", b"SELECT repeat('x', 1048576) FROM generate_series(1, 128)\0"))
@@ -994,8 +995,8 @@ def transaction_checks(schema):
             query(stream, probe)
         query(stream, "ROLLBACK", b"I")
         query(stream, "START TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
-        pid = query(stream, "SELECT pg_backend_pid()")
-        assert query(stream, "SELECT pg_backend_pid()") == pid
+        pid = query(stream, "SELECT pg_backend_pid() AS source_pid")
+        assert query(stream, "SELECT pg_backend_pid() AS source_pid") == pid
         query(stream, "COMMIT", b"I")
         for bad, code in [("SELECT 1 / 0", "22012"), ("SELECT FROM", "42601"),
                           ("SELECT 1; SELECT 2", "0A000"), ("SAVEPOINT x", "0A000"),
@@ -1029,7 +1030,7 @@ def transaction_checks(schema):
 
     with authenticated_socket() as disconnected:
         query(disconnected, "BEGIN")
-        pid = int(query(disconnected, "SELECT pg_backend_pid()")[0][6:])
+        pid = int(query(disconnected, "SELECT pg_backend_pid() AS source_pid")[0][6:])
     deadline = time.monotonic() + 3
     while True:
         remaining = psql(f"SELECT count(*) FROM pg_stat_activity WHERE pid={pid}", backend=True)

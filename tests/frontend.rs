@@ -209,3 +209,72 @@ fn redshift_profile_authenticates_over_tls_and_shares_query_lifecycle() {
     assert_eq!(String::from_utf8_lossy(&bounded.stdout).trim(), "SET\n44");
     server.stop();
 }
+
+#[test]
+fn session_pid_matches_startup_without_routing_or_intercepting_data_sql() {
+    use pgwire::{
+        api::client::{
+            ClientInfo, Config, auth::DefaultStartupHandler, query::DefaultSimpleQueryHandler,
+        },
+        tokio::client::PgWireClient,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use yasp::hooks::{ContextError, builtin::input_options::metabase_with_default};
+
+    let environment = support::TestEnvironment::load();
+    let identity = environment.gateway();
+    let database = support::TestDatabase::create(&environment.source(None), "yasp_session_pid");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let hook = bind_context(calls.clone(), |_, count| {
+        count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(ContextError::Failed) })
+    });
+    let server = support::GatewayServer::fixed(
+        identity
+            .gateway_config()
+            .with_input_options(metabase_with_default(
+                SqlDialect::Snowflake,
+                Some(SqlDialect::Snowflake),
+            ))
+            .with_context_hook(hook),
+        Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap()),
+    );
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let mut config = Config::new();
+        config.host(server.address.ip().to_string()).port(server.address.port())
+            .user(&identity.user).password(&identity.password).dbname(&identity.database);
+        let mut first = PgWireClient::connect(Arc::new(config.clone()), DefaultStartupHandler::new(), None).await.unwrap();
+        let mut second = PgWireClient::connect(Arc::new(config), DefaultStartupHandler::new(), None).await.unwrap();
+        assert_ne!(first.process_id(), second.process_id());
+        for client in [&mut first, &mut second] {
+            for sql in ["SELECT pg_backend_pid()", "/* probe */ select pg_catalog.pg_backend_pid ( );",
+                "-- Metabase:: userID: 1 queryType: MBQL queryHash: abc\nSELECT pg_backend_pid()"] {
+                let mut rows = client.simple_query(DefaultSimpleQueryHandler::new(), sql).await.unwrap()
+                    .remove(0).into_data_rows_reader();
+                assert_eq!(rows.next_row().unwrap().next_value::<i32>().unwrap(), Some(client.process_id()));
+                assert!(rows.next_row().is_none());
+            }
+        }
+    });
+    assert_eq!(
+        observed.load(Ordering::SeqCst),
+        0,
+        "session probes bypass source context/routing"
+    );
+    for sql in [
+        "SELECT pg_backend_pid() FROM users",
+        "WITH hidden AS (SELECT * FROM users) SELECT pg_backend_pid()",
+        "SELECT pg_backend_pid() + 1",
+        "-- Metabase:: userID: 1 queryType: native queryHash: abc\nSELECT pg_backend_pid()",
+    ] {
+        let output = identity.connection(server.address).query(sql);
+        assert!(
+            !output.status.success(),
+            "data/native SQL must retain ordinary policy: {sql}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(observed.load(Ordering::SeqCst), 4);
+    server.stop();
+}

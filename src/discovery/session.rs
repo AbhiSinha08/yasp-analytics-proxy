@@ -42,6 +42,7 @@ impl Default for SessionSettings {
 }
 
 pub(crate) enum SetupResponse {
+    BackendPid,
     EmptyInteger {
         name: &'static str,
     },

@@ -79,7 +79,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             return Ok(Some(SetupResponse::Command(tag)));
         }
         self.transaction.check()?;
-        if let Some(response) = self.source.profile.setup(query.statement()) {
+        if let Some(response) = self.source.profile.setup(query) {
             return Ok(Some(response));
         }
         if let Some(response) = self

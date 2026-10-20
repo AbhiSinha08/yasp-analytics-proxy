@@ -9,10 +9,10 @@ pub(super) fn pool_isolation(
     route_two_marker: &str,
 ) {
     let pids = client(&[
-        "SELECT pg_backend_pid()",
+        "SELECT pg_backend_pid() AS source_pid",
         "SELECT 'route_two' AS route_two, pg_backend_pid()",
         "SELECT 'route_owner' AS route_owner, pg_backend_pid()",
-        "SELECT pg_backend_pid()",
+        "SELECT pg_backend_pid() AS source_pid",
     ]);
     assert!(pids.status.success(), "routed pool reuse query failed");
     let pids: Vec<_> = String::from_utf8_lossy(&pids.stdout)

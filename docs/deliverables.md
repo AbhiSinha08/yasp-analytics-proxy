@@ -103,14 +103,14 @@
   - [x] **Snowflake data-query forwarding** — Execute native and frontend-generated data SQL unchanged through normal routing and read-only checks; return backend SQL errors without a local dialect gate.
   - [ ] **Bounded generated-query translation** — Validate the supported BI expression forms and explicit unsupported-feature errors against backend results.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
-- [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
-- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
-- [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [ ] **AST Based Dynamic Masking**
   - [ ] **Column binding and lineage** — Pin a catalog generation, expand wildcards, resolve aliases/joins/CTEs/subqueries/expressions and expose ambiguous origins before policy-driven masking.
+- [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [x] **Redshift Gateway**
   - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.
   - [x] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
+- [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
+- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 - [ ] **Configuration generations** — Activates validated settings consistently and retires affected pools or processes safely.

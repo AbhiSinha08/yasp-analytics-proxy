@@ -100,6 +100,7 @@ fn sqlalchemy_reflection_uses_snowflake_only_yaml_host() {
                 assert_eq!(observation["passed"], true, "{profile}: {observation}");
                 let result = &observation["result"];
                 match observation["operation"].as_str().unwrap() {
+                    "session_pid" => assert!(result.is_i64(), "frontend PID is an integer"),
                     "schemas" => assert!(result.as_array().unwrap().iter().any(|s| s == "PUBLIC")),
                     "tables" => assert!(result.as_array().unwrap().iter().any(|s| s == "USERS")),
                     "views" => assert_eq!(result[0], "DAILY_SALES"),

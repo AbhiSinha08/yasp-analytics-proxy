@@ -28,6 +28,13 @@ try:
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.2)
+    # Superset requests this before executing chart/SQL Lab queries.
+    with engine.connect() as connection:
+        dbapi = connection.connection.connection
+        pid = connection.exec_driver_sql('SELECT pg_backend_pid()').scalar()
+        qualified = connection.exec_driver_sql('SELECT pg_catalog.pg_backend_pid()').scalar()
+        observations.append({'operation':'session_pid', 'passed':type(pid) is int and pid == qualified == dbapi.get_backend_pid(), 'result':pid})
+        connection.exec_driver_sql('SELECT ID FROM PUBLIC.USERS LIMIT 1').fetchall()
     for name, operation in [
         ('schemas', lambda: inspector.get_schema_names()),
         ('tables', lambda: inspector.get_table_names(schema='PUBLIC')),

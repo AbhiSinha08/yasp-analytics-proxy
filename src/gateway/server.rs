@@ -8,7 +8,7 @@ use crate::{
 use async_trait::async_trait;
 use pgwire::{
     api::{
-        ConnectionManager,
+        ConnectionManager, RandomPidSecretKeyGenerator,
         auth::{
             AuthSource, LoginInfo, Password,
             sasl::scram::{SCRAM_ITERATIONS, gen_salted_password, random_nonce},
@@ -84,6 +84,7 @@ pub(super) async fn serve_sessions(
         profile,
         input_options: config.input_options,
         catalog: config.catalog,
+        pid_generator: Arc::new(RandomPidSecretKeyGenerator::default()),
     });
     let mut sessions = JoinSet::new();
     tokio::pin!(shutdown);
@@ -159,6 +160,7 @@ pub(super) async fn serve_sessions(
 }
 
 pub(super) struct Credentials {
+    pub(super) pid_generator: Arc<RandomPidSecretKeyGenerator>,
     pub(super) catalog: Option<Arc<crate::catalog::Catalog>>,
     pub(super) tls: Option<Arc<crate::tls::ServerTls>>,
     pub(super) username: String,

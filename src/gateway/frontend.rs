@@ -40,7 +40,7 @@ impl FrontendProfile {
             if let Ok(query) = &frontend
                 && (!matches!(query.statement(), sqlparser::ast::Statement::Query(_))
                     || crate::discovery::classify(query).is_some()
-                    || self.setup(query.statement()).is_some()
+                    || self.setup(query).is_some()
                     || self.fingerprint(query.statement()).is_some())
             {
                 return frontend;
@@ -68,7 +68,16 @@ impl FrontendProfile {
         parsed
     }
 
-    pub(crate) fn setup(self, statement: &Statement) -> Option<SetupResponse> {
+    pub(crate) fn setup(self, query: &ParsedQuery) -> Option<SetupResponse> {
+        let statement = query.statement();
+        if !query.input_options().native && matches!(statement, Statement::Query(_)) {
+            let sql = statement.to_string();
+            if sql.eq_ignore_ascii_case("SELECT pg_backend_pid()")
+                || sql.eq_ignore_ascii_case("SELECT pg_catalog.pg_backend_pid()")
+            {
+                return Some(SetupResponse::BackendPid);
+            }
+        }
         if self == Self::Redshift
             && matches!(statement, Statement::Set(_))
             && matches!(

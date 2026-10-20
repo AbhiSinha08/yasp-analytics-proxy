@@ -76,8 +76,8 @@ fn transactions_pin_routes_preserve_settings_and_bypass_cache() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let pinned = client.queries(&[
         "BEGIN",
-        "SELECT pg_backend_pid()",
-        "SELECT pg_backend_pid()",
+        "SELECT pg_backend_pid() AS source_pid",
+        "SELECT pg_backend_pid() AS source_pid",
         "COMMIT",
     ]);
     assert_success(
@@ -94,7 +94,7 @@ fn transactions_pin_routes_preserve_settings_and_bypass_cache() {
     for queries in [
         vec![
             "BEGIN",
-            "SELECT pg_backend_pid()",
+            "SELECT pg_backend_pid() AS source_pid",
             "SELECT current_user /* secondary_route */",
             "SELECT 1",
             "ROLLBACK",
@@ -102,7 +102,7 @@ fn transactions_pin_routes_preserve_settings_and_bypass_cache() {
         vec!["BEGIN", "SELECT version()", "SELECT 1", "ROLLBACK"],
         vec![
             "BEGIN",
-            "SELECT pg_backend_pid()",
+            "SELECT pg_backend_pid() AS source_pid",
             "SELECT version()",
             "ROLLBACK",
         ],
