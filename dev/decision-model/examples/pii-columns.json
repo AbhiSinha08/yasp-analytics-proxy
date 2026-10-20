@@ -1,0 +1,22 @@
+{
+  "model": "typed-decisions",
+  "state": "SQL: SELECT pan_number, date_of_birth, street_address, postal_code FROM customer_profile LIMIT 5\nFive sampled customer rows:\npan_number: AABCD1234E, BBCDE2345F, CCDEF3456G, DDEFG4567H, EEFGH5678J\ndate_of_birth: 1984-06-12, 1991-02-03, 1977-11-25, 2000-09-08, 1988-04-19\nstreet_address: 14 Example Road, Pune; 27 Sample Street, Jaipur; 8 Demo Avenue, Kochi; 51 Fiction Lane, Indore; 3 Mockingbird Road, Mysuru\npostal_code: 411001, 302001, 682001, 452001, 570001",
+  "questions": {
+    "pan": {
+      "type": "noul",
+      "instructions": "Do any pan_number values match a person's Indian PAN tax identifier? A PAN is a ten-character code with five letters, four digits, and one final letter."
+    },
+    "dob": {
+      "type": "noul",
+      "instructions": "Do date_of_birth values contain people's dates of birth? Dates can identify a person when linked to customer rows."
+    },
+    "address": {
+      "type": "noul",
+      "instructions": "Do street_address values contain people's home or street addresses? These are customer-linked rows."
+    },
+    "postcode": {
+      "type": "noul",
+      "instructions": "Do postal_code values contain customer postal codes? These identify a customer's approximate location when linked to the row."
+    }
+  }
+}

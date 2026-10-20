@@ -6,6 +6,7 @@ below from the repository root.
 | Environment | Setup | Published endpoints |
 | --- | --- | --- |
 | [BI tools](bi/README.md) | `docker compose -f dev/bi/compose.yml up -d --build` | Metabase `localhost:3000`, Redash `localhost:5000`, Superset `localhost:8088` |
+| [Decision model](decision-model/README.md) | `docker compose -f dev/decision-model/compose.yml -f dev/decision-model/compose.cuda.yml up -d --build --wait` | Laya `localhost:8000` |
 | [Snowflake emulator](snowflake/README.md) | `docker compose -f dev/snowflake/compose.yml up --build --wait` | Snowflake HTTP `localhost:64616` |
 
 Complete each environment's initial setup before starting it. They have separate
