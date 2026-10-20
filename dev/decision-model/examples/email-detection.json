@@ -1,0 +1,26 @@
+{
+  "model": "typed-decisions",
+  "state": "SQL: SELECT user_id, email FROM users;\nSample rows:\nemail: john.doe@gmail.com, jane.smith@outlook.com, bob.johnson871@gmail.com, alicewilliams.contact@yahoo.co.in, charlie.brown@gmail.com",
+  "questions": {
+    "phone": {
+      "type": "noul",
+      "instructions": "Do the sample values match a person's phone number? A phone number is a sequence of 10 digits prefixed by the country code."
+    },
+    "email": {
+      "type": "noul",
+      "instructions": "Do the sample values match a person's email address? An email address has a local part, an '@' symbol, and a domain."
+    },
+    "dob": {
+      "type": "noul",
+      "instructions": "Do the sample values contain people's dates of birth? It would be in a standard date format."
+    },
+    "address": {
+      "type": "noul",
+      "instructions": "Do the sample values contain people's home or street addresses? These are customer-linked rows."
+    },
+    "postcode": {
+      "type": "noul",
+      "instructions": "Do the sample values contain people's postal codes? These are also called as zip codes and identify a customer's approximate location."
+    }
+  }
+}
