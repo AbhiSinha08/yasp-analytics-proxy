@@ -8,22 +8,22 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 
 ## Component ownership
 
-| Component                       | Code                                                                                             | Responsibility                                                                                                                                                     |
-| ------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Host                            | [main.rs](../src/main.rs), [host/](../src/host)                                                  | CLI, environment resources, logging, compiled callback registration, and process lifecycle.                                                                        |
-| Configuration                   | [config.rs](../src/config.rs), [config/](../src/config)                                          | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs.                                                            |
-| Shared pgwire frontend          | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                      | Listener/shutdown and authentication in `server`/`session`; bounded parsing in `query`; profile response and error encoding in `result`.                 |
-| Shared execution | [execution.rs](../src/execution.rs), [execution/](../src/execution) | Ordered validation/discovery/context/routing stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects. |
-| SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery) | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                  |
-| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                              | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code. |
-| Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                           |
-| Shared schema catalog          | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work. |
-| Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                                                                                            |
-| Backend capacity                | [backend/budget.rs](../src/backend/budget.rs) | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation. |
-| PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                       |
-| Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
-| Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                                      | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                                        |
-| Support                         | [wire.rs](../src/wire.rs), [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                               | Shared pgwire value encoding, frame bounds before payload allocation and redacted logging setup. `policy.rs` is a future component placeholder.                                           |
+| Component                       | Code                                                                                                           | Responsibility                                                                                                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host                            | [main.rs](../src/main.rs), [host/](../src/host)                                                                | CLI, environment resources, logging, compiled callback registration, and process lifecycle.                                                                                                                 |
+| Configuration                   | [config.rs](../src/config.rs), [config/](../src/config)                                                        | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs.                                                                                                     |
+| Shared pgwire frontend          | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                                    | Listener/shutdown and authentication in `server`/`session`; bounded parsing in `query`; profile response and error encoding in `result`.                                                                    |
+| Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Ordered validation/discovery/context/routing stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                      |
+| SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery)               | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                                   |
+| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
+| Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                              | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                                                                    |
+| Shared schema catalog           | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work.                                                  |
+| Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)                           | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                        |
+| Backend capacity                | [backend/budget.rs](../src/backend/budget.rs)                                                                  | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation.                                                                            |
+| PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)                | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                                                                  |
+| Experimental Snowflake adapter  | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake)            | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
+| Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                            | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                              |
+| Support                         | [wire.rs](../src/wire.rs), [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                  | Shared pgwire value encoding, frame bounds before payload allocation and redacted logging setup. `policy.rs` is a future component placeholder.                                                             |
 
 ```mermaid
 flowchart LR
@@ -106,7 +106,8 @@ flowchart TD
     Explicit -->|yes| Pin[Validate affinity and pin first backend]
     Explicit -->|no| Eligible{Shared cache enabled and query eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
-    Lookup -->|hit| Replay[Replay validated frontend response]
+    Lookup -->|hit| Decisions[Load matching cached decisions without inference]
+    Decisions --> Replay[Replay unchanged response if classification setting allows]
     Lookup -->|miss or no budget| Allocate[Acquire source capacity]
     Eligible -->|no| Allocate
     Allocate --> Engine{Selected engine}
@@ -116,10 +117,13 @@ flowchart TD
     NativeRows --> NativeCleanup[Verify complete row count and release admission]
     NativeCleanup --> Complete
     Execute --> Stream[Stream native text rows]
+    Stream -.-> Classify[Optional shared bounded prefix classification before data rows]
+    NativeRows -.-> Classify
+    PinnedExecute -.-> Classify
     Stream --> Cleanup[Rollback, discard state, verify idle]
     Cleanup --> Complete[Send success completion]
     Complete --> Cacheable{Caching allowed and capture complete?}
-    Cacheable -->|yes| Store[Write bounded cache entry]
+    Cacheable -->|yes| Store[Atomically write raw cache entry and optional decision sidecars]
     Cacheable -->|no| Ready
     Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
     TxControl --> Ready
@@ -216,7 +220,6 @@ flowchart TD
     PG --> Release[Resource ownership ends and wakes waiters]
     SF --> Release
 ```
-
 
 ## Discovery and frontend state
 
@@ -360,3 +363,19 @@ mismatches become misses. Hits do not contact the backend, so grants and row-lev
 security are not rechecked until expiry. Buffer accounting and cache settings are in
 [configuration](configuration.md#redis-result-cache). Future policy and masking must
 process both hits and misses before client output.
+
+## Optional result classification
+
+`decision_model` owns the bounded REST contract and typed probability/confidence
+outcomes. `execution/classification.rs` pauses data-row output while collecting
+one bounded prefix and classifying each column. Backend execution and cleanup
+remain adapter-owned. Transactions use the same stage without Redis. The cache
+captures raw frames before this gate, associates complete raw entries with
+bounded column sidecars, and loads those sidecars on hits without inference.
+No masking or result modification runs. See [result classification](decision-model.md)
+for bounds, failure defaults, library registration, and the processing flow.
+
+The YAML host groups output context sources under `data_contexts`, with the active
+classifier configured at `data_contexts.decision_model`. AST parsing with a preset
+dictionary is a planned second source. Future result-processing hooks will receive
+both named contexts; their runtime contract remains planned.

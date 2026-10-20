@@ -214,3 +214,59 @@ fn limits_expiry_and_profile_role_warehouse_scopes_are_enforced() {
         },
     );
 }
+
+#[path = "support/decision_model.rs"]
+mod decision_mock;
+
+#[test]
+fn classification_is_shared_with_snowflake_and_replayed_without_inference() {
+    let mock = decision_mock::MockModel::new();
+    let url = std::env::var("YASP_TEST_REDIS_URL").unwrap();
+    for profile in ["postgresql", "redshift"] {
+        let namespace = RedisNamespace::new(&url, "sf_classification");
+        snowflake_host::with_config(
+            profile,
+            |config| {
+                configure(config, &namespace.name, 30, 100);
+                config["data_contexts"] =
+                    serde_json::json!({"decision_model": mock.settings(false)});
+            },
+            |_, _, query| {
+                mock.clear();
+                let sql = format!(
+                    "SELECT 'alice@example.com' AS \"{}\", NULL AS \"missing\"",
+                    namespace.name
+                );
+                let first = query(&sql);
+                assert_success(&first, "classified Snowflake result");
+                assert_eq!(mock.count(), 2);
+                let requests = mock.requests.lock().unwrap().clone();
+                assert!(
+                    requests
+                        .iter()
+                        .any(|r| r["state"]["samples"] == serde_json::json!(["alice@example.com"]))
+                );
+                assert!(
+                    requests
+                        .iter()
+                        .any(|r| r["state"]["samples"] == serde_json::json!([]))
+                );
+                assert_eq!(first.stdout, query(&sql).stdout);
+                assert_eq!(mock.count(), 2, "Snowflake hits reuse decisions");
+                let id = yasp::query::ParsedQuery::parse(&sql)
+                    .unwrap()
+                    .query_id()
+                    .to_owned();
+                let keys = String::from_utf8(redis(
+                    &url,
+                    &["KEYS", &format!("yasp:decision_cache:*:{id}:*")],
+                ))
+                .unwrap();
+                assert_eq!(keys.lines().count(), 2);
+                for key in keys.lines() {
+                    redis(&url, &["DEL", key]);
+                }
+            },
+        );
+    }
+}

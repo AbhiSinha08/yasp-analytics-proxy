@@ -13,9 +13,9 @@ pub use file::{
 };
 pub use runtime::{BackendConfig, GatewayConfig};
 pub use settings::{
-    ApplicationContextsSettings, BackendSettings, CacheSettings, DatasetSettings, GatewaySettings,
-    GatewayTls, HooksSettings, PythonHookKind, PythonHookSettings, PythonSettings, RustHookKind,
-    RustHookSettings, SelectorSettings,
+    ApplicationContextsSettings, BackendSettings, CacheSettings, DataContextsSettings,
+    DatasetSettings, GatewaySettings, GatewayTls, HooksSettings, PythonHookKind,
+    PythonHookSettings, PythonSettings, RustHookKind, RustHookSettings, SelectorSettings,
 };
 
 use std::io;
@@ -23,6 +23,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("invalid decision model endpoint, headers, questions, or limits")]
+    InvalidDecisionModel,
     #[error("invalid TLS configuration or certificate material")]
     InvalidTls,
     #[error("schema_discovery.target is required when multiple targets are configured")]

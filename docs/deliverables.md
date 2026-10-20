@@ -88,22 +88,26 @@
   - [x] **Refreshed schema catalog** — Import bounded PostgreSQL or Snowflake metadata into periodic generations, with explicit schema scope, source identity, status and age.
   - [x] **Frontend metadata compatibility** — Answer captured PostgreSQL/Redshift JDBC, Metabase, Redash and SQLAlchemy discovery queries from catalog facts, including Snowflake views and declared keys. PostgreSQL/Redshift profiles share the handlers.
   - [x] **Snowflake development environment** — Seed and persist a two-schema Go/DuckDB emulator reached through the Snowflake SQL API. The emulator does not expose VARCHAR lengths.
-- [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.\
+- [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.
   - [x] Dev Setup of Laya
-  - [ ] ...
+  - [x] **Shared result classification** — Optional System 1 REST client under `data_contexts.decision_model`, bounded first-prefix samples, and validated per-column probability/confidence outcomes.
+  - [x] **Decision cache and verification** — Associate column decisions with raw Redis entries; prove hit reuse, failure handling, bounds, cancellation, and both backends using HTTP mocks.
+  - [ ] **Dynamic masking** — Apply application-selected, schema-preserving masks using classification outcomes.
 - [ ] **AST Based Dynamic Masking**
+  - [ ] **AST dictionary data context** — Derive output context through AST parsing with a preset dictionary as a second `data_contexts` source.
   - [ ] **Column binding and lineage** — Pin a catalog generation, expand wildcards, resolve aliases/joins/CTEs/subqueries/expressions and expose ambiguous origins before policy-driven masking.
 - [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [x] **Redshift Gateway**
   - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.
   - [x] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
 - [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
-- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts.
+- [ ] **Result processing hooks** — Requires result-hook integrations and authorized result/cache contracts, with optional access to model classification and AST dictionary data contexts.
 - [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 
 ## Phase 3 — Advanced analytics and integrations
 
+- [ ] **Decision-model overload handling** — Improve decision model availability for concurrent results with many output columns.
 - [ ] **Benchmarking Framework**
 - [ ] **Cache Improvements**
   - [ ] **Incremental result caching** — Stream result chunks into Redis and replay them with bounded YASP memory, publishing only complete results.

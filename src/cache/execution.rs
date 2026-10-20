@@ -15,6 +15,7 @@ pub(crate) async fn execute<S>(
     request: ExecutionRequest<'_, '_>,
     frontend_database: &str,
     cache: Option<&RedisCache>,
+    model: Option<&crate::decision_model::DecisionModel>,
     output: &mut S,
     mut cancel: oneshot::Receiver<()>,
 ) -> ExecutionResult<()>
@@ -49,6 +50,15 @@ where
                         request.settings.max_message_bytes,
                     )
                 {
+                    if let Some(model) = model {
+                        let columns = response::columns(&entry.bytes);
+                        let results = tokio::select! {
+                            biased;
+                            _ = &mut cancel => return Err(ExecutionError::cancelled()),
+                            result = cache.classifications(&selected.target, &selected.backend_login, query_id, entry, &columns, model) => result,
+                        };
+                        model.check(&results, columns.len())?;
+                    }
                     tracing::debug!(query_id, client_id, target = %selected.target,
                         backend_login = %selected.backend_login, "query served from cache");
                     return response::replay(
@@ -68,10 +78,43 @@ where
             tracing::debug!(query_id, client_id, "cache miss or buffer limit reached");
         }
     }
-    let mut capture = CaptureSink::new(output, buffer, cache);
-    let completed_source = route.execute(request, &mut capture, cancel).await?;
-    if let (Some(cache), Some(identity), Some(buffer)) =
-        (cache, completed_source, capture.captured())
+    let (completed_source, mut buffer, classifications) = if let Some(model) = model {
+        let (mut sender, receiver) = crate::execution::classification::channel();
+        let (source_cancel, backend_cancel) = oneshot::channel();
+        let source_settings =
+            crate::execution::classification::source_settings(request.settings, model);
+        let source = async move {
+            let mut capture = CaptureSink::new(&mut sender, buffer, cache);
+            let result = route
+                .execute(
+                    ExecutionRequest {
+                        settings: &source_settings,
+                        ..request
+                    },
+                    &mut capture,
+                    backend_cancel,
+                )
+                .await;
+            (result, capture.take_buffer())
+        };
+        let ((result, buffer), classifications) = crate::execution::classification::run(
+            source,
+            receiver,
+            output,
+            model,
+            request.selection.query,
+            cancel,
+            source_cancel,
+            request.settings.write_timeout(),
+        )
+        .await?;
+        (result?, buffer, Some(classifications))
+    } else {
+        let mut capture = CaptureSink::new(output, buffer, cache);
+        let result = route.execute(request, &mut capture, cancel).await?;
+        (result, capture.take_buffer(), None)
+    };
+    if let (Some(cache), Some(identity), Some(buffer)) = (cache, completed_source, buffer.as_mut())
     {
         // Overflow may execute on a different physical source than the cache probe.
         // Publish only a complete, clean result under its actual source identity.
@@ -82,9 +125,22 @@ where
             cache.max_rows_per_query(),
             request.settings.max_message_bytes,
         ) {
-            cache
-                .put(&selected.target, &selected.backend_login, query_id, buffer)
-                .await;
+            if let (Some(model), Some(results)) = (model, classifications.as_ref()) {
+                cache
+                    .put_classified(
+                        &selected.target,
+                        &selected.backend_login,
+                        query_id,
+                        buffer,
+                        results,
+                        model,
+                    )
+                    .await;
+            } else {
+                cache
+                    .put(&selected.target, &selected.backend_login, query_id, buffer)
+                    .await;
+            }
         }
     }
     Ok(())

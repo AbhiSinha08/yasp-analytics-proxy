@@ -32,7 +32,7 @@ and Python examples are under [hooks/examples](../hooks/examples).
 
 | Stage             | Binding and data                                                                                                                              | Result/failure policy                                                                                                                                                                           |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Input options | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect. | Typed input grammar and native-query classification. No credentials, routing decisions, or discovery privileges. |
+| Input options     | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect.                                | Typed input grammar and native-query classification. No credentials, routing decisions, or discovery privileges.                                                                                |
 | Context           | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query.                   | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query.                                                                                      |
 | Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
 | Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
@@ -84,7 +84,6 @@ or cache lookup. PostgreSQL enforces explicit native source affinity; Snowflake
 forwards read-only data SQL without a dialect gate or translation. All backends and
 frontend/dialect combinations use the shared cache path when enabled; adapter
 validation still runs before a hit can replay.
-
 
 ## Owning shared datasets
 
@@ -170,8 +169,16 @@ use the optional reader. See the runnable [dataset examples](../hooks/README.md#
 
 ## Planned query and result stages
 
-Query rewrites, result callbacks, lifecycle hooks, engine policy/masking, and model
-integration have no active runtime contracts or accepted configuration yet. This is
+Optional [REST column classification](decision-model.md) exposes typed requests and
+probability/confidence outcomes through `decision_model` and
+`GatewayConfig::with_decision_model`. It does not invoke result callbacks or apply masks.
+The YAML host configures it under `data_contexts.decision_model`. Future
+result-processing hooks will receive named data contexts from model classification
+and AST parsing with a preset dictionary. The AST source and hook request contract
+remain planned.
+
+Query rewrites, result callbacks, lifecycle hooks, and engine policy/masking
+have no active runtime contracts or accepted configuration yet. This is
 the intended direction, not the current [query pipeline](architecture.md#query-flow):
 
 ```mermaid
@@ -180,7 +187,8 @@ flowchart TD
     Rewrite --> Validate[Revalidate SQL and binds]
     Validate --> Route[Role selection and configured bounds]
     Route --> Source[Load source result from cache or backend]
-    Source --> Transform[Optional result transformations]
+    Source --> DataContexts[Data contexts: model classification and planned AST dictionary]
+    DataContexts --> Transform[Optional result transformations with data contexts]
     Transform --> Mask[Mandatory policy and masking]
     Mask --> Check[Validate schema, types, rows and bytes]
     Check --> Client[Client response]
@@ -201,29 +209,30 @@ values, and handle NULLs and duplicate column names by ordinal/metadata. Optiona
 transformations precede mandatory masks; later hooks cannot restore raw values.
 Run policy and masking on both cache hits and misses. A partially emitted result
 cannot be retracted; whole-result decisions require bounded buffering or conservative
-masking before output. Model confidence/failure policy and cache generations belong
-to that future contract. See [Phase 2](PLAN.md#phase-2--additional-engines-dynamic-masking-and-management).
+masking before output. Mask thresholds, mandatory-mask failure policy, and policy
+generations belong to that future contract. Classification already has bounded
+availability and cache-association contracts. See [Phase 2](PLAN.md#phase-2--additional-engines-dynamic-masking-and-management).
 
 ## Adding capabilities when their phase is active
 
-| Capability                                | Local ownership and required proof                                                                                                                                                                                                                                                                                                                         |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capability                                | Local ownership and required proof                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Another backend                           | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and source-identity cache isolation before declaring support. Shared execution supplies cache policy and response encoding; adapters do not opt into caching. |
-| Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders.             |
-| RBAC and identity mapping                 | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output.                                                                                                                    |
-| Query/result/lifecycle hooks              | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry.                                                                                                                                    |
-| Load balancing                            | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and prepared-state pinning are later milestones.                                                       |
-| Management or UI                          | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet.                                                                           |
+| Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders.                                                                                                                        |
+| RBAC and identity mapping                 | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output.                                                                                                                                                                                                                               |
+| Query/result/lifecycle hooks              | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry.                                                                                                                                                                                                                                               |
+| Load balancing                            | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and prepared-state pinning are later milestones.                                                                                                                                                                              |
+| Management or UI                          | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet.                                                                                                                                                                                      |
 
 ### Observed SQL context from local BI traffic
 
 The 2026-10-18 local capture showed these chart-query formats:
 
-| Tool | SQL shape observed | Context available in the captured SQL |
-| ---- | ----------------- | ------------------------------------- |
-| Metabase | A leading line comment, `-- Metabase:: userID: <id> queryType: <type> queryHash: <hash>`, followed by native SQL. The session also sent `SET application_name = 'Metabase v0.64.2.8 [<instance-id>]'`. | `userID`, `queryType` (observed as `native`), and `queryHash`; the application name identifies the client version and instance. Repeated runs retained the query hash. |
-| Redash | A leading block comment, `/* user_id: <id>, query_id: <id>, Job ID: <uuid>, Query Hash: <hash>, Scheduled: <bool> */`, followed by SQL. | User, saved-query, job, hash, and scheduled-run fields. The capture showed `Scheduled: False`; repeated runs kept the saved-query ID and hash while changing the job ID. |
-| Superset | Generated SQL wraps a query as `SELECT ... FROM ( <dataset SQL> ) AS virtual_table`, often with outer grouping, ordering, or a `LIMIT 1000`. | No native user/query comment or equivalent SQL marker was visible. The test charts deliberately included a string literal such as `'Superset' AS bi_tool_name`; this is a test marker, not metadata emitted by Superset, and the outer query may omit it from its output columns. |
+| Tool     | SQL shape observed                                                                                                                                                                                     | Context available in the captured SQL                                                                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metabase | A leading line comment, `-- Metabase:: userID: <id> queryType: <type> queryHash: <hash>`, followed by native SQL. The session also sent `SET application_name = 'Metabase v0.64.2.8 [<instance-id>]'`. | `userID`, `queryType` (observed as `native`), and `queryHash`; the application name identifies the client version and instance. Repeated runs retained the query hash.                                                                                                            |
+| Redash   | A leading block comment, `/* user_id: <id>, query_id: <id>, Job ID: <uuid>, Query Hash: <hash>, Scheduled: <bool> */`, followed by SQL.                                                                | User, saved-query, job, hash, and scheduled-run fields. The capture showed `Scheduled: False`; repeated runs kept the saved-query ID and hash while changing the job ID.                                                                                                          |
+| Superset | Generated SQL wraps a query as `SELECT ... FROM ( <dataset SQL> ) AS virtual_table`, often with outer grouping, ordering, or a `LIMIT 1000`.                                                           | No native user/query comment or equivalent SQL marker was visible. The test charts deliberately included a string literal such as `'Superset' AS bi_tool_name`; this is a test marker, not metadata emitted by Superset, and the outer query may omit it from its output columns. |
 
 Treat comment fields such as `userID` and `user_id` as client-supplied hints, never as authenticated identity or authorization evidence. The SQL log records query text and execution/cache events, but does not identify whether a run came from a dashboard refresh, a chart view, a download, or an embed. The failed support-ticket join still appeared in the received SQL, so failures do not change the observed envelope. A YASP cache hit appears as a cache-served event rather than a new backend execution.
 

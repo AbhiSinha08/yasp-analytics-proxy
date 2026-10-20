@@ -22,8 +22,8 @@ MODEL_ID = os.getenv("LAYA_MODEL", "convaiinnovations/laya-typed-decisions")
 DEVICE = os.getenv("LAYA_DEVICE", "auto").lower()
 HOST = os.getenv("LAYA_HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8001"))
-MAX_CONCURRENT = int(os.getenv("LAYA_MAX_CONCURRENT", "8"))
-MAX_TOKEN_BUDGET = int(os.getenv("LAYA_MAX_TOKEN_BUDGET", "2048"))
+MAX_CONCURRENT = int(os.getenv("LAYA_MAX_CONCURRENT", "64"))
+MAX_TOKEN_BUDGET = int(os.getenv("LAYA_MAX_TOKEN_BUDGET", "1024"))
 THREADS = int(os.getenv("LAYA_THREADS", "4"))
 LOG_LEVEL = os.getenv("LAYA_LOG_LEVEL", "debug").lower()
 REQUIRE_GPU = os.getenv("LAYA_REQUIRE_GPU", "0") == "1"
@@ -140,6 +140,7 @@ def decision_response(raw: dict[str, Any]) -> dict[str, Any]:
 def create_app(agent: Any) -> FastAPI:
     # Requests can be admitted concurrently, but this shared model runs one inference at a time.
     inference_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="laya-infer")
+    inference_slots = asyncio.Semaphore(MAX_CONCURRENT)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -154,6 +155,9 @@ def create_app(agent: Any) -> FastAPI:
 
     @app.post("/v1/systemone")
     async def system_one_decision(payload: JevRequest) -> dict[str, Any]:
+        # Count pending/running model work, independently of idle HTTP connections.
+        if inference_slots.locked():
+            raise HTTPException(status_code=503, detail="Decision model is at capacity")
         # Laya accepts plain strings as state, but normalize them to its text object shape.
         state = {"text": payload.state} if isinstance(payload.state, str) else payload.state
         predict = partial(agent.predict, state=state, questions=payload.questions)
@@ -162,8 +166,16 @@ def create_app(agent: Any) -> FastAPI:
 
         loop = asyncio.get_running_loop()
         started = time.perf_counter()
+        await inference_slots.acquire()
         try:
-            raw = await loop.run_in_executor(inference_pool, predict)
+            pending = loop.run_in_executor(inference_pool, predict)
+        except BaseException:
+            inference_slots.release()
+            raise
+        # A disconnected/cancelled caller must not release running model capacity.
+        pending.add_done_callback(lambda _: inference_slots.release())
+        try:
+            raw = await asyncio.shield(pending)
             response = decision_response(raw)
             # Log performance and token metadata only; never log SQL or sampled values.
             logger.debug(
@@ -188,7 +200,6 @@ def main() -> None:
         host=HOST,
         port=PORT,
         workers=1,
-        limit_concurrency=MAX_CONCURRENT,
         log_level=LOG_LEVEL,
         access_log=True,
     )

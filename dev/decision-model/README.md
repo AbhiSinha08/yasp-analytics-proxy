@@ -41,3 +41,7 @@ answer and can therefore be high for “no”. The adapter omits Laya's duplicat
 
 Automated YASP tests should mock the decision API and must not install Laya or
 download model weights. Stop the server with Ctrl+C.
+
+YASP's optional runtime integration is documented in [result classification](../../docs/decision-model.md).
+A fine-tuned checkpoint can be selected through `LAYA_MODEL`; model training is
+independent of the gateway.

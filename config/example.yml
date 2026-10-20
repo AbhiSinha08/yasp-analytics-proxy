@@ -159,6 +159,20 @@ cache:
   #   params:
   #     excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
 
+# Optional output data context; omitting decision_model disables classification.
+# See docs/decision-model.md. AST dictionary context is planned for this group.
+# data_contexts:
+#   decision_model:
+#     endpoint: http://127.0.0.1:8001/v1/systemone
+#     sample_size: 5
+#     timeout_ms: 2000
+#     fail_on_error: false
+#     headers_env:
+#       Authorization: YASP_MODEL_AUTHORIZATION # Complete header value from env/.env.
+#     questions:
+#       email: "Do these values contain email addresses?"
+#       phone: "Do these values contain telephone numbers?"
+
 hooks:
   # Optional compiled pre-parse hint resolver. Missing/MBQL/malformed remarks
   # retain the frontend dialect. The repository YAML host configures PostgreSQL

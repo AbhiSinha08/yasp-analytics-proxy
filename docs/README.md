@@ -3,7 +3,8 @@
 YASP is a reusable SQL proxy library and a local host application. The current
 runtime supports a bounded PostgreSQL simple-query subset, configured source-role
 routing, application context hooks, shared JSON datasets, metadata discovery, and an
-optional Redis cache, with optional verified TLS for PostgreSQL and Redis.
+optional Redis cache and System 1 result classification, with optional verified TLS
+for PostgreSQL and Redis.
 
 | Read                                                               | For                                                                                                              |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -16,6 +17,7 @@ optional Redis cache, with optional verified TLS for PostgreSQL and Redis.
 | [Tests](../tests/README.md)                                        | Isolated test services, fixtures, requirements, and Cargo filters.                                               |
 | [Multi-engine compatibility](multi-engine.md)                      | Frontend profiles, Snowflake execution and metadata, SQL API execution limits, and remaining compatibility work. |
 | [Shared schema catalog](catalog.md)                                | Stored schema generations, periodic refresh, frontend metadata handlers, and the future AST lineage boundary.    |
+| [Result classification](decision-model.md)                         | Optional System 1 REST classification, bounded samples, failures, and Redis decision sidecars.                   |
 | [Plan](PLAN.md)                                                    | Product direction, phase boundaries, and planned capabilities.                                                   |
 | [Source access and compute routing](source-access-routing-plan.md) | Partial selector decisions, compute types, overflow, shared budgets, and future queuing.                         |
 

@@ -85,22 +85,23 @@ explicitly and keep product direction in the plan.
 [Cargo.toml](../Cargo.toml) selects features; [Cargo.lock](../Cargo.lock) pins the host
 application's resolved versions. Library consumers resolve their own graph.
 
-| Direct dependency family                     | Current purpose                                                                                                         |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Tokio 1.53                                   | Runtime, networking, queues, deadlines, and signals; selected features rather than `full`.                              |
-| pgwire 0.41                                  | PostgreSQL frontend and backend protocol with `server-api-ring` and `client-api-ring`; native text values and metadata. |
-| deadpool 0.13                                | Managed bounded PostgreSQL connection pools with Tokio runtime support.                                                 |
-| sqlparser 0.63 with `visitor`                | Bounded PostgreSQL AST inspection; syntax checks do not replace database authorization.                                 |
-| Serde 1, serde-saphyr 1.3, serde_json 1      | Strict typed YAML configuration and bounded JSON hook/context values. JSON is not the database result codec.            |
-| thiserror 2                                  | Typed library error categories.                                                                                         |
-| tracing 0.1, tracing-subscriber 0.3          | Library events and host-installed stdout filtering.                                                                     |
-| futures 0.3, async-trait 0.1, tokio-util 0.7 | Streaming protocol handlers and framed asynchronous I/O.                                                                |
-| dotenvy 0.15                                 | Host-only `.env` iterator parsing without environment mutation.                                                         |
-| Redis 1.7                                    | Asynchronous multiplexed cache/dataset connections with `tokio-rustls-comp`.                                            |
-| Rustls 0.23 and rustls-native-certs 0.8      | TLS 1.2/1.3, certificate/hostname verification, PEM parsing, and system trust roots; Ring matches pgwire.               |
-| sha2 0.11, bytes 1                           | Query/cache scope hashes and bounded native protocol buffers.                                                           |
-| PyO3 0.29, optional                          | Trusted embedded Python; Rust-only builds do not link CPython.                                                          |
-| reqwest 0.12, jsonwebtoken 9, rsa 0.9, pkcs8 0.10, base64 0.22, uuid 1 and chrono 0.4, optional | Snowflake SQL API HTTPS, RSA key-pair JWTs, encrypted PEM loading, request IDs and exact temporal conversion; enabled by `snowflake`. |
+| Direct dependency family                                                          | Current purpose                                                                                                         |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Tokio 1.53                                                                        | Runtime, networking, queues, deadlines, and signals; selected features rather than `full`.                              |
+| pgwire 0.41                                                                       | PostgreSQL frontend and backend protocol with `server-api-ring` and `client-api-ring`; native text values and metadata. |
+| deadpool 0.13                                                                     | Managed bounded PostgreSQL connection pools with Tokio runtime support.                                                 |
+| sqlparser 0.63 with `visitor`                                                     | Bounded PostgreSQL AST inspection; syntax checks do not replace database authorization.                                 |
+| Serde 1, serde-saphyr 1.3, serde_json 1                                           | Strict typed YAML configuration and bounded JSON hook/context values. JSON is not the database result codec.            |
+| thiserror 2                                                                       | Typed library error categories.                                                                                         |
+| tracing 0.1, tracing-subscriber 0.3                                               | Library events and host-installed stdout filtering.                                                                     |
+| futures 0.3, async-trait 0.1, tokio-util 0.7                                      | Streaming protocol handlers and framed asynchronous I/O.                                                                |
+| dotenvy 0.15                                                                      | Host-only `.env` iterator parsing without environment mutation.                                                         |
+| Redis 1.7                                                                         | Asynchronous multiplexed cache/dataset connections with `tokio-rustls-comp`.                                            |
+| Rustls 0.23 and rustls-native-certs 0.8                                           | TLS 1.2/1.3, certificate/hostname verification, PEM parsing, and system trust roots; Ring matches pgwire.               |
+| sha2 0.11, bytes 1                                                                | Query/cache scope hashes and bounded native protocol buffers.                                                           |
+| PyO3 0.29, optional                                                               | Trusted embedded Python; Rust-only builds do not link CPython.                                                          |
+| reqwest 0.12                                                                      | Bounded System 1 REST classification and Snowflake SQL API HTTPS.                                                       |
+| jsonwebtoken 9, rsa 0.9, pkcs8 0.10, base64 0.22, uuid 1 and chrono 0.4, optional | Snowflake RSA key-pair JWTs, encrypted PEM loading, request IDs and exact temporal conversion; enabled by `snowflake`.  |
 
 Additional backend/model SDKs and management frameworks belong to
 their active milestones. Choose compatible versions/features and prove native type,

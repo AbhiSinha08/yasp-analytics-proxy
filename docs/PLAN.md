@@ -39,7 +39,7 @@ introduce only the contracts needed by the current phase.
 | Policy                       | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks.                           | Database access controls remain authoritative; masking preserves the result schema.                                                                               |
 | Extensions                   | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks.                                                | Contracts belong to the library; organization implementations live outside core engine code.                                                                      |
 | Result cache                 | Store source results for a limited time, then apply current engine processing.                                                         | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
-| Schema catalog               | Store source definitions in bounded immutable generations and refresh them periodically. | Source identity, exact names and native types are shared by frontend metadata and future AST binders; schema facts do not authorize access or apply masks. |
+| Schema catalog               | Store source definitions in bounded immutable generations and refresh them periodically.                                               | Source identity, exact names and native types are shared by frontend metadata and future AST binders; schema facts do not authorize access or apply masks.        |
 | Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance.                                                 | Shared configuration names the client protocol and each target's engine explicitly.                                                                               |
 
 The gateway passes execution requests to the backend boundary rather than opening
@@ -526,7 +526,7 @@ through a System 1 decision model, and authenticated management tools.
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend adapters             | Add a selected warehouse engine, such as Redshift or Snowflake, with its own execution, metadata, type, and session rules.                                                                                                  |
 | Gateway and dialect handling | Publish which frontend/backend combinations work. Add explicit translation for a supported SQL subset where needed; reject unsupported combinations.                                                                        |
-| Shared execution contract    | Use concrete source/session dispatch and typed execution contracts. Preserve opaque PostgreSQL values; extend adapters after their connector gates pass.                                                                                 |
+| Shared execution contract    | Use concrete source/session dispatch and typed execution contracts. Preserve opaque PostgreSQL values; extend adapters after their connector gates pass.                                                                    |
 | Decision model and masking   | Classify result data and apply dynamic, policy-driven masks before forwarding results.                                                                                                                                      |
 | Management service           | Add authenticated APIs for configuration inspection, health, and cache clearing; use Axum if an embedded HTTP service fits.                                                                                                 |
 | Admin UI and SQL Studio      | Manage routing/access mappings and inspect query results through the same authorized execution path.                                                                                                                        |
@@ -575,11 +575,18 @@ before dynamic masking. Metadata snapshots alone do not establish result lineage
 
 ### System 1 decision-model integration and dynamic masking
 
-- Integrate a configurable lightweight decision model through result-processing
-  hooks. Use column metadata and bounded result samples or batches to classify
-  columns, returning data tags and scores to the masking policy.
-- An application-supplied model adapter provides classification without coupling the
-  core engine to a provider SDK. The policy combines it with context and the
+Optional REST column classification is implemented across backends, using one
+bounded prefix, typed probabilities/confidence, and cache-associated decisions.
+See [result classification](decision-model.md). Masking and general result hooks
+remain planned; the following requirements describe their intended integration.
+
+- Group output context sources under `data_contexts`. The active `decision_model`
+  source supplies bounded classification outcomes. Add AST parsing with a preset
+  dictionary as a second source in a later stage, and expose both named contexts
+  to result-processing hooks and masking policy when those stages are implemented.
+- The application supplies the classification endpoint and questions; the shared
+  REST client requires no provider SDK. The future masking policy combines its
+  outcomes with context and the
   selected source role to decide which values or columns to mask dynamically. Apply masks before
   forwarding affected data to the BI client, preserving column types and schema.
 - Classification needed for a batch must complete before that batch is emitted.
@@ -607,8 +614,8 @@ before dynamic masking. Metadata snapshots alone do not establish result lineage
 - Keep source results separate from processed output. On cache hits and misses, apply
   current engine RBAC, result hooks, and mandatory masks before returning data. These
   processing stages are planned; they are not implemented in the current runtime.
-- Choose the model/provider and confidence policy when this component is designed.
-  No specific model SDK or implementation is required in Phase 1.
+- The application configures its REST model and questions. Confidence thresholds
+  and mandatory-mask failure policy belong to the future masking stage.
 
 If an HTTP API suffices, use the consuming application's existing HTTP client before
 adding a provider SDK. Local inference libraries and native/GPU dependencies belong

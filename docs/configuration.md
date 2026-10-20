@@ -148,7 +148,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 
 | Setting under `gateway` | Default          | Meaning                                                                                 |
 | ----------------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `protocol`              | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS). |
+| `protocol`              | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS).           |
 | `listen`                | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
 | `max_sessions`          | 32               | Normal frontend session capacity.                                                       |
 | `max_message_bytes`     | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
@@ -292,14 +292,14 @@ query fixtures; this does not establish general BI compatibility.
 For the Redshift gateway, use the Amazon Redshift JDBC driver with these connection
 properties in Metabase or DBeaver:
 
-| Property | Value | Purpose |
-| --- | --- | --- |
-| `preferQueryMode` | `simple` | Use the supported wire protocol. |
-| `compression` | `off` | Disable Redshift protocol compression. |
-| `ApplicationName` | `yasp` | Supply an explicit name within the 63-byte limit. |
-| `ssl` | `true` | Redshift password authentication requires gateway TLS. |
-| `sslmode` | `verify-full` | Verify both the certificate chain and hostname. |
-| `sslrootcert` | Path to the issuing CA certificate | Trust a private CA without disabling verification. |
+| Property          | Value                              | Purpose                                                |
+| ----------------- | ---------------------------------- | ------------------------------------------------------ |
+| `preferQueryMode` | `simple`                           | Use the supported wire protocol.                       |
+| `compression`     | `off`                              | Disable Redshift protocol compression.                 |
+| `ApplicationName` | `yasp`                             | Supply an explicit name within the 63-byte limit.      |
+| `ssl`             | `true`                             | Redshift password authentication requires gateway TLS. |
+| `sslmode`         | `verify-full`                      | Verify both the certificate chain and hostname.        |
+| `sslrootcert`     | Path to the issuing CA certificate | Trust a private CA without disabling verification.     |
 
 In Metabase, choose **Amazon Redshift**, enable SSL, and paste the following into
 **Additional JDBC connection string options**, adjusting the certificate path:
@@ -349,7 +349,7 @@ result cache. For SQLAlchemy connections, set the engine's `isolation_level` to
 `AUTOCOMMIT`. In BI connection settings that accept `engine_params` JSON, use:
 
 ```json
-{"engine_params":{"isolation_level":"AUTOCOMMIT"}}
+{ "engine_params": { "isolation_level": "AUTOCOMMIT" } }
 ```
 
 For direct psycopg2 connections, set `connection.autocommit = True`.
@@ -514,11 +514,11 @@ Gateway credentials and TLS retain their ordinary configuration.
 
 A target uses `engine: snowflake`, `database`, and a `snowflake` mapping:
 
-| Field | Meaning |
-| --- | --- |
-| `account`, `schema`, `warehouse` | Explicit Snowflake connection coordinates. |
-| `emulator` | Optional numeric loopback HTTP endpoint for local tests only; omit for verified Snowflake HTTPS. |
-| `max_response_bytes` | Bound on each decompressed JSON response, default 64 MiB; valid range 1 KiB–128 MiB. Includes one result partition and its metadata. |
+| Field                            | Meaning                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `account`, `schema`, `warehouse` | Explicit Snowflake connection coordinates.                                                                                           |
+| `emulator`                       | Optional numeric loopback HTTP endpoint for local tests only; omit for verified Snowflake HTTPS.                                     |
+| `max_response_bytes`             | Bound on each decompressed JSON response, default 64 MiB; valid range 1 KiB–128 MiB. Includes one result partition and its metadata. |
 
 Each Snowflake login supplies `username`, `role` and `private_key_file` (a PKCS#8
 RSA PEM file, 2048–4096 bits). Paths resolve relative to the YAML file. An optional
@@ -574,3 +574,16 @@ including interrupted submissions without a returned handle. See [SQL API execut
 limits](multi-engine.md#sql-api-execution-and-values). The [normal test
 runner](../tests/README.md) owns disposable Docker fixtures and temporary keys;
 `python3 scripts/test.py --full` includes this coverage.
+
+## Result classification
+
+The optional `data_contexts.decision_model` block configures the System 1 endpoint,
+questions, non-null sample count (default 5), query-wide inference timeout
+(default 2,000 ms), environment-based HTTP headers, and `fail_on_error`
+(default false). Omitting the block disables classification. See
+[result classification](decision-model.md) for the complete configuration,
+failure behavior, bounded sampling, library API, and decision-cache layout.
+`data_contexts` groups context about output data. AST parsing with a preset
+dictionary is a planned second source in this group. Future result-processing
+hooks will have access to both sources; AST context and result hooks are not
+implemented yet.

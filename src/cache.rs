@@ -1,5 +1,6 @@
 //! Shared, bounded result caching for every backend and pgwire frontend.
 
+mod classification;
 mod execution;
 mod response;
 pub(crate) use execution::execute;
@@ -31,6 +32,7 @@ pub struct RedisCache {
 
 pub(crate) struct CacheBuffer {
     pub(crate) bytes: BytesMut,
+    pub(crate) association: Option<[u8; 32]>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -92,6 +94,7 @@ impl RedisCache {
         bytes.extend_from_slice(scope);
         Some(CacheBuffer {
             bytes,
+            association: None,
             _permit: permit,
         })
     }
@@ -124,13 +127,29 @@ impl RedisCache {
         if let Some(Value::BulkString(value)) = self.command(cmd).await
             && value.len() > HEADER_BYTES
             && value.len() <= self.max_entry_bytes()
-            && value.starts_with(MAGIC)
+            && (value.starts_with(MAGIC) || value.starts_with(classification::CLASSIFIED_MAGIC))
             && &value[MAGIC.len()..HEADER_BYTES] == scope
         {
+            let (header, association) = if value.starts_with(classification::CLASSIFIED_MAGIC) {
+                if value.len() <= classification::CLASSIFIED_HEADER {
+                    return false;
+                }
+                (
+                    classification::CLASSIFIED_HEADER,
+                    Some(
+                        value[HEADER_BYTES..classification::CLASSIFIED_HEADER]
+                            .try_into()
+                            .unwrap(),
+                    ),
+                )
+            } else {
+                (HEADER_BYTES, None)
+            };
             buffer.bytes = Bytes::from(value)
                 .try_into_mut()
                 .expect("unshared Redis response");
-            buffer.bytes.advance(HEADER_BYTES);
+            buffer.association = association;
+            buffer.bytes.advance(header);
             return true;
         }
         false
@@ -214,14 +233,15 @@ pub(crate) fn cache_key(
     backend_login: &str,
     query_id: &str,
 ) -> String {
-    let component = |name: &str| {
-        name.replace('%', "%25")
-            .replace(':', "%3A")
-            .replace('_', "%5F")
-    };
     format!(
         "{namespace}:{}_{}:{query_id}",
-        component(target),
-        component(backend_login)
+        escape_component(target),
+        escape_component(backend_login)
     )
+}
+
+fn escape_component(name: &str) -> String {
+    name.replace('%', "%25")
+        .replace(':', "%3A")
+        .replace('_', "%5F")
 }

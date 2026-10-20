@@ -12,7 +12,7 @@ default = []
 client-tests = []
 # Rust-only hosts do not need a Python installation or libpython.
 python = ["dep:pyo3"]
-snowflake = ["dep:reqwest", "dep:jsonwebtoken", "dep:rsa", "dep:pkcs8", "dep:base64", "dep:uuid", "dep:chrono"]
+snowflake = ["dep:jsonwebtoken", "dep:rsa", "dep:pkcs8", "dep:base64", "dep:uuid", "dep:chrono"]
 
 [dependencies]
 async-trait = "0.1"
@@ -35,7 +35,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 sha2 = "0.11"
 bytes = "1"
-reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
 jsonwebtoken = { version = "9", optional = true }
 rsa = { version = "0.9", optional = true }
 pkcs8 = { version = "0.10", optional = true, features = ["encryption", "pem"] }

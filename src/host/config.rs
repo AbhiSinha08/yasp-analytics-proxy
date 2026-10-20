@@ -15,6 +15,7 @@ pub(super) struct HostConfig {
     pub(super) file: FileConfig,
     pub(super) log_level: String,
     pub(super) cache_url: Option<String>,
+    pub(super) decision_model: Option<std::sync::Arc<yasp::decision_model::DecisionModel>>,
     pub(super) application_contexts_url: Option<String>,
 }
 
@@ -57,6 +58,28 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
             Err(_) => Err(io::Error::other(format!("invalid {label}"))),
         }
     };
+    let decision_model = file
+        .data_contexts
+        .decision_model
+        .as_ref()
+        .map(|settings| {
+            let headers = settings
+                .headers_env
+                .iter()
+                .map(|(name, variable)| {
+                    Ok((
+                        name.clone(),
+                        required(
+                            variable,
+                            "decision model authentication environment variable",
+                        )?,
+                    ))
+                })
+                .collect::<Result<std::collections::BTreeMap<_, _>, io::Error>>()?;
+            yasp::decision_model::DecisionModel::new(settings.clone(), headers)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()?;
     let gateway = GatewayConfig::new(
         required("YASP_GATEWAY_USERNAME", "YASP_GATEWAY_USERNAME")?,
         required("YASP_GATEWAY_PASSWORD", "YASP_GATEWAY_PASSWORD")?,
@@ -222,6 +245,7 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         file,
         log_level,
         cache_url,
+        decision_model,
         application_contexts_url,
     })
 }

@@ -1,6 +1,7 @@
 //! Ordered execution policy shared by the pgwire frontend profiles. Source
 //! representation, session SQL, admission, and cleanup belong to backend adapters.
 
+pub(crate) mod classification;
 mod transaction;
 pub(crate) use transaction::{Transaction, TransactionStatus};
 
@@ -29,6 +30,7 @@ pub(crate) struct QueryContext<'a> {
     pub database: &'a str,
     pub profile: FrontendProfile,
     pub cache: Option<&'a RedisCache>,
+    pub decision_model: Option<&'a crate::decision_model::DecisionModel>,
     pub context_hook: Option<&'a ContextHook>,
     pub datasets: Option<&'a DatasetReader>,
     pub stopped: watch::Receiver<bool>,
@@ -130,6 +132,40 @@ impl<'backend> QuerySession<'_, 'backend> {
         };
         route.validate_input(query)?;
         if self.transaction.active() {
+            if let Some(model) = self.source.decision_model {
+                let (sender, receiver) = classification::channel();
+                let (source_cancel, backend_cancel) = oneshot::channel();
+                let source_settings = classification::source_settings(self.settings, model);
+                let source = async {
+                    let mut sender = sender;
+                    self.transaction
+                        .execute(
+                            &route,
+                            SessionRequest {
+                                query,
+                                session: self.session,
+                                settings: &source_settings,
+                                client_id: self.client_id,
+                            },
+                            &mut sender,
+                            backend_cancel,
+                        )
+                        .await
+                };
+                classification::run(
+                    source,
+                    receiver,
+                    output,
+                    model,
+                    query,
+                    cancel,
+                    source_cancel,
+                    write_timeout,
+                )
+                .await?
+                .0?;
+                return Ok(None);
+            }
             return self
                 .transaction
                 .execute(
@@ -155,6 +191,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             },
             frontend_database,
             self.source.cache,
+            self.source.decision_model,
             output,
             cancel,
         )

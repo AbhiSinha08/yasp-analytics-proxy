@@ -10,6 +10,7 @@ pub struct GatewayConfig {
     pub(crate) settings: GatewaySettings,
     pub(crate) tls: Option<std::sync::Arc<crate::tls::ServerTls>>,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
+    pub(crate) decision_model: Option<std::sync::Arc<crate::decision_model::DecisionModel>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) input_options: Option<std::sync::Arc<crate::hooks::InputOptionsResolver>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
@@ -36,6 +37,7 @@ impl GatewayConfig {
             settings: GatewaySettings::default(),
             tls: None,
             cache: None,
+            decision_model: None,
             context_hook: None,
             input_options: None,
             schema_discovery: None,
@@ -93,6 +95,15 @@ impl GatewayConfig {
     /// Attach one process-wide cache, shared by all frontend sessions.
     pub fn with_cache(mut self, cache: std::sync::Arc<crate::cache::RedisCache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Classify bounded source samples without changing returned values.
+    pub fn with_decision_model(
+        mut self,
+        model: std::sync::Arc<crate::decision_model::DecisionModel>,
+    ) -> Self {
+        self.decision_model = Some(model);
         self
     }
 

@@ -36,8 +36,8 @@ impl<'a, S> CaptureSink<'a, S> {
         }
     }
 
-    pub(crate) fn captured(&mut self) -> Option<&mut CacheBuffer> {
-        self.buffer.as_mut()
+    pub(crate) fn take_buffer(&mut self) -> Option<CacheBuffer> {
+        self.buffer.take()
     }
 }
 
@@ -82,6 +82,31 @@ impl<S: Sink<ResultEvent> + Unpin> Sink<ResultEvent> for CaptureSink<'_, S> {
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut *self.get_mut().inner).poll_close(cx)
     }
+}
+
+/// Inspect only the metadata frame, without cloning a whole cached result.
+/// Callers have already validated the complete response framing.
+pub(super) fn columns(mut bytes: &[u8]) -> Vec<crate::decision_model::ColumnIdentity> {
+    while bytes.len() >= 5 {
+        let size = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize + 1;
+        if size > bytes.len() || size < 5 {
+            break;
+        }
+        if bytes[0] == b'T' {
+            let mut frame = bytes::BytesMut::from(&bytes[..size]);
+            let message = PgWireBackendMessage::decode(&mut frame, &DecodeContext::default());
+            drop(frame);
+            return message
+                .ok()
+                .flatten()
+                .and_then(|message| {
+                    crate::wire::sample_columns(&crate::wire::Response::from_message(message))
+                })
+                .unwrap_or_default();
+        }
+        bytes = &bytes[size..];
+    }
+    Vec::new()
 }
 
 /// Replay only a completely validated response. Cancellation is observed between

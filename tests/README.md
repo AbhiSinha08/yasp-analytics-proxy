@@ -20,6 +20,9 @@ PostgreSQL 18 binary directory if the runner cannot find it automatically.
 
 Decision-model integration tests must not start a live Laya server or download its
 weights. Mock the decision API and return representative responses instead.
+`decision_model` covers REST validation, shared PostgreSQL sampling, strict/advisory
+failures, and Redis decision reuse. `snowflake_cache` exercises the same classifier
+through both frontend profiles and the Snowflake emulator.
 
 Cargo arguments follow `--`, including individual scenarios:
 

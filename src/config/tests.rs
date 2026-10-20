@@ -11,6 +11,48 @@ fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
 const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
 
 #[test]
+fn optional_data_contexts_validate_nested_decision_model_configuration() {
+    let yaml = format!(
+        "version: 1\nschema_discovery: {{catalog: {{schemas: [public]}}}}\ntargets:\n{ONE_TARGET}\n"
+    );
+    for suffix in ["", "data_contexts: {}\n"] {
+        let config: FileConfig = serde_saphyr::from_str(&(yaml.clone() + suffix)).unwrap();
+        config.validate().unwrap();
+        assert!(config.data_contexts.decision_model.is_none());
+    }
+    let config: FileConfig = serde_saphyr::from_str(
+        &(yaml
+            + "data_contexts:\n  decision_model:\n    endpoint: http://127.0.0.1:8001/v1/systemone\n    questions:\n      email: Detect email addresses\n"),
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let model = config.data_contexts.decision_model.as_ref().unwrap();
+    assert_eq!(model.sample_size, 5);
+    assert_eq!(model.questions["email"], "Detect email addresses");
+
+    let value = serde_json::to_value(&config).unwrap();
+    assert!(value.get("decision_model").is_none());
+    let round_trip: FileConfig = serde_json::from_value(value.clone()).unwrap();
+    round_trip.validate().unwrap();
+
+    let mut invalid = value.clone();
+    invalid["data_contexts"]["decision_model"]["sample_size"] = 0.into();
+    assert!(matches!(
+        serde_json::from_value::<FileConfig>(invalid)
+            .unwrap()
+            .validate(),
+        Err(ConfigError::InvalidDecisionModel)
+    ));
+    let mut unknown = value.clone();
+    unknown["data_contexts"]["unknown"] = true.into();
+    assert!(serde_json::from_value::<FileConfig>(unknown).is_err());
+    let mut top_level = value;
+    top_level["decision_model"] = top_level["data_contexts"]["decision_model"].clone();
+    top_level.as_object_mut().unwrap().remove("data_contexts");
+    assert!(serde_json::from_value::<FileConfig>(top_level).is_err());
+}
+
+#[test]
 fn plaintext_remote_connections_require_no_certificate_material() {
     let mut gateway = GatewaySettings {
         listen: "0.0.0.0:6432".parse().unwrap(),

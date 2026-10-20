@@ -7,6 +7,9 @@ use pgwire::{
 
 pub(crate) struct Response(PgWireBackendMessage);
 impl Response {
+    pub(crate) fn from_message(message: PgWireBackendMessage) -> Self {
+        Self(message)
+    }
     pub(crate) fn into_wire(self) -> PgWireBackendMessage {
         self.0
     }
@@ -111,4 +114,55 @@ fn error_response(code: &str, message: &str) -> PgWireError {
         code.into(),
         message.into(),
     )))
+}
+
+/// Sampling inspects the frontend's already lossless text representation. Native
+/// backend codecs and PostgreSQL OIDs stay outside the model client.
+pub(crate) fn sample_columns(
+    response: &Response,
+) -> Option<Vec<crate::decision_model::ColumnIdentity>> {
+    let PgWireBackendMessage::RowDescription(description) = response.message() else {
+        return None;
+    };
+    Some(
+        description
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(ordinal, field)| crate::decision_model::ColumnIdentity {
+                ordinal,
+                name: field.name.clone(),
+                data_type: format!("pgwire:{}:{}", field.type_id, field.type_modifier),
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn sample_row(response: &Response) -> Option<Vec<Option<String>>> {
+    use bytes::Buf;
+    let PgWireBackendMessage::DataRow(row) = response.message() else {
+        return None;
+    };
+    let mut data = row.data.clone();
+    let mut values = Vec::with_capacity(row.field_count.max(0) as usize);
+    for _ in 0..row.field_count {
+        if data.remaining() < 4 {
+            return None;
+        }
+        let length = data.get_i32();
+        if length == -1 {
+            values.push(None);
+            continue;
+        }
+        let length = usize::try_from(length).ok()?;
+        if length > data.remaining() {
+            return None;
+        }
+        let bytes = data.split_to(length);
+        values.push(Some(std::str::from_utf8(&bytes).ok()?.to_owned()));
+    }
+    if data.has_remaining() {
+        return None;
+    }
+    Some(values)
 }

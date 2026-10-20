@@ -1,8 +1,8 @@
 //! YAML configuration loading, target topology, and route validation.
 
 use super::{
-    ApplicationContextsSettings, BackendSettings, CacheSettings, ConfigError, GatewaySettings,
-    HooksSettings, SelectorSettings, validate_value,
+    ApplicationContextsSettings, BackendSettings, CacheSettings, ConfigError, DataContextsSettings,
+    GatewaySettings, HooksSettings, SelectorSettings, validate_value,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
@@ -20,6 +20,8 @@ pub struct FileConfig {
     pub backend: BackendSettings,
     #[serde(default)]
     pub cache: CacheSettings,
+    #[serde(default)]
+    pub data_contexts: DataContextsSettings,
     #[serde(default)]
     pub application_contexts: ApplicationContextsSettings,
     #[serde(default)]
@@ -231,6 +233,9 @@ impl FileConfig {
         self.gateway.validate()?;
         self.hooks.python.validate()?;
         self.cache.validate()?;
+        if let Some(model) = &self.data_contexts.decision_model {
+            model.validate()?;
+        }
         self.application_contexts.validate()?;
         if let Some(catalog) = &self.schema_discovery.catalog {
             catalog.runtime()?;

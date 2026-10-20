@@ -4,6 +4,13 @@ use super::{ConfigError, validate_value};
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
 
+/// Optional sources of context about query output data.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DataContextsSettings {
+    pub decision_model: Option<crate::decision_model::DecisionModelSettings>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {

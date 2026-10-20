@@ -6,6 +6,7 @@ pub mod cache;
 pub mod catalog;
 pub mod config;
 pub mod datasets;
+pub mod decision_model;
 pub mod discovery;
 pub mod gateway;
 pub mod hooks;

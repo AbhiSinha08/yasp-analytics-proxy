@@ -44,6 +44,11 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 host.gateway
             };
+            let gateway = if let Some(model) = host.decision_model {
+                gateway.with_decision_model(model)
+            } else {
+                gateway
+            };
             let gateway = if let Some(context) = context {
                 gateway.with_context_hook(context)
             } else {
