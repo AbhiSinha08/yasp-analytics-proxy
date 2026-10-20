@@ -98,8 +98,22 @@ acceptance gate.
 emulator with two seeded schemas and persistent storage. Its documented fixture
 corrections expose actual definitions through Snowflake-shaped metadata. It has no
 access control and executes synchronously; focused HTTP tests separately exercise
-JWT validation, polling, partitions and response bounds. Emulator results do not
-establish real Snowflake grants, authentication, warehouse isolation or semantics.
+local JWT signature/claim validation, SQL API request identity, polling, partition
+sequencing and response bounds. Emulator results do not establish Snowflake-enforced
+authentication, grants, role/warehouse isolation, asynchronous execution or semantics.
+
+The account-free warehouse acceptance command is:
+
+```sh
+python3 scripts/test.py -- --all-targets --features snowflake
+```
+
+It runs the adapter tests and end-to-end gateway checks against a temporary emulator
+with a generated signing key. These checks cover request construction, partitioned
+values, frontend transaction affinity and recovery, deadlines, cancellation paths,
+and resource cleanup. They establish YASP's handling of the tested SQL API contract;
+they cannot verify controls enforced by Snowflake itself. Real account authentication,
+grants and role/warehouse isolation remain a deployment gate.
 
 ```sh
 python3 scripts/test.py --full
