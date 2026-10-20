@@ -198,9 +198,7 @@ fn limits_expiry_and_profile_role_warehouse_scopes_are_enforced() {
                 assert_success(&result, "result exceeding cache bounds still streams");
                 assert_eq!(redis(&url, &["EXISTS", &key(&namespace.name, &sql)]), b"0");
             }
-            let slow = format!(
-                "{NATIVE}SELECT SUM(RANDOM()) FROM TABLE(GENERATOR(ROWCOUNT => 100000000))"
-            );
+            let slow = format!("{NATIVE}SELECT SUM(RANDOM()) FROM range(1000000000)");
             let timed_out = query(&slow);
             assert!(!timed_out.status.success());
             assert!(String::from_utf8_lossy(&timed_out.stderr).contains("57014"));

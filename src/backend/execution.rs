@@ -172,7 +172,7 @@ pub(crate) enum PinnedSession<'a> {
     Snowflake {
         backend: &'a super::snowflake::SnowflakeBackend,
         selection: &'a crate::hooks::BackendSelection,
-        session: super::snowflake::worker::Session,
+        session: super::snowflake::session::Session,
     },
 }
 

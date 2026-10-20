@@ -583,16 +583,14 @@ fn snowflake_yaml_requires_its_feature_catalog_and_engine_specific_identity() {
     engine: snowflake
     database: YASP_DEMO
     snowflake:
-      driver_library: driver.so
-      driver_sha256_env: DRIVER_SHA
-      account: fakesnow
+      account: local
       schema: PUBLIC
       warehouse: LOCAL
       emulator: 127.0.0.1:64616
     logins:
       reader:
         username: fake
-        password_env: SNOW_PASSWORD
+        private_key_file: snowflake.p8
         role: PUBLIC"#,
         "  {}",
     );

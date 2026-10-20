@@ -10,7 +10,7 @@ impl SnowflakeBackend {
     pub(crate) fn execution_identity(&self) -> [u8; 32] {
         let source = &self.inner.catalog_identity;
         crate::backend::execution::identity(&[
-            "snowflake:text:v1",
+            "snowflake:sql-api:text:v1",
             &source.endpoint,
             &source.principal,
             source.role.as_deref().unwrap_or(""),

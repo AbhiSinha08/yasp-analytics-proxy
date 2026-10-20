@@ -3,9 +3,7 @@
 
 import argparse
 import contextlib
-import hashlib
 import uuid
-import urllib.request
 import json
 import os
 from pathlib import Path
@@ -237,25 +235,18 @@ def external_services(environment, features):
             environment["YASP_SQLALCHEMY_IMAGE"] = client_image
             environment |= {"YASP_JDBC_IMAGE": image, "YASP_JDBC_HOST": os.environ.get("YASP_JDBC_HOST", "host.docker.internal")}
         if "snowflake" in features:
-            build = ROOT / "target/compatibility/native-build/build.json"
-            patch = ROOT / "scripts/snowflake/snowflake-v1.11.0-prefetch.patch"
-            native = json.loads(build.read_text()) if build.exists() else {}
-            library = Path(native.get("library", "/missing"))
-            digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-            if not library.is_file() or native.get("library_sha256") != digest(library) or native.get("patch_sha256") != digest(patch):
-                subprocess.run([sys.executable, str(ROOT / "scripts/snowflake/build_native_driver.py")], check=True)
-                native = json.loads(build.read_text())
-                library = Path(native["library"])
-            environment |= {"YASP_SNOWFLAKE_DRIVER": str(library), "YASP_SNOWFLAKE_DRIVER_SHA256": digest(library)}
-            snowflake_image = "yasp-fakesnow-test:" + run_id
+            key = Path(environment["YASP_TEST_TLS_DIR"]) / "snowflake.p8"
+            subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(key)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            environment["YASP_SNOWFLAKE_PRIVATE_KEY_FILE"] = str(key)
+            snowflake_image = "yasp-snowflake-test:" + run_id
             images.append(snowflake_image)
             subprocess.run(["docker", "build", "--target", "server", "-f", "dev/snowflake/Dockerfile", "-t", snowflake_image, "."], cwd=ROOT, check=True)
             environment["YASP_SNOWFLAKE_IMAGE"] = snowflake_image
             container = "yasp-snowflake-test-" + run_id
             subprocess.run(["docker", "run", "-d", "--name", container,
                 "--label", "yasp.compatibility=" + run_id,
-                "-p", "127.0.0.1::64616", "--tmpfs", "/data:rw,size=256m",
-                environment["YASP_SNOWFLAKE_IMAGE"], "--test"], check=True, stdout=subprocess.DEVNULL)
+                "-p", "127.0.0.1::64616", "--tmpfs", "/data:rw,size=256m,uid=10001",
+                environment["YASP_SNOWFLAKE_IMAGE"]], check=True, stdout=subprocess.DEVNULL)
             port = subprocess.check_output(["docker", "inspect", container, "--format",
                 '{{(index (index .NetworkSettings.Ports "64616/tcp") 0).HostPort}}'], text=True).strip()
             endpoint = "127.0.0.1:" + port
@@ -278,16 +269,6 @@ def external_services(environment, features):
                     raise RuntimeError("disposable Snowflake fixture did not become ready")
                 time.sleep(0.2)
         yield environment
-        if container:
-            deadline = time.monotonic() + 5
-            while True:
-                with urllib.request.urlopen("http://" + environment["YASP_SNOWFLAKE_ENDPOINT"] + "/_yasp_probe/status", timeout=3) as response:
-                    counts = json.load(response)
-                if counts["started"] == counts["stopped"] and counts["sessions_opened"] == counts["sessions_closed"]:
-                    break
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Snowflake workers or sessions did not stop: " + json.dumps(counts))
-                time.sleep(0.05)
     finally:
         owned = subprocess.check_output(["docker", "ps", "-aq", "--filter", "label=yasp.compatibility=" + run_id], text=True).split()
         if owned:

@@ -30,14 +30,14 @@ def main():
                 time.sleep(0.1)
 
         def query(sql):
-            code = 'import json; from sql import connect; c=connect(); q=c.cursor(); q.execute(' + repr(sql) + '); print(json.dumps(q.fetchall(),default=str)); c.close()'
+            code = 'import json; from sql import query; print(json.dumps(query(' + repr(sql) + ')))'
             return json.loads(docker('exec', name, 'python', '-c', code))
 
         def definitions():
             queries = [
                 "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, COMMENT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA IN ('PUBLIC','ANALYTICS') ORDER BY 1,2,3",
-                "SHOW PRIMARY KEYS IN SCHEMA YASP_DEMO.ANALYTICS",
-                "SHOW IMPORTED KEYS IN SCHEMA YASP_DEMO.ANALYTICS",
+                'SHOW PRIMARY KEYS IN SCHEMA "YASP_DEMO"."ANALYTICS"',
+                'SHOW IMPORTED KEYS IN SCHEMA "YASP_DEMO"."ANALYTICS"',
                 "SELECT TABLE_NAME, COMMENT, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA IN ('PUBLIC','ANALYTICS') ORDER BY 1",
                 "SELECT TABLE_NAME, VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA='ANALYTICS' ORDER BY 1",
             ]
@@ -51,9 +51,9 @@ def main():
         start()
         before = definitions()
         assert any(r[1:3] == ['USERS', 'ID'] and r[6] == 'Customer identifier' for r in before[0]), before[0]
-        assert any(r[1:3] == ['USERS', 'FULL_NAME'] and r[3] == 100 for r in before[0]), before[0]
-        assert sorted((row[4], row[5]) for row in before[1]) == [('ID', 2), ('TENANT_ID', 1)]
-        assert sorted((row[4], row[8], row[9]) for row in before[2]) == [('ID', 'TYPE_ID', 2), ('TENANT_ID', 'TENANT_ID', 1)]
+        assert any(r[1:3] == ['USERS', 'FULL_NAME'] and r[3] is None for r in before[0]), before[0]
+        assert sorted((row[4], row[5]) for row in before[1]) == [('ID', '2'), ('TENANT_ID', '1')]
+        assert sorted((row[4], row[8], row[9]) for row in before[2] if row[7] == 'TYPE_REFERENCES') == [('ID', 'TYPE_ID', '2'), ('TENANT_ID', 'TENANT_ID', '1')]
         assert any(r == ['USERS', 'Demo customers', 'BASE TABLE'] for r in before[3])
         assert any(r == ['DAILY_SALES', None, 'VIEW'] for r in before[3])
         assert len(before[4]) == 1 and 'ORDERS' in before[4][0][1]

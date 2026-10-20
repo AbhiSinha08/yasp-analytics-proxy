@@ -1,8 +1,0 @@
-# Candidate stack used by the network probe. No gateway Python hooks are loaded.
-fakesnow[server]==0.11.22
-# Fakesnow imports converter APIs removed in Snowflake Connector 5.
-snowflake-connector-python==4.8.0
-adbc-driver-snowflake==1.11.0
-adbc-driver-manager==1.12.0
-pyarrow==26.0.0
-duckdb==1.5.6

@@ -111,11 +111,17 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                         backend_login: name.clone(),
                     },
                     yasp::backend::snowflake::SnowflakeConfig {
-                        driver_library: sf.driver_library.clone(),
-                        driver_sha256: required(&sf.driver_sha256_env, "Snowflake driver digest")?,
+                        private_key_file: login
+                            .private_key_file
+                            .clone()
+                            .expect("validated private key path"),
+                        private_key_passphrase: login
+                            .private_key_passphrase_env
+                            .as_ref()
+                            .map(|name| required(name, "Snowflake key passphrase"))
+                            .transpose()?,
                         account: sf.account.clone(),
                         username: login.username.clone(),
-                        password: required(&login.password_env, "Snowflake login password")?,
                         database: target.database.clone(),
                         schema: sf.schema.clone(),
                         warehouse: sf.warehouse.clone(),
@@ -128,7 +134,7 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                         acquire_timeout: std::time::Duration::from_millis(
                             file.backend.acquire_timeout_ms,
                         ),
-                        max_batch_bytes: sf.max_batch_bytes,
+                        max_response_bytes: sf.max_response_bytes,
                     },
                 ));
             }

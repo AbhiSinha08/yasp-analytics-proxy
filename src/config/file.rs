@@ -108,7 +108,12 @@ impl<'de> Deserialize<'de> for Logins {
 #[serde(deny_unknown_fields)]
 pub struct LoginSettings {
     pub username: String,
+    #[serde(default)]
     pub password_env: String,
+    #[serde(default)]
+    pub private_key_file: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub private_key_passphrase_env: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
@@ -143,17 +148,15 @@ pub struct TargetSettings {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnowflakeSettings {
-    pub driver_library: std::path::PathBuf,
-    pub driver_sha256_env: String,
     pub account: String,
     pub schema: String,
     pub warehouse: String,
     pub emulator: Option<std::net::SocketAddr>,
-    #[serde(default = "snowflake_batch_bytes")]
-    pub max_batch_bytes: usize,
+    #[serde(default = "snowflake_response_bytes")]
+    pub max_response_bytes: usize,
 }
-fn snowflake_batch_bytes() -> usize {
-    8 * 1024 * 1024
+fn snowflake_response_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 #[derive(Deserialize, Serialize)]
@@ -209,10 +212,12 @@ impl FileConfig {
         }
         for target in self.targets.values_mut() {
             target.tls.client.resolve(base);
-            if let Some(snowflake) = &mut target.snowflake
-                && snowflake.driver_library.is_relative()
-            {
-                snowflake.driver_library = base.join(&snowflake.driver_library);
+            for login in target.logins.entries.values_mut() {
+                if let Some(path) = &mut login.private_key_file
+                    && path.is_relative()
+                {
+                    *path = base.join(&*path);
+                }
             }
         }
         self.cache.tls.resolve(base);
@@ -281,26 +286,17 @@ impl FileConfig {
                         || target.port != 0
                         || target.compute.is_some()
                         || target.tls.mode != "disable"
-                        || sf.max_batch_bytes == 0
-                        || sf.max_batch_bytes > 64 * 1024 * 1024
+                        || sf.max_response_bytes < 1024
+                        || sf.max_response_bytes > 128 * 1024 * 1024
                         || sf
                             .emulator
                             .is_some_and(|a| !a.ip().is_loopback() || a.port() == 0)
                     {
                         return Err(ConfigError::InvalidSnowflake);
                     }
-                    for value in [
-                        &sf.account,
-                        &sf.schema,
-                        &sf.warehouse,
-                        &sf.driver_sha256_env,
-                    ] {
+                    for value in [&sf.account, &sf.schema, &sf.warehouse] {
                         validate_value("Snowflake setting", value)?;
                     }
-                    validate_value(
-                        "Snowflake driver library",
-                        &sf.driver_library.to_string_lossy(),
-                    )?;
                 }
                 _ => return Err(ConfigError::UnsupportedTarget),
             }
@@ -351,12 +347,31 @@ impl FileConfig {
                         "Snowflake role",
                         login.role.as_deref().ok_or(ConfigError::InvalidSnowflake)?,
                     )?;
-                } else if login.role.is_some() {
-                    return Err(ConfigError::InvalidSnowflake);
+                    let key = login
+                        .private_key_file
+                        .as_ref()
+                        .ok_or(ConfigError::InvalidSnowflake)?;
+                    validate_value("Snowflake private key path", &key.to_string_lossy())?;
+                    if !login.password_env.is_empty() {
+                        return Err(ConfigError::InvalidSnowflake);
+                    }
+                    if let Some(env) = &login.private_key_passphrase_env {
+                        validate_value("Snowflake key passphrase environment", env)?;
+                        if env.contains('=') {
+                            return Err(ConfigError::InvalidSnowflake);
+                        }
+                    }
+                } else {
+                    if login.role.is_some()
+                        || login.private_key_file.is_some()
+                        || login.private_key_passphrase_env.is_some()
+                    {
+                        return Err(ConfigError::InvalidSnowflake);
+                    }
+                    validate_value("backend login password_env", &login.password_env)?;
                 }
                 validate_value("backend login name", login_name)?;
                 validate_value("backend login username", &login.username)?;
-                validate_value("backend login password_env", &login.password_env)?;
                 if login.password_env.contains(['=', '\0']) {
                     return Err(ConfigError::InvalidValue("backend login password_env"));
                 }

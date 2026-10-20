@@ -1,32 +1,34 @@
-"""Pinned local Snowflake HTTP server with persistent, shared storage."""
-import argparse
-from pathlib import Path
+"""Start the pinned emulator and seed it once through its public SQL API."""
 import signal
-import threading
-from fakesnow_cancel import server
+import subprocess
+import time
+import urllib.request
 from sql import seed
-import snowflake.connector
 
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--test', action='store_true', help='enable owned test counters and chunk fixtures')
-    args = parser.parse_args()
-    stopped = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
-    signal.signal(signal.SIGINT, lambda *_: stopped.set())
-    Path('/data').mkdir(exist_ok=True)
-    with server(host='0.0.0.0', port=64616, db_path='/data', chunk_mode='dynamic' if args.test else None) as (settings, _):
-        settings.update(host='127.0.0.1', database='YASP_DEMO', schema='PUBLIC')
-        with snowflake.connector.connect(**settings) as connection:
-            seed(connection)
-            if args.test:
-                for sql in ['CREATE DATABASE YASP_RUNTIME', 'CREATE SCHEMA YASP_RUNTIME.PUBLIC',
-                            'CREATE SCHEMA YASP_RUNTIME."MixedSchema"',
-                            'CREATE TABLE YASP_RUNTIME.PUBLIC.METADATA_TYPES (AMOUNT NUMBER(38,9) NOT NULL, "MixedCase" VARCHAR(30), CREATED TIMESTAMP_NTZ(6))']:
-                    connection.cursor().execute(sql)
-        stopped.wait()
-
-
-if __name__ == '__main__':
-    main()
+process = subprocess.Popen(['/app/snowflake-emulator'])
+def stop(signum, _frame):
+    process.send_signal(signum)
+for signum in (signal.SIGTERM, signal.SIGINT):
+    signal.signal(signum, stop)
+try:
+    deadline=time.monotonic()+30
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError('Snowflake emulator exited during startup')
+        try:
+            urllib.request.urlopen('http://127.0.0.1:64616/health',timeout=1).close()
+            break
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Snowflake emulator did not become ready')
+            time.sleep(.1)
+    seed()
+    raise SystemExit(process.wait())
+finally:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()

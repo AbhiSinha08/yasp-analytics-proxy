@@ -20,7 +20,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Shared schema catalog          | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work. |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; metadata dispatch in `backend/discovery`.                                                                                            |
 | PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                       |
-| Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional native ADBC connector, typed identities, blocking workers, cancellation, Arrow-to-text conversion, transaction ownership, and normalized schema provider. Mixed bindings use `backend::Backends`. |
+| Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
 | Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                                      | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                                        |
 | Support                         | [wire.rs](../src/wire.rs), [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                               | Shared pgwire value encoding, frame bounds before payload allocation and redacted logging setup. `policy.rs` is a future component placeholder.                                           |
 
@@ -41,7 +41,7 @@ flowchart LR
     Core --> Datasets
     Core --> Dispatch[Validated source route and session]
     Dispatch --> Adapter[PostgreSQL adapter]
-    Dispatch --> Snowflake[Optional Snowflake native adapter]
+    Dispatch --> Snowflake[Optional Snowflake SQL API adapter]
     Snowflake --> Events
     Snowflake --> Warehouse[(Snowflake)]
     Adapter --> Events[Typed events with adapter-owned values]
@@ -107,9 +107,9 @@ flowchart TD
     Eligible -->|no| Allocate
     Allocate --> Engine{Selected engine}
     Engine -->|PostgreSQL| Execute[Acquire backend lease and execute]
-    Engine -->|Snowflake| Native[Open owned worker and execute unchanged data SQL]
-    Native --> NativeRows[Convert bounded columns and rows]
-    NativeRows --> NativeCleanup[Close source session and check cleanup]
+    Engine -->|Snowflake| Native[Admit and submit unchanged SQL through HTTPS]
+    Native --> NativeRows[Poll and stream bounded JSON partitions]
+    NativeRows --> NativeCleanup[Verify complete row count and release admission]
     NativeCleanup --> Complete
     Execute --> Stream[Stream native text rows]
     Stream --> Cleanup[Rollback, discard state, verify idle]
@@ -285,8 +285,8 @@ deadline; no verification failure falls back to plaintext. See [TLS setup](tls.m
 The gateway admits bounded extra cancel-only connections even when normal session
 slots are occupied. Cancellation can stop context, selection, cache waits, or active
 backend work; PostgreSQL cancellation uses a separate source connection. Snowflake
-uses operation-scoped native cancellation on a blocking worker and retains source
-capacity through stream release and cleanup. A cancelled PostgreSQL
+uses best-effort SQL API cancellation for known handles and retains admission
+through cleanup or the submitted server timeout when the handle is unavailable. A cancelled PostgreSQL
 lease is discarded, preventing a delayed cancel from reaching a future borrower.
 Cancellation reports `57014`; explicit transactions require rollback before further
 queries. The message-read deadline bounds idle and partial-message transactions,
@@ -299,13 +299,13 @@ unread protocol messages, cleanup failures, and cancellation prevent unsafe reus
 PostgreSQL success completion follows cleanup. Shutdown stops admission, stops hook admission,
 drains sessions to the configured deadline, then closes pools and cache resources.
 
-Snowflake bindings currently use fresh source connections. Explicit frontend
-transactions retain one connection until commit/rollback or abandonment. Native
-parents retain their source capacity until every child releases; failed native
-release retires the binding and retains the failed handle addresses. Snowflake
-batch/frame bounds reject oversized results, but the Arrow batch check occurs
-after allocation and does not hard cap native RSS. Supported types and remaining
-acceptance gates are in [multi-engine compatibility](multi-engine.md).
+Snowflake bindings submit fixed identity, role, warehouse and output settings on
+every SQL API request. Frontend transactions pin a route and preserve failure
+states, while each source statement autocommits without a shared snapshot.
+Responses download sequentially within a decompressed byte bound. Interrupted
+operations retain admission during bounded cleanup; no mutable backend session is
+reused. Supported values and remaining acceptance gates are documented in
+[multi-engine compatibility](multi-engine.md).
 
 ## Values and cache ownership
 

@@ -100,7 +100,7 @@ application's resolved versions. Library consumers resolve their own graph.
 | Rustls 0.23 and rustls-native-certs 0.8      | TLS 1.2/1.3, certificate/hostname verification, PEM parsing, and system trust roots; Ring matches pgwire.               |
 | sha2 0.11, bytes 1                           | Query/cache scope hashes and bounded native protocol buffers.                                                           |
 | PyO3 0.29, optional                          | Trusted embedded Python; Rust-only builds do not link CPython.                                                          |
-| ADBC FFI 0.24, Arrow 59, libloading 0.8 and chrono 0.4, optional | Snowflake native driver loading, owned result batches and exact value conversion; enabled by `snowflake`. |
+| reqwest 0.12, jsonwebtoken 9, rsa 0.9, pkcs8 0.10, base64 0.22, uuid 1 and chrono 0.4, optional | Snowflake SQL API HTTPS, RSA key-pair JWTs, encrypted PEM loading, request IDs and exact temporal conversion; enabled by `snowflake`. |
 
 Additional backend/model SDKs and management frameworks belong to
 their active milestones. Choose compatible versions/features and prove native type,

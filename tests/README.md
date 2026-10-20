@@ -78,8 +78,8 @@ checks, then combined Snowflake and external-client checks, sequentially. Python
 runs use `PYO3_PYTHON` when set, otherwise the runner's interpreter, and expose its
 matching shared-library directory to subprocesses.
 
-The `snowflake` feature automatically prepares the verified native driver and
-starts an owned Fakesnow container. Its normal tests cover the native connector,
+The `snowflake` feature automatically generates a temporary signing key and
+starts an owned Docker SQL API emulator. Its normal tests cover the REST connector,
 gateway values/transactions/cancellation/recovery, both profiles' metadata, the
 Snowflake-only YAML host, shared-cache hits through both profiles, lossless replay,
 profile/dialect/role/warehouse scope, malformed entries, transaction bypass,
@@ -97,9 +97,10 @@ not establish arbitrary query-builder or real Snowflake compatibility.
 
 The `catalog` test covers periodic DDL refresh, pinned generation stability, source
 spelling/types, column-grant isolation, bounded-load failures and expiry.
-Optional [connector diagnostics](diagnostics/snowflake/README.md) compare rejected
-approaches separately from functional acceptance. Driver construction and inventory
-utilities remain under `scripts/`; fixture setup is owned by the normal runner.
+Focused HTTP tests validate signed JWTs, polling, partitions and malformed/oversized
+responses independently of emulator limitations. The signing key under
+`fixtures/snowflake-test-key.p8` is public test material only. Inventory utilities
+remain under `scripts/`; fixture setup is owned by the normal runner.
 See [the persistent development setup](../dev/snowflake/README.md).
 
 Future phase coverage belongs in [the plan](../docs/PLAN.md).

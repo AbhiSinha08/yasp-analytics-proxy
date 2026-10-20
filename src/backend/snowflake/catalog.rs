@@ -1,4 +1,4 @@
-//! Snowflake metadata reads share the adapter's native worker and resource bounds.
+//! Snowflake metadata reads share the adapter's SQL API admission and resource bounds.
 use super::SnowflakeBackend;
 use crate::{
     backend::result::{ExecutionError, ResultEvent},

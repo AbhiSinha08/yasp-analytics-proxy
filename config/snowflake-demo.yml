@@ -1,4 +1,4 @@
-# Start dev/snowflake/compose.yml, build the native driver, then export its SHA-256.
+# Start dev/snowflake/compose.yml; see dev/snowflake/README.md for the demo key.
 # Gateway credentials and local TLS certificates use the normal host setup.
 version: 1
 gateway:
@@ -18,17 +18,15 @@ targets:
     engine: snowflake
     database: YASP_DEMO
     snowflake:
-      driver_library: ../target/compatibility/native-build/libadbc_driver_snowflake.so
-      driver_sha256_env: YASP_SNOWFLAKE_DRIVER_SHA256
-      account: fakesnow
+      account: local
       schema: PUBLIC
       warehouse: LOCAL
       emulator: "127.0.0.1:64616" # HTTP is restricted to numeric loopback endpoints.
-      max_batch_bytes: 8388608
+      max_response_bytes: 67108864
     logins:
       reader:
         username: fake
-        password_env: YASP_SNOWFLAKE_PASSWORD
+        private_key_file: ../dev/snowflake/local-key.p8
         role: PUBLIC
 schema_discovery:
   target: snowflake

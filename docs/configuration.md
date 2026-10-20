@@ -499,18 +499,23 @@ A target uses `engine: snowflake`, `database`, and a `snowflake` mapping:
 
 | Field | Meaning |
 | --- | --- |
-| `driver_library` | Trusted native shared library; relative paths resolve from the YAML directory. |
-| `driver_sha256_env` | Environment variable containing its exact SHA-256 digest. |
 | `account`, `schema`, `warehouse` | Explicit Snowflake connection coordinates. |
 | `emulator` | Optional numeric loopback HTTP endpoint for local tests only; omit for verified Snowflake HTTPS. |
-| `max_batch_bytes` | Post-allocation Arrow batch bound, default 8 MiB, maximum 64 MiB. |
+| `max_response_bytes` | Bound on each decompressed JSON response, default 64 MiB; valid range 1 KiB–128 MiB. Includes one result partition and its metadata. |
 
-Each named login supplies `username`, `password_env`, and `role`. PostgreSQL
-host/port/TLS/compute settings cannot be mixed into a Snowflake target. Native
-connection capacity is bounded per binding by the smaller configured backend pool
-and total limit; acquisition uses `backend.acquire_timeout_ms`. It is not a shared
-cross-engine physical connection budget. Snowflake bindings have fresh connections,
-with a transaction retaining its connection until completion/abandonment.
+Each Snowflake login supplies `username`, `role` and `private_key_file` (a PKCS#8
+RSA PEM file, 2048–4096 bits). Paths resolve relative to the YAML file. An optional
+`private_key_passphrase_env` names the environment variable for an encrypted key;
+`password_env` is reserved for PostgreSQL. Register the corresponding public key
+with the real Snowflake user. The adapter signs short-lived RS256 JWTs and uses
+verified HTTPS at `https://<account>.snowflakecomputing.com`.
+
+PostgreSQL host/port/TLS/compute settings cannot be mixed into a Snowflake target.
+Admission is bounded per binding by the smaller backend pool and total limit;
+acquisition uses `backend.acquire_timeout_ms`. The total is not yet a shared
+cross-engine budget. Read-only frontend transaction blocks preserve routing and
+failure states while each Snowflake statement autocommits. They provide no shared
+snapshot or interactive source transaction.
 
 Snowflake accepts routed native and frontend-generated data queries after normal
 read-only validation. The adapter does not require a native remark or perform SQL
@@ -536,12 +541,9 @@ PostgreSQL results.
 The compiled [Snowflake host example](../examples/snowflake_gateway.rs) reads
 `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, and `PGDATABASE` for metadata,
 `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, and `YASP_GATEWAY_DATABASE` for
-the frontend, and `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`,
-`SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_ROLE`, and
-`SNOWFLAKE_WAREHOUSE` for data execution. `YASP_SNOWFLAKE_DRIVER` names a trusted
-native library and `YASP_SNOWFLAKE_DRIVER_SHA256` must match its bytes.
-Use the patched artifact validated by the native functional tests; a matching digest
-identifies the library and does not establish compatibility for a replacement driver.
+the frontend, and `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY_FILE`,
+`SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` (optional), `SNOWFLAKE_DATABASE`,
+`SNOWFLAKE_SCHEMA`, `SNOWFLAKE_ROLE` and `SNOWFLAKE_WAREHOUSE` for data execution.
 
 ```sh
 cargo run --locked --features snowflake --example snowflake_gateway
@@ -550,8 +552,8 @@ cargo run --locked --features snowflake --example snowflake_gateway
 The example advertises the PostgreSQL profile and expects the normal Metabase
 native remark. It uses verified HTTPS for Snowflake. The typed `emulator` endpoint
 is reserved for explicit loopback HTTP fixtures. Capacity and acquisition timeout
-apply to each binding; worker ownership retains admission during cancellation and
-cleanup. Fresh connections isolate identities and transaction state. The Arrow
-batch check runs after allocation, so it does not hard cap native RSS.
-The [normal functional runner](../tests/README.md) owns Fakesnow network fixtures
-and the accepted native-driver checks; `python3 scripts/test.py --full` includes them.
+apply to each binding. Capacity is retained during abandoned-request cleanup,
+including interrupted submissions without a returned handle. See [SQL API execution
+limits](multi-engine.md#sql-api-execution-and-values). The [normal test
+runner](../tests/README.md) owns disposable Docker fixtures and temporary keys;
+`python3 scripts/test.py --full` includes this coverage.

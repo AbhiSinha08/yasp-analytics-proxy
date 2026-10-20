@@ -92,14 +92,13 @@ fn native_snowflake_through_pgwire_routes_values_transactions_and_recovers() {
 fn snowflake_backend() -> Arc<SnowflakeBackend> {
     Arc::new(
         SnowflakeBackend::new(SnowflakeConfig {
-            driver_library: std::env::var_os("YASP_SNOWFLAKE_DRIVER")
-                .expect("launcher sets driver")
+            private_key_file: std::env::var("YASP_SNOWFLAKE_PRIVATE_KEY_FILE")
+                .unwrap()
                 .into(),
-            driver_sha256: std::env::var("YASP_SNOWFLAKE_DRIVER_SHA256").unwrap(),
-            account: "fakesnow".into(),
+            private_key_passphrase: None,
+            account: "local".into(),
             username: "fake".into(),
-            password: "snow".into(),
-            database: "YASP_RUNTIME".into(),
+            database: "YASP_DEMO".into(),
             schema: "PUBLIC".into(),
             role: "ANALYST".into(),
             warehouse: "TEST".into(),
@@ -109,9 +108,9 @@ fn snowflake_backend() -> Arc<SnowflakeBackend> {
                     .parse()
                     .unwrap(),
             ),
-            max_connections: 1,
-            acquire_timeout: Duration::from_secs(2),
-            max_batch_bytes: 8 * 1024 * 1024,
+            max_connections: 2,
+            acquire_timeout: Duration::from_secs(6),
+            max_response_bytes: 8 * 1024 * 1024,
         })
         .unwrap(),
     )
@@ -168,7 +167,7 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
         let server = support::GatewayServer::start(move |listener, shutdown| async move {
             let catalog = yasp::catalog::Catalog::snowflake(
                 sf,
-                yasp::catalog::CatalogSettings::new(vec!["PUBLIC".into(), "MixedSchema".into()]),
+                yasp::catalog::CatalogSettings::new(vec!["PUBLIC".into(), "ANALYTICS".into()]),
             )
             .await
             .expect("network Snowflake schema provider");
@@ -176,19 +175,19 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
             assert!(
                 snapshot
                     .schemas
-                    .contains(&("YASP_RUNTIME".into(), "MixedSchema".into()))
+                    .contains(&("YASP_DEMO".into(), "ANALYTICS".into()))
             );
             let relation = snapshot
                 .relations
                 .values()
-                .find(|r| r.id.name == "METADATA_TYPES")
+                .find(|r| r.id.name == "METADATA_TYPES" && r.id.schema == "ANALYTICS")
                 .expect("Snowflake definition");
             assert_eq!(snapshot.source.role.as_deref(), Some("ANALYST"));
             assert_eq!(snapshot.source.warehouse.as_deref(), Some("TEST"));
-            assert_eq!(relation.columns[0].native_type.precision, Some(38));
-            assert_eq!(relation.columns[0].native_type.scale, Some(9));
+            assert_eq!(relation.columns[0].native_type.precision, Some(18));
+            assert_eq!(relation.columns[0].native_type.scale, Some(0));
             assert!(!relation.columns[0].nullable);
-            assert_eq!(relation.columns[1].id.name, "MixedCase");
+            assert_eq!(relation.columns[3].id.name, "MixedCase");
             yasp::gateway::serve_backends(
                 listener,
                 config.with_catalog(catalog.clone()),
@@ -220,27 +219,30 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
             let sql = fixture["queries"][index]
                 .as_str()
                 .unwrap()
-                .replace("'public'", "'PUBLIC'")
+                .replace("'public'", "'ANALYTICS'")
                 .replace("'users'", "'METADATA_TYPES'");
             connection.args(["-c", &sql]);
         }
         let result = connection.output().unwrap();
         support::assert_success(&result, "Snowflake definitions rendered through pgwire");
         let result = String::from_utf8_lossy(&result.stdout);
-        assert!(result.contains("YASP_RUNTIME|PUBLIC|METADATA_TYPES"));
+        assert!(result.contains("YASP_DEMO|ANALYTICS|METADATA_TYPES"));
         assert!(result.contains("MixedCase"));
         let column = result
             .lines()
-            .find(|row| row.starts_with("YASP_RUNTIME|PUBLIC|METADATA_TYPES|MixedCase|"))
+            .find(|row| row.starts_with("YASP_DEMO|ANALYTICS|METADATA_TYPES|MixedCase|"))
             .unwrap()
             .split('|')
             .collect::<Vec<_>>();
         if profile == "postgresql" {
             assert_eq!(column[4], "1043");
-            assert_eq!(column[6], "34");
+            assert_eq!(column[6], "-1");
         } else {
             assert_eq!(column[5], "varchar");
-            assert_eq!(column[6], "30");
+            assert!(
+                column[6].is_empty(),
+                "emulator does not retain VARCHAR length"
+            );
         }
         assert_eq!(
             routed.load(std::sync::atomic::Ordering::SeqCst),
@@ -252,7 +254,7 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
             .env("PGSSLMODE", "require")
             .args([
                 "-c",
-                &format!("{NATIVE}SELECT count(*) FROM PUBLIC.METADATA_TYPES"),
+                &format!("{NATIVE}SELECT count(*) FROM ANALYTICS.METADATA_TYPES"),
             ])
             .output()
             .unwrap();
@@ -260,7 +262,7 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
             &preview,
             "native chart SQL shares the catalog-enabled listener",
         );
-        assert_eq!(String::from_utf8_lossy(&preview.stdout).trim(), "0");
+        assert_eq!(String::from_utf8_lossy(&preview.stdout).trim(), "1");
         assert_eq!(routed.load(std::sync::atomic::Ordering::SeqCst), 1);
         let mut denied = identity.connection(server.address).command();
         let result = denied
@@ -331,7 +333,7 @@ fn check_native_runtime(identity: &support::Identity, server: support::GatewaySe
         "catalog definitions retain designated PostgreSQL authority",
     );
     let timeout = connection.query(&format!(
-        "{NATIVE}SELECT SUM(RANDOM()) FROM TABLE(GENERATOR(ROWCOUNT => 100000000))"
+        "{NATIVE}SELECT SUM(RANDOM()) FROM range(1000000000)"
     ));
     assert!(String::from_utf8_lossy(&timeout.stderr).contains("57014"));
     support::assert_success(
@@ -385,7 +387,7 @@ fn cancellation_and_disconnect(address: std::net::SocketAddr, identity: &support
         assert!(described, "client received actual column metadata");
         let pid = client.process_id();
         let key = client.secret_key().clone();
-        let sql = format!("{NATIVE}SELECT SUM(RANDOM()) FROM TABLE(GENERATOR(ROWCOUNT => 100000000))");
+        let sql = format!("{NATIVE}SELECT SUM(RANDOM()) FROM range(1000000000)");
         let mut query = Box::pin(client.simple_query(DefaultSimpleQueryHandler::new(), &sql));
         tokio::select! {
             result = &mut query => panic!("long query completed before cancel: {result:?}"),

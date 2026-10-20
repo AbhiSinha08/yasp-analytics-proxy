@@ -9,3 +9,4 @@ __pycache__/
 !.env.example
 /config/local-tls/
 /logs/
+/dev/snowflake/local-key.p8

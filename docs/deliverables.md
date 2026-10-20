@@ -76,18 +76,16 @@
 ## Phase 2 — Additional engines, dynamic masking, and management
 
 - [ ] **Warehouse adapter** — Adds one selected engine with its own execution, metadata, type, and session behavior.
-  - [x] **Candidate dependency probe** — Pin and exercise the Snowflake ADBC/Fakesnow network path with Rust 1.89, exact decimals/NULLs, rollback, and in-flight cancellation; record failed gates in [multi-engine compatibility](multi-engine.md).
-  - [x] **Isolate cancellation failures** — Compare Rust manager and native C ABI against the same fixed Fakesnow endpoint; verify native cancellation stops server work and permits another query. Synthetic write rollback remains a diagnostic outside the read-only surface.
-  - [x] **Native connector ownership gate** — Retain native parent handles through execution/fetch, permit concurrent operation-scoped cancellation, reject stale handles, and verify recovery and balanced session cleanup through the network fixture.
-  - [x] **Fetch cancellation and read-ahead gate** — Verify blocked HTTP downloads stop and sessions recover. Build a pinned Apache driver with a stream-window patch; the unmodified wheel and Foundry 1.15.0 remain negative comparisons for their failing gates.
-  - [ ] **Production connector gates** — Establish native-memory bounds, full value coverage, deployment packaging, and real Snowflake role/warehouse isolation before production acceptance.
+  - [x] **Public SQL API connector** — Submit fixed source identities using RSA key-pair JWTs, poll accepted statements, and stream bounded JSON result partitions without native driver packaging.
+  - [x] **REST response gates** — Verify signed identities, polling, partitions, exact values, malformed/oversized responses and incomplete-result rejection independently of the emulator.
+  - [ ] **Production connector gates** — Validate real Snowflake authentication, output formats, result partitions, resource limits and cancellation before production acceptance.
   - [x] **PostgreSQL execution ownership** — Keep source session SQL and physical acquisition/execution in the PostgreSQL adapter while preserving existing tests and public entry points.
   - [x] **Shared backend result caching** — Apply one bounded eligibility/capture/replay path to every backend and both frontends, isolating actual source identity, role/warehouse, dialect and session settings without adapter cache opt-ins.
   - [x] **Shared execution boundary** — Preserve PostgreSQL behavior and public entry points while separating typed execution/errors/results from frontend wire messages.
-  - [x] **Experimental native Snowflake runtime** — Add optional typed source bindings, mixed-engine selection, blocking worker admission, exact decimal/binary/date/time values, transaction affinity, timeout/cancel/disconnect recovery, and balanced network-session cleanup.
+  - [x] **Experimental Snowflake runtime** — Add typed bindings, mixed-engine routing, bounded SQL API admission, exact values, read-only frontend transaction compatibility without shared snapshots, and timeout/cancel/disconnect recovery.
   - [x] **Snowflake host configuration** — Load Snowflake identities and warehouses through the repository host's validated configuration.
   - [ ] **Cross-engine connection budget** — Share the total physical-connection limit across PostgreSQL pools and all Snowflake bindings. Snowflake admission is currently bounded per binding.
-  - [ ] **Real-source execution acceptance** — Validate authentication, role/warehouse isolation, value semantics, transactions, cancellation and cleanup against real Snowflake.
+  - [ ] **Real-source execution acceptance** — Validate authentication, role/warehouse isolation, value semantics, autocommit compatibility, cancellation and cleanup against real Snowflake.
 - [ ] **Gateway and dialect support** — Defines supported client/backend combinations and handles only an explicit SQL subset.
   - [x] **Client version inventory** — Pin the Metabase image and bundled PostgreSQL/Redshift JDBC versions, plus SQLAlchemy/psycopg2 client dependencies used by reflection tests.
   - [x] **Bundled JDBC SQL corpus** — Capture TLS/simple-query setup, schemas/tables/columns/keys/indexes, previews, and transactions from PostgreSQL 42.7.12 and Redshift 2.2.5. Both drivers pass these captured operations with catalog-backed definitions and PostgreSQL key/index discovery.
@@ -97,8 +95,8 @@
   - [x] **Captured frontend metadata** — Render the pinned JDBC schema/table/column shapes for both profiles using normalized definitions. Verify Snowflake metadata through the HTTP connector and both frontend profiles.
   - [x] **Normalized warehouse metadata** — Import bounded Snowflake view/key definitions; serve captured JDBC, Metabase, Redash and SQLAlchemy reflection using native facts and stable virtual identifiers. Broader client/query-builder compatibility remains separate.
   - [ ] **Redshift SQLAlchemy key identifiers** — Correct the pinned client dialect's retained SQL quotes before claiming automatic relationship matching for quoted source identifiers.
-  - [x] **Persistent development emulator** — Pin Fakesnow and Docker dependencies; seed two schemas through HTTP and preserve custom data, comments, string lengths, views and declared keys across container recreation.
-  - [x] **Unified optional-feature runner** — Keep PostgreSQL defaults; add `--full`, automatic Snowflake fixture/native setup, client-test gating, owned-resource cleanup and sequential Python/docs/client acceptance.
+  - [x] **Persistent development emulator** — Pin the Go/DuckDB emulator and Docker dependencies; seed two schemas through the SQL API and preserve custom data, comments, views and declared keys across container recreation. VARCHAR lengths remain unavailable in the emulator.
+  - [x] **Unified optional-feature runner** — Keep PostgreSQL defaults; add `--full`, automatic Snowflake Docker fixture/key setup, client-test gating, owned-resource cleanup and sequential Python/docs/client acceptance.
   - [x] **Catalog host configuration** — Load explicit schema scope and refresh/age/bound settings from `schema_discovery.catalog`; reuse the configured discovery identity and adapter capacity.
   - [x] **BI Redshift schema scans** — Serve captured custom table/field scans from the catalog, including literal filters, comments and PostgreSQL primary-key membership; keep application reads on ordinary routing.
   - [x] **Standalone warehouse host** — Load engine-specific Snowflake YAML targets/discovery without a PostgreSQL placeholder, advertise frontend versions and resolve an explicit unmarked native-data default after compatibility handling.
@@ -120,6 +118,7 @@
 
 ## Phase 3 — Advanced analytics and integrations
 
+- [ ] **Incremental result caching** — Stream result chunks into Redis and replay them with bounded YASP memory, publishing only complete results.
 - [ ] **Benchmarking Framework**
 - [ ] **Additional load-distribution algorithms** — Add round-robin and least-busy allocation within a selected compute type, preserving access, capacity, and cancellation bounds.
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.

@@ -33,6 +33,14 @@ This satisfies JDBC BI checks that compare the value with an integer. Explicit
 native remarks bypass that handler and preserve Snowflake's numeric result type;
 queries containing table reads or other expressions use ordinary execution.
 
+The exact unaliased `SELECT pg_backend_pid()` and
+`SELECT pg_catalog.pg_backend_pid()` probes return the gateway session's integer
+PID from pgwire startup on both profiles, without routing, source execution or
+result caching. Explicit native SQL and queries containing application reads or
+other expressions retain ordinary execution. Superset's SQL-based cancellation
+through `pg_cancel_backend`/`pg_stat_activity` remains outside this surface; pgwire
+cancellation still uses the session PID and secret key.
+
 Original SQL and its immutable AST reach context and routing. Read-only checks apply
 before execution. PostgreSQL rejects an explicit native dialect for another engine.
 Snowflake forwards both native and frontend-generated data queries without a dialect
@@ -46,43 +54,52 @@ The YAML host accepts engine-specific Snowflake targets and a Snowflake discover
 binding with a [shared catalog](catalog.md). It needs no PostgreSQL placeholder.
 Library hosts can use `Backends::without_postgres`, register Snowflake bindings and
 call `serve_backends`; existing PostgreSQL entry points remain available. Backend
-adapters own native drivers, session SQL, cleanup, value conversion and errors.
+adapters own HTTP clients, session SQL, cleanup, value conversion and errors.
 
 A Snowflake binding fixes account, principal, role, database, schema and warehouse.
-Fresh source connections isolate identities and transaction state; explicit frontend
-transactions retain a source session and enforce route affinity. Blocking driver
-operations run outside Tokio worker threads. Admission remains held until underlying
-native work stops, even when a frontend disconnects or times out. Native parents
-outlive statements, Arrow readers and cancellation handles; stale handles cannot
-cancel a later operation.
+The adapter submits these coordinates on every public SQL API request with an
+RSA key-pair JWT over verified HTTPS. HTTP overrides are restricted to explicit
+numeric loopback emulator endpoints. Private keys stay in the host; no native
+shared library, driver build or driver checksum is required.
 
-## Native connector and values
+## SQL API execution and values
 
-The supported Linux x86-64/WSL artifact is the pinned Snowflake ADBC 1.11.0 native
-library with the bounded-prefetch patch. `scripts/snowflake/build_native_driver.py`
-verifies source/toolchain/patch checksums and records the resulting library digest.
-The host verifies that digest before loading trusted executable code. An unmodified
-replacement must pass the same gates before becoming supported.
+Each statement is independently autocommitted. Frontend read-only `BEGIN`,
+`COMMIT` and `ROLLBACK` blocks retain route affinity and normal I/T/E failure
+states for BI compatibility, but do not create a shared Snowflake transaction or
+snapshot. Rollback cannot undo a previous statement. Source read-only validation
+still applies; the adapter never submits frontend transaction commands to Snowflake.
 
-The Rust driver manager remains a rejected diagnostic candidate; the runtime uses
-the C ABI directly. Accepted ownership, cancellation, transaction, prefetch and fetch
-checks run with ordinary Snowflake functional tests. Optional comparisons live in
-[diagnostics](../tests/diagnostics/snowflake/README.md).
+The asynchronous HTTP client polls accepted statements, then downloads result
+partitions sequentially and sends rows through the common frontend encoder.
+It retains one bounded decompressed JSON response at a time rather than collecting
+the whole multi-partition result. `max_response_bytes` bounds a response (including
+metadata); exceeding it fails explicitly. JSON decoding and frontend encoding add
+bounded copies, so this is not a process RSS limit. Partition size is chosen by
+Snowflake; larger partitions require a larger configured bound.
 
-Results preserve decimal precision through 38, NULLs, booleans, signed integers,
-floats, UTF-8, binary, dates, times and supported timestamps. Unrecognized Arrow
-representations fail explicitly. Nonzero sub-microsecond remainders fail rather
-than rounding; supported dates/timestamps are years 1–9999. The driver normalizes
-zoned timestamps to UTC; preserving the original offset requires an explicit text
-cast. Real-source LTZ/TZ behavior still needs validation. Arrow batch checks occur
-after allocation and do not hard-cap native process RSS.
+Admission is bounded per binding. On timeout, cancellation or disconnect, a known
+statement handle gets a best-effort cancel followed by status checks. If submission
+was interrupted before its handle arrived, capacity remains held for a full
+server timeout plus a short grace period starting at interruption. Immediate remote cancellation
+is not guaranteed. Abandoned response downloads cannot publish cache completion.
+
+Results preserve decimal precision through 38, NULLs, booleans, floats, UTF-8,
+binary, dates, times and supported timestamps. The adapter requests explicit
+output formats and UTC on every statement. Nonzero sub-microsecond remainders
+fail rather than rounding; supported dates/timestamps are years 1–9999. Zoned
+timestamps encode the instant in UTC; use a text cast to preserve the original
+offset. Unknown types fail explicitly. Real-source timestamp behavior remains an
+acceptance gate.
 
 ## Local environment and verification
 
-[The Docker setup](../dev/snowflake/README.md) provides persistent Fakesnow with two
-seeded schemas. Corrected abort/session/key behavior is shared with disposable test
-fixtures. Fault-injected Arrow chunks are enabled only for tests. Real-source grants,
-warehouse isolation and Snowflake semantics cannot be established by this emulator.
+[The Docker setup](../dev/snowflake/README.md) builds a pinned Go/DuckDB Snowflake
+emulator with two seeded schemas and persistent storage. Its documented fixture
+corrections expose actual definitions through Snowflake-shaped metadata. It has no
+access control and executes synchronously; focused HTTP tests separately exercise
+JWT validation, polling, partitions and response bounds. Emulator results do not
+establish real Snowflake grants, authentication, warehouse isolation or semantics.
 
 ```sh
 python3 scripts/test.py --full
@@ -90,7 +107,7 @@ python3 scripts/test.py --full
 
 This runs the default/Python functional and documentation matrices, then combined
 Snowflake/client coverage sequentially. Requesting the Snowflake feature automatically
-prepares its native artifact and isolated network fixture. External clients use
+creates a temporary signing key and an isolated Docker network fixture. External clients use
 pinned images without requiring running BI applications. Missing requested
 prerequisites fail explicitly. Persistent developer data is never used by tests.
 

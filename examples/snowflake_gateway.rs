@@ -35,13 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         BackendSettings::default(),
     )?);
     let snowflake = Arc::new(SnowflakeBackend::new(SnowflakeConfig {
-        driver_library: env::var_os("YASP_SNOWFLAKE_DRIVER")
-            .ok_or("missing YASP_SNOWFLAKE_DRIVER")?
-            .into(),
-        driver_sha256: env::var("YASP_SNOWFLAKE_DRIVER_SHA256")?,
+        private_key_file: env::var("SNOWFLAKE_PRIVATE_KEY_FILE")?.into(),
+        private_key_passphrase: env::var("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE").ok(),
         account: env::var("SNOWFLAKE_ACCOUNT")?,
         username: env::var("SNOWFLAKE_USER")?,
-        password: env::var("SNOWFLAKE_PASSWORD")?,
         database: env::var("SNOWFLAKE_DATABASE")?,
         schema: env::var("SNOWFLAKE_SCHEMA")?,
         role: env::var("SNOWFLAKE_ROLE")?,
@@ -49,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         emulator: None,
         max_connections: 4,
         acquire_timeout: Duration::from_secs(60),
-        max_batch_bytes: 8 * 1024 * 1024,
+        max_response_bytes: 8 * 1024 * 1024,
     })?);
     let backends = Arc::new(Backends::new(postgres).with_snowflake(selected.clone(), snowflake)?);
     let selector = bind_select_backend(selected, |_, route| Ok(route.clone()));

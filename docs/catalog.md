@@ -61,8 +61,8 @@ Omitting `catalog` retains live PostgreSQL discovery; Snowflake discovery requir
 one. Scope is exact and bounded to 256 schema names, not an application access policy.
 
 Initial loading must succeed before accepting clients. PostgreSQL uses one bounded
-metadata statement. Snowflake reads definitions and scoped SHOW KEYS through one
-native session. Row/byte bounds cover the combined candidate. Only a complete,
+metadata statement. Snowflake reads definitions and scoped SHOW KEYS using one
+admitted SQL API binding, with independent autocommit requests. Row/byte bounds cover the combined candidate. Only a complete,
 validated result becomes a generation; this does not promise stronger DDL consistency
 than the source supplies. No partially loaded candidate is published.
 
@@ -76,7 +76,8 @@ worker; hosts call it before releasing backend resources.
 The byte limit covers owned payloads/strings, excluding allocator and connector
 memory. Old pinned generations and a candidate can coexist. Hosts must bound retained
 generations. Native capacity remains occupied until underlying work actually stops,
-including after a refresh timeout. Arrow batch bounds apply after native allocation.
+including after a refresh timeout. Snowflake metadata responses obey the SQL API
+response byte bound and the catalog row/byte limits.
 
 ## Frontend responses
 

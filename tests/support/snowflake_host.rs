@@ -32,8 +32,8 @@ pub(super) fn with_config(
         "version":1,
         "gateway":{"listen":address.to_string(),"protocol":profile,"tls":{"mode":"enable","cert_file":tls.join("server.crt"),"key_file":tls.join("server.key")}},
         "targets":{"snowflake":{"engine":"snowflake","database":"YASP_DEMO",
-            "snowflake":{"driver_library":std::env::var("YASP_SNOWFLAKE_DRIVER").unwrap(),"driver_sha256_env":"YASP_SNOWFLAKE_DRIVER_SHA256","account":"fakesnow","schema":"PUBLIC","warehouse":"LOCAL","emulator":std::env::var("YASP_SNOWFLAKE_ENDPOINT").unwrap()},
-            "logins":{"reader":{"username":"fake","password_env":"YASP_SNOWFLAKE_PASSWORD","role":"PUBLIC"}}}},
+            "snowflake":{"account":"local","schema":"PUBLIC","warehouse":"LOCAL","emulator":std::env::var("YASP_SNOWFLAKE_ENDPOINT").unwrap()},
+            "logins":{"reader":{"username":"fake","private_key_file":std::env::var("YASP_SNOWFLAKE_PRIVATE_KEY_FILE").unwrap(),"role":"PUBLIC"}}}},
         "schema_discovery":{"target":"snowflake","backend_login":"reader","catalog":{"schemas":["PUBLIC","ANALYTICS"],"refresh_interval_seconds":1}},
         "hooks":{"input_options":{"type":"rust","callback":"builtin.input_options.metabase","params":{"native_dialect":"snowflake","unmarked_data_dialect":"snowflake"}},
         "select_backend":{"type":"rust","callback":"builtin.select_backend.passthrough","params":{"target":"snowflake","backend_login":"reader"}}}
@@ -47,7 +47,6 @@ pub(super) fn with_config(
         Command::new(env!("CARGO_BIN_EXE_yasp"))
             .args(["--config", path.to_str().unwrap()])
             .env("LOG_LEVEL", "DEBUG")
-            .env("YASP_SNOWFLAKE_PASSWORD", "snow")
             .env("YASP_GATEWAY_USERNAME", &identity.user)
             .env("YASP_GATEWAY_PASSWORD", &identity.password)
             .env("YASP_GATEWAY_DATABASE", &identity.database)

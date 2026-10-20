@@ -533,13 +533,13 @@ through a System 1 decision model, and authenticated management tools.
 
 Snowflake runtime dependencies are optional behind the `snowflake` feature. The
 normal YAML host supports Snowflake-only discovery and data bindings through both
-frontend profiles. Source admission, exact values, transactions, cancellation,
-timeout/disconnect recovery, normalized metadata and persistent local fixtures have
-network coverage against the pinned native C ABI and corrected Fakesnow emulator.
+frontend profiles. The adapter uses the public SQL API with key-pair authentication,
+bounded JSON partitions and autocommit statements. Frontend transaction blocks
+preserve route affinity and failure states without a shared source snapshot. The
+pinned Docker emulator and focused HTTP tests cover the local compatibility contract.
 Shared execution applies one bounded result-cache path to every backend; adapters
 provide source identity and verified completion without cache opt-ins. Generated
-SQL executes unchanged after read-only checks. Broader SQL translation, hard native
-memory bounds and real-source authentication/role/warehouse acceptance remain
+SQL executes unchanged after read-only checks. Broader SQL translation and real-source authentication/role/warehouse acceptance remain
 separate gates. Adding a native client protocol is a separate gateway capability,
 not a prerequisite for each backend.
 
