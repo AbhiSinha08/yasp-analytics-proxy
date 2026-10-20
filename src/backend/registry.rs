@@ -1,7 +1,7 @@
 //! Configured engine bindings and their explicit discovery authority.
 
 use super::{
-    PostgresBackends,
+    ConnectionBudget, PostgresBackends,
     execution::Route,
     result::{ExecutionError, ExecutionResult},
     snowflake::SnowflakeBackend,
@@ -14,12 +14,14 @@ use std::{
 };
 
 pub struct Backends {
+    budget: Arc<ConnectionBudget>,
     pub(crate) postgres: Option<Arc<PostgresBackends>>,
     snowflake: BTreeMap<BackendSelection, Arc<SnowflakeBackend>>,
 }
 impl Backends {
     pub fn new(postgres: Arc<PostgresBackends>) -> Self {
         Self {
+            budget: postgres.budget.clone(),
             postgres: Some(postgres),
             snowflake: BTreeMap::new(),
         }
@@ -27,7 +29,16 @@ impl Backends {
 
     /// A Snowflake-only registry; add its configured bindings before serving.
     pub fn without_postgres() -> Self {
+        Self::with_budget(
+            ConnectionBudget::new(crate::config::BackendSettings::default().max_connections_total)
+                .expect("valid default backend capacity"),
+        )
+    }
+
+    /// An empty registry under an explicit shared total; register bindings before use.
+    pub fn with_budget(budget: Arc<ConnectionBudget>) -> Self {
         Self {
+            budget,
             postgres: None,
             snowflake: BTreeMap::new(),
         }
@@ -119,6 +130,7 @@ impl Backends {
                 "duplicate or invalid Snowflake binding",
             ));
         }
+        backend.attach_budget(&self.budget)?;
         self.snowflake.insert(selection, backend);
         Ok(self)
     }

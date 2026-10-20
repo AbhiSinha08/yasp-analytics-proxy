@@ -78,7 +78,10 @@ metadata); exceeding it fails explicitly. JSON decoding and frontend encoding ad
 bounded copies, so this is not a process RSS limit. Partition size is chosen by
 Snowflake; larger partitions require a larger configured bound.
 
-Admission is bounded per binding. On timeout, cancellation or disconnect, a known
+All bindings share one occupied-capacity budget with PostgreSQL. Binding limits
+remain additional local bounds. Registry registration attaches an unused adapter to
+that shared budget before discovery or execution; an adapter already attached to a
+different budget is rejected. On timeout, cancellation or disconnect, a known
 statement handle gets a best-effort cancel followed by status checks. If submission
 was interrupted before its handle arrived, capacity remains held for a full
 server timeout plus a short grace period starting at interruption. Immediate remote cancellation

@@ -9,13 +9,21 @@ pub(super) mod session;
 mod tests;
 
 use crate::{
-    backend::result::{ExecutionError, ExecutionResult},
+    backend::{
+        ConnectionBudget,
+        budget::CapacityGroup,
+        result::{ExecutionError, ExecutionResult},
+    },
     config::GatewaySettings,
     discovery::SessionSettings,
     query::{ParsedQuery, SqlDialect},
 };
-use std::{io, path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use std::{
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 /// A fixed source identity. Query hints cannot change its role or warehouse.
 pub struct SnowflakeConfig {
@@ -47,7 +55,8 @@ struct Inner {
     endpoint: String,
     client: reqwest::Client,
     auth: auth::KeyPair,
-    permits: Arc<Semaphore>,
+    capacity: Mutex<Option<CapacityGroup>>,
+    max_connections: usize,
     acquire_timeout: Duration,
     max_response_bytes: usize,
 }
@@ -117,14 +126,29 @@ impl SnowflakeBackend {
                 endpoint,
                 client,
                 auth,
-                permits: Arc::new(Semaphore::new(config.max_connections)),
+                capacity: Mutex::new(None),
+                max_connections: config.max_connections,
                 acquire_timeout: config.acquire_timeout,
                 max_response_bytes: config.max_response_bytes,
             }),
         })
     }
+    pub(crate) fn attach_budget(&self, budget: &Arc<ConnectionBudget>) -> io::Result<()> {
+        let mut group = self.inner.capacity.lock().unwrap();
+        if let Some(group) = &*group {
+            if !Arc::ptr_eq(&group.budget(), budget) || group.is_closed() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Snowflake binding already belongs to another budget or is closed",
+                ));
+            }
+        } else {
+            *group = Some(budget.group(self.inner.max_connections)?);
+        }
+        Ok(())
+    }
     pub(crate) fn close(&self) {
-        self.inner.permits.close();
+        self.inner.capacity().close();
     }
     pub(crate) fn log_query(&self, query: &ParsedQuery, client_id: u64) {
         tracing::debug!(query_id = query.query_id(), client_id,
@@ -153,4 +177,20 @@ pub(super) fn validate_session(session: &SessionSettings) -> ExecutionResult<()>
         ));
     }
     Ok(())
+}
+
+impl Inner {
+    fn capacity(&self) -> CapacityGroup {
+        self.capacity
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| {
+                let budget = ConnectionBudget::new(self.max_connections)
+                    .expect("validated Snowflake capacity");
+                budget
+                    .group(self.max_connections)
+                    .expect("validated Snowflake capacity")
+            })
+            .clone()
+    }
 }

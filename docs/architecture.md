@@ -19,6 +19,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                           |
 | Shared schema catalog          | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work. |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; metadata dispatch in `backend/discovery`.                                                                                            |
+| Backend capacity                | [backend/budget.rs](../src/backend/budget.rs) | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation. |
 | PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                       |
 | Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
 | Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                                      | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                                        |
@@ -42,6 +43,8 @@ flowchart LR
     Core --> Dispatch[Validated source route and session]
     Dispatch --> Adapter[PostgreSQL adapter]
     Dispatch --> Snowflake[Optional Snowflake SQL API adapter]
+    Adapter --> Budget[Shared occupied-capacity budget]
+    Snowflake --> Budget
     Snowflake --> Events
     Snowflake --> Warehouse[(Snowflake)]
     Adapter --> Events[Typed events with adapter-owned values]
@@ -185,11 +188,41 @@ application selector returns the source/login and optional type; overflow is
 engine-owned and never changes those decisions. Login-specific pools preserve
 source authentication while instance limits cover all logins together.
 
-Physical connection budgets include idle sessions and remain held until socket
-closure. Idle pressure reclamation lets a different login use shared capacity.
-Queries wait asynchronously under `backend.acquire_timeout_ms` when capacity is
-exhausted, then receive `53300`. Session limits bound waiting queries;
-Redis query queuing is future work. Cache replay acquires no compute lease.
+One `backend::ConnectionBudget` covers every adapter in a configured registry.
+It atomically checks the total and the allocation group's local ceiling. PostgreSQL
+connections retain their permits through creation, use, cleanup and idle pooling.
+Snowflake sessions retain theirs through fetching, frontend transaction blocks and
+abandoned-operation cleanup. Permits are released only when their resource ownership
+ends; an HTTP transport socket is not an admitted Snowflake session.
+
+PostgreSQL registers weak idle-pool reclamation callbacks with the common budget.
+A blocked Snowflake binding can reclaim an idle PostgreSQL connection. Callbacks
+run outside accounting locks; active resources are never reclaimed. Returning a
+PostgreSQL lease to idle wakes waiters even though its physical permit stays held.
+
+Queries wait asynchronously under one `backend.acquire_timeout_ms` deadline, then
+receive `53300`. Closing a binding stops its waiters without releasing active or
+cleanup permits or closing unrelated bindings. Session limits bound waiting queries;
+Redis query queuing is future work. Cache replay and snapshot metadata responses
+acquire no capacity; catalog refreshes and live discovery share normal admission.
+
+```mermaid
+flowchart TD
+    Routes[All configured targets and logins] --> Budget[One shared connection budget]
+    Budget --> Total{Global and local capacity available?}
+    Total -->|yes| Permit[Retain one resource permit]
+    Total -->|no| Idle{Reclaimable idle connection?}
+    Idle -->|yes| Reclaim[Adapter closes idle connection]
+    Reclaim --> Total
+    Idle -->|no| Wait[Wait under acquisition deadline]
+    Wait -->|capacity notification| Total
+    Wait -->|deadline| Busy[SQLSTATE 53300]
+    Permit --> PG[PostgreSQL connection through idle pooling and cleanup]
+    Permit --> SF[Snowflake session through fetching and retained cleanup]
+    PG --> Release[Resource ownership ends and wakes waiters]
+    SF --> Release
+```
+
 
 ## Discovery and frontend state
 

@@ -12,8 +12,9 @@ mod transaction;
 
 pub(crate) use transaction::PostgresTransaction;
 
+use super::ConnectionBudget;
 pub(super) use discovery::{discover, prepare as prepare_discovery};
-use pool::{ConnectionBudget, InstanceState, PgManager};
+use pool::{InstanceState, PgManager};
 
 use crate::{
     config::{BackendConfig, BackendSettings},
@@ -60,11 +61,12 @@ pub struct PostgresBackend {
 
 impl PostgresBackend {
     pub(crate) async fn server_version(&self) -> PgWireResult<String> {
-        let connection = self
-            .pool
-            .get()
+        let route = self.route();
+        let lease = route
+            .acquire()
             .await
             .map_err(|_| error_response("08006", "discovery source is unavailable"))?;
+        let connection = lease.object.as_ref().unwrap();
         connection
             .info
             .parameters
@@ -82,28 +84,31 @@ impl PostgresBackend {
         super::discovery::DiscoverySource::Postgres(self)
     }
     pub fn new(config: BackendConfig) -> io::Result<Self> {
+        let budget = ConnectionBudget::new(BackendSettings::default().max_connections_total)?;
+        Self::with_budget(config, budget)
+    }
+
+    /// A fixed source sharing occupied capacity with other backend adapters.
+    pub fn with_budget(config: BackendConfig, budget: Arc<ConnectionBudget>) -> io::Result<Self> {
         let settings = BackendSettings::default();
-        let selection = BackendSelection {
-            target: "default".into(),
-            backend_login: "default".into(),
-        };
+        let total = budget.limit();
+        let instance = Arc::new(InstanceState::new(&budget, total, total)?);
         Self::build(
             PostgresBinding {
-                selection,
+                selection: BackendSelection {
+                    target: "default".into(),
+                    backend_login: "default".into(),
+                },
                 compute_type: None,
                 compute: "default".into(),
                 default_compute_type: true,
-                max_connections: settings.max_connections_total,
-                max_in_flight: settings.max_connections_total,
+                max_connections: total,
+                max_in_flight: total,
                 config,
             },
             settings.max_connections_per_pool,
-            ConnectionBudget::new(settings.max_connections_total),
-            Arc::new(InstanceState::new(
-                "default".into(),
-                settings.max_connections_total,
-                settings.max_connections_total,
-            )),
+            budget,
+            instance,
             Duration::from_millis(settings.acquire_timeout_ms),
         )
     }
@@ -125,13 +130,7 @@ impl PostgresBackend {
         } = binding;
         let target = format!("{}:{}/{}", config.host, config.port, config.database);
         let database_user = config.username.clone();
-        let pool = pool::new(
-            config,
-            capacity,
-            budget.clone(),
-            instance.clone(),
-            acquire_timeout,
-        )?;
+        let pool = pool::new(config, capacity, instance.clone(), acquire_timeout)?;
         Ok(Self {
             pool,
             target,
@@ -199,6 +198,9 @@ impl PostgresBackend {
         &self,
         deadline: tokio::time::Instant,
     ) -> Result<Option<BackendLease<'_>>, PgWireError> {
+        if self.instance.capacity.is_closed() {
+            return Err(error_response("08006", "PostgreSQL binding is closed"));
+        }
         // Status only guides preference; `get` and the physical budget enforce use.
         let idle_available = self.pool.status().available > 0;
         let Ok(in_flight) = self.instance.in_flight.clone().try_acquire_owned() else {
@@ -207,7 +209,7 @@ impl PostgresBackend {
         let Ok(pool_slot) = self.pool_slots.clone().try_acquire_owned() else {
             return Ok(None);
         };
-        if !idle_available && !self.budget.may_open(&self.instance) {
+        if !idle_available && !self.instance.capacity.may_open() {
             return Ok(None);
         }
         let object = match timeout_at(deadline, self.pool.get()).await {
@@ -237,12 +239,16 @@ impl PostgresBackend {
 
     pub(crate) fn close(&self) {
         self.pool.close();
+        self.instance.capacity.close();
+        self.budget.changed.notify_waiters();
     }
 }
 
 /// Configured PostgreSQL routes, each with its own bounded, lazily opened pool.
 /// Construction does not connect to PostgreSQL or expose credentials to hooks.
 pub struct PostgresBackends {
+    #[cfg(feature = "snowflake")]
+    pub(crate) budget: Arc<ConnectionBudget>,
     pools: BTreeMap<BackendSelection, Vec<PostgresBackend>>,
 }
 
@@ -477,6 +483,22 @@ impl PostgresBackends {
         bindings: Vec<PostgresBinding>,
         settings: BackendSettings,
     ) -> io::Result<Self> {
+        let budget = ConnectionBudget::new(settings.max_connections_total)?;
+        Self::with_bindings_and_budget(bindings, settings, budget)
+    }
+
+    /// Construct pools under an existing total. The settings must name that total.
+    pub fn with_bindings_and_budget(
+        bindings: Vec<PostgresBinding>,
+        settings: BackendSettings,
+        budget: Arc<ConnectionBudget>,
+    ) -> io::Result<Self> {
+        if budget.limit() != settings.max_connections_total {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shared connection budget does not match backend.max_connections_total",
+            ));
+        }
         if bindings.is_empty()
             || settings.max_connections_per_pool == 0
             || settings.max_connections_per_pool > Semaphore::MAX_PERMITS
@@ -502,7 +524,6 @@ impl PostgresBackends {
 
         let mut instances = HashMap::<String, Arc<InstanceState>>::new();
         let mut pools = BTreeMap::<BackendSelection, Vec<PostgresBackend>>::new();
-        let budget = ConnectionBudget::new(settings.max_connections_total);
         let mut identities = std::collections::BTreeSet::new();
         for binding in bindings {
             let identity = format!(
@@ -534,10 +555,10 @@ impl PostgresBackends {
                 instance.clone()
             } else {
                 let instance = Arc::new(InstanceState::new(
-                    identity.clone(),
+                    &budget,
                     binding.max_connections,
                     binding.max_in_flight,
-                ));
+                )?);
                 instances.insert(identity, instance.clone());
                 instance
             };
@@ -551,7 +572,11 @@ impl PostgresBackends {
             )?;
             pools.entry(route).or_default().push(backend);
         }
-        Ok(Self { pools })
+        Ok(Self {
+            pools,
+            #[cfg(feature = "snowflake")]
+            budget,
+        })
     }
 
     pub fn resolve(&self, decision: &BackendDecision) -> Result<BackendRoute<'_>, SelectionError> {

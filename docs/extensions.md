@@ -38,6 +38,17 @@ and Python examples are under [hooks/examples](../hooks/examples).
 | Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
 | Dataset loading   | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                            | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
 
+Library hosts can create `backend::ConnectionBudget::new(total)` and pass it to
+`PostgresBackend::with_budget`, `PostgresBackends::with_bindings_and_budget`, or an
+empty `Backends::with_budget` registry. Supplied PostgreSQL registry settings must
+name the same total. Existing PostgreSQL constructors allocate a standalone budget;
+`Backends::new(postgres)` adopts that registry's budget, while `without_postgres()`
+uses the default total. `with_snowflake` automatically attaches an unused adapter.
+Register bindings before issuing catalog or data requests. Reusing an adapter under
+the same budget is valid; moving it between budgets is rejected, even when idle.
+Standalone Snowflake use establishes its own budget on first admission. The YAML
+host supplies one configured budget before loading metadata or accepting clients.
+
 The router resolves and validates every selection, including cache hits, and delegates execution; the backend owns
 credentials and connection acquisition. Callbacks receive no backend passwords or
 driver objects. Authenticated frontend identity stays separate from derived context.

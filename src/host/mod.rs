@@ -55,20 +55,26 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let discovery = host.file.discovery_backend()?;
             let discovery_compute = host.file.discovery_compute()?;
+            let budget =
+                yasp::backend::ConnectionBudget::new(host.file.backend.max_connections_total)?;
             #[cfg(not(feature = "snowflake"))]
-            let backends = Arc::new(PostgresBackends::with_bindings(
+            let backends = Arc::new(PostgresBackends::with_bindings_and_budget(
                 host.backends,
                 host.file.backend,
+                budget,
             )?);
             #[cfg(feature = "snowflake")]
             let backends = {
                 let mut backends = if host.backends.is_empty() {
-                    yasp::backend::Backends::without_postgres()
+                    yasp::backend::Backends::with_budget(budget)
                 } else {
-                    yasp::backend::Backends::new(Arc::new(PostgresBackends::with_bindings(
-                        host.backends,
-                        host.file.backend,
-                    )?))
+                    yasp::backend::Backends::new(Arc::new(
+                        PostgresBackends::with_bindings_and_budget(
+                            host.backends,
+                            host.file.backend,
+                            budget,
+                        )?,
+                    ))
                 };
                 for (selection, settings) in host.snowflake {
                     backends = backends.with_snowflake(

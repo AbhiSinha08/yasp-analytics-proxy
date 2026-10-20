@@ -108,12 +108,23 @@ access under every credential binding.
 
 ### Capacity and waiting
 
-Pools open connections on demand. Defaults are eight physical connections per pool
-and sixteen total. The total is enforced across actual pooled source connections,
-including idle, creating, and cleanup states; it does not reserve every pool's
-maximum. Each compute instance also enforces its shared `max_connections` and
-`max_in_flight` bounds. Idle sessions can be reclaimed when another binding needs
-physical capacity. Cancellation uses its separate control connection.
+`backend.max_connections_total` is one occupied-capacity limit across every target,
+login and engine in the configured registry. Defaults are eight connections per
+pool/binding and sixteen total; pool maxima are not reserved at startup.
+
+PostgreSQL connections count while creating, executing, cleaning up or idle, until
+the socket closes. Each compute instance also enforces its shared `max_connections`
+and `max_in_flight` bounds. Snowflake SQL API sessions count from admission through
+fetching and release, including retained frontend transaction sessions and abandoned
+operation cleanup. Polling and result partitions reuse that slot; idle HTTP transport
+sockets do not represent admitted sessions. This is a backend resource limit, not an
+exact count of TCP sockets. PostgreSQL cancellation uses a separate control connection.
+
+For a total of four, three occupied PostgreSQL connections leave one slot for
+Snowflake. A waiting binding can reclaim an idle PostgreSQL connection to make room;
+active connections and retained cleanup are never reclaimed. Catalog refreshes and
+live discovery use the same budget. Cache hits and snapshot metadata responses
+acquire no backend slot. Separate processes have separate budgets.
 
 Overflow stays within the selected type and login. If all eligible instances or
 the shared budget are full, acquisition waits asynchronously for capacity, up to
@@ -513,9 +524,9 @@ with the real Snowflake user. The adapter signs short-lived RS256 JWTs and uses
 verified HTTPS at `https://<account>.snowflakecomputing.com`.
 
 PostgreSQL host/port/TLS/compute settings cannot be mixed into a Snowflake target.
-Admission is bounded per binding by the smaller backend pool and total limit;
-acquisition uses `backend.acquire_timeout_ms`. The total is not yet a shared
-cross-engine budget. Read-only frontend transaction blocks preserve routing and
+Admission obeys the shared `backend.max_connections_total` and the binding's
+`max_connections_per_pool` ceiling, using one `backend.acquire_timeout_ms` deadline.
+Read-only frontend transaction blocks preserve routing and
 failure states while each Snowflake statement autocommits. They provide no shared
 snapshot or interactive source transaction.
 

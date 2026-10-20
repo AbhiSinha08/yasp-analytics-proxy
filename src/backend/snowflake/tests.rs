@@ -64,11 +64,18 @@ async fn fixture_bytes(
 async fn fixture_responses(
     responses: Vec<(u16, Vec<u8>)>,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
+    fixture_controlled(responses, None).await
+}
+
+async fn fixture_controlled(
+    responses: Vec<(u16, Vec<u8>)>,
+    mut pause: Option<(usize, oneshot::Sender<()>, oneshot::Receiver<()>)>,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for (status, response) in responses {
+        for (index, (status, response)) in responses.into_iter().enumerate() {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut data = Vec::new();
             loop {
@@ -92,13 +99,30 @@ async fn fixture_responses(
                 }
             }
             requests.push(String::from_utf8(data).unwrap());
+            let paused = pause.as_ref().is_some_and(|(at, _, _)| *at == index);
+            if paused {
+                let (_, entered, resume) = pause.take().unwrap();
+                let _ = entered.send(());
+                let _ = resume.await;
+            }
             let encoding = if response.starts_with(&[0x1f, 0x8b]) {
                 "Content-Encoding: gzip\r\n"
             } else {
                 ""
             };
-            socket.write_all(format!("HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nConnection: close\r\n{encoding}Content-Length: {}\r\n\r\n", response.len()).as_bytes()).await.unwrap();
-            socket.write_all(&response).await.unwrap();
+            let header = format!(
+                "HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nConnection: close\r\n{encoding}Content-Length: {}\r\n\r\n",
+                response.len()
+            );
+            let written = async {
+                socket.write_all(header.as_bytes()).await?;
+                socket.write_all(&response).await
+            }
+            .await;
+            // A paused submission may intentionally outlive its cancelled client.
+            if !paused {
+                written.unwrap();
+            }
         }
         requests
     });
@@ -449,4 +473,151 @@ async fn failed_statement_http_422_releases_capacity_and_preserves_sqlstate() {
         "a terminal SQL error must return its slot immediately"
     );
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn registry_shares_capacity_across_bindings_aliases_and_standalone_use() {
+    use crate::backend::Backends;
+    use crate::hooks::BackendSelection;
+    let budget = ConnectionBudget::new(2).unwrap();
+    let address = "127.0.0.1:1".parse().unwrap();
+    let first = Arc::new(SnowflakeBackend::new(config(address)).unwrap());
+    let mut second_config = config(address);
+    second_config.max_connections = 2;
+    let second = Arc::new(SnowflakeBackend::new(second_config).unwrap());
+    let selection = |name: &str| BackendSelection {
+        target: name.into(),
+        backend_login: "reader".into(),
+    };
+    let _registry = Backends::with_budget(budget.clone())
+        .with_snowflake(selection("first"), first.clone())
+        .unwrap()
+        .with_snowflake(selection("alias"), first.clone())
+        .unwrap()
+        .with_snowflake(selection("second"), second.clone())
+        .unwrap();
+    assert!(
+        Backends::without_postgres()
+            .with_snowflake(selection("conflict"), first.clone())
+            .is_err()
+    );
+    let settings = GatewaySettings::default();
+    let a = first.open(&settings, false).await.unwrap();
+    assert!(
+        matches!(
+            first.open(&settings, false).await,
+            Err(ExecutionError::Rejected { code: "53300", .. })
+        ),
+        "alias must retain its binding limit"
+    );
+    let b = second.open(&settings, false).await.unwrap();
+    assert!(
+        matches!(
+            second.open(&settings, false).await,
+            Err(ExecutionError::Rejected { code: "53300", .. })
+        ),
+        "the global total must include the first binding"
+    );
+    drop(a);
+    let c = second.open(&settings, false).await.unwrap();
+    second.close();
+    assert!(
+        matches!(
+            first.open(&settings, false).await,
+            Err(ExecutionError::Rejected { code: "53300", .. })
+        ),
+        "closing a binding cannot release its retained sessions"
+    );
+    drop((b, c));
+    let a = first.open(&settings, false).await.unwrap();
+    drop(a);
+    assert!(matches!(
+        second.open(&settings, false).await,
+        Err(ExecutionError::Rejected { code: "08006", .. })
+    ));
+
+    let standalone = Arc::new(SnowflakeBackend::new(config(address)).unwrap());
+    let session = standalone.open(&settings, false).await.unwrap();
+    assert!(
+        Backends::with_budget(budget)
+            .with_snowflake(selection("used"), standalone.clone())
+            .is_err()
+    );
+    drop(session);
+    assert!(standalone.open(&settings, false).await.is_ok());
+}
+
+#[tokio::test]
+async fn abandoned_operations_keep_the_shared_total_until_cleanup_finishes() {
+    for pause_at in [0, 1] {
+        let pending = json!({"code":"333334","statementHandle":"abc-123"})
+            .to_string()
+            .into_bytes();
+        let terminal = json!({"code":"000604","statementHandle":"abc-123"})
+            .to_string()
+            .into_bytes();
+        let responses = if pause_at == 0 {
+            vec![(200, pending)]
+        } else {
+            vec![
+                (200, pending),
+                (200, terminal.clone()),
+                (200, terminal.clone()),
+                (200, terminal),
+            ]
+        };
+        let (entered, mut paused) = oneshot::channel();
+        let (resume, resumed) = oneshot::channel();
+        let (address, task) =
+            fixture_controlled(responses, Some((pause_at, entered, resumed))).await;
+        let budget = ConnectionBudget::new(1).unwrap();
+        let backend = SnowflakeBackend::new(config(address)).unwrap();
+        let sibling = SnowflakeBackend::new(config("127.0.0.1:1".parse().unwrap())).unwrap();
+        backend.attach_budget(&budget).unwrap();
+        sibling.attach_budget(&budget).unwrap();
+        let settings = GatewaySettings {
+            query_timeout_ms: 500,
+            ..Default::default()
+        };
+        let mut session = backend.open(&settings, false).await.unwrap();
+        let (cancel, cancelled) = oneshot::channel();
+        let mut output = Output::default();
+        let frontend = SessionSettings::default();
+        let mut running = Box::pin(session.execute_sql(
+            "SELECT slow",
+            &mut output,
+            &settings,
+            &frontend,
+            cancelled,
+        ));
+        // Pause either submission or a status poll. Reaching a status poll
+        // proves the statement handle is known before cancellation.
+        tokio::select! {
+            _ = &mut paused => {},
+            _ = &mut running => panic!("request must wait for its controlled response"),
+        }
+        cancel.send(()).unwrap();
+        assert!(matches!(
+            running.await,
+            Err(ExecutionError::Rejected { code: "57014", .. })
+        ));
+        session.finish(false).await.unwrap();
+        assert!(
+            matches!(
+                sibling.open(&settings, false).await,
+                Err(ExecutionError::Rejected { code: "53300", .. })
+            ),
+            "frontend completion cannot release capacity owned by cleanup"
+        );
+        resume.send(()).unwrap();
+        task.await.unwrap();
+        let recovered = sibling
+            .inner
+            .capacity()
+            .acquire(tokio::time::Instant::now() + Duration::from_secs(4))
+            .await
+            .unwrap();
+        drop(recovered);
+        assert!(sibling.open(&settings, false).await.is_ok());
+    }
 }

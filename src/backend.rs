@@ -1,5 +1,8 @@
-//! Backend adapters and client metadata dispatch. Database-specific pools,
+//! Backend adapters, shared capacity, and client metadata dispatch. Database-specific pools,
 //! execution, and response handling stay inside their adapter.
+
+mod budget;
+pub use budget::ConnectionBudget;
 
 pub(crate) mod discovery;
 pub(crate) mod execution;

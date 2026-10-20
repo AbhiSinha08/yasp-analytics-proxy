@@ -97,6 +97,11 @@ workloads live under `fixtures/clients`; client-specific SQL regressions remain 
 the corresponding BI test module. Captured metadata/native-read acceptance does
 not establish arbitrary query-builder or real Snowflake compatibility.
 
+The `connection_budget` test covers PostgreSQL/Snowflake contention in both
+directions, idle reclamation, cached reads and catalog refresh under saturation.
+Focused adapter tests cover multiple bindings and aliases, conflicting registrations,
+atomic admission, cancelled waiters and retained cleanup after an interrupted request.
+
 The `catalog` test covers periodic DDL refresh, pinned generation stability, source
 spelling/types, column-grant isolation, bounded-load failures and expiry.
 Focused HTTP tests validate signed JWTs, polling, partitions and malformed/oversized

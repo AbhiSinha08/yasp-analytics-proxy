@@ -2,7 +2,10 @@
 //! statement autocommits; commit/rollback do not imply a shared source snapshot.
 use super::{Inner, rest, result, validate_session};
 use crate::{
-    backend::result::{ExecutionError, ExecutionResult, ResultEvent},
+    backend::{
+        budget::{CapacityError, CapacityPermit},
+        result::{ExecutionError, ExecutionResult, ResultEvent},
+    },
     config::GatewaySettings,
     discovery::SessionSettings,
     query::ParsedQuery,
@@ -11,14 +14,11 @@ use futures::{Sink, SinkExt, channel::oneshot};
 use reqwest::Method;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
-use tokio::{
-    sync::OwnedSemaphorePermit,
-    time::{Instant, timeout, timeout_at},
-};
+use tokio::time::{Instant, timeout, timeout_at};
 
 pub(crate) struct Session {
     inner: Arc<Inner>,
-    permit: Arc<OwnedSemaphorePermit>,
+    permit: Arc<CapacityPermit>,
 }
 impl Session {
     pub(super) async fn open(
@@ -26,17 +26,23 @@ impl Session {
         _: &GatewaySettings,
         _: bool,
     ) -> ExecutionResult<Self> {
-        let permit = timeout(inner.acquire_timeout, inner.permits.clone().acquire_owned())
+        let permit = inner
+            .capacity()
+            .acquire(Instant::now() + inner.acquire_timeout)
             .await
-            .map_err(|_| ExecutionError::rejected("53300", "Snowflake capacity wait timed out"))?
-            .map_err(|_| ExecutionError::rejected("08006", "Snowflake binding is closed"))?;
+            .map_err(|error| match error {
+                CapacityError::Closed => {
+                    ExecutionError::rejected("08006", "Snowflake binding is closed")
+                }
+                _ => ExecutionError::rejected("53300", "Snowflake capacity wait timed out"),
+            })?;
         Ok(Self {
             inner,
             permit: Arc::new(permit),
         })
     }
     pub(crate) fn usable(&self) -> bool {
-        !self.inner.permits.is_closed()
+        !self.inner.capacity().is_closed()
     }
     pub(crate) async fn finish(self, _: bool) -> ExecutionResult<()> {
         Ok(())
@@ -86,7 +92,7 @@ impl Session {
 
 struct Operation {
     inner: Arc<Inner>,
-    permit: Arc<OwnedSemaphorePermit>,
+    permit: Arc<CapacityPermit>,
     handle: Option<String>,
     cleanup_timeout: Duration,
     armed: bool,
