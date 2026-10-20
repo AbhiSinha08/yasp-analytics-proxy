@@ -1,6 +1,6 @@
 # Integration tests
 
-Run the PostgreSQL scenarios in WSL/Linux with Rust 1.89, Python 3,
+Run the PostgreSQL scenarios in a Linux environment with Rust 1.89, Python 3,
 PostgreSQL 18 (`initdb`, `pg_ctl`, `postgres`, `psql`/libpq), and
 TLS-capable `redis-server`/`redis-cli`, and OpenSSL installed:
 
@@ -15,8 +15,8 @@ server/client certificates, and invalid/expired certificate cases; all keys stay
 in its temporary directory. It creates two non-superuser source logins: a database owner with `CREATEDB`
 and a restricted reader. It supplies generated passwords and a temporary test
 configuration; no development credentials or services are needed. PostgreSQL 18 is
-required by the captured psql metadata queries. Set `YASP_TEST_PG_BIN` if its binaries
-are outside `/usr/lib/postgresql/18/bin` or `pg_config --bindir`.
+required by the captured psql metadata queries. Set `YASP_TEST_PG_BIN` to the
+PostgreSQL 18 binary directory if the runner cannot find it automatically.
 
 Cargo arguments follow `--`, including individual scenarios:
 
@@ -34,11 +34,13 @@ remark formats. The schema tests share host setup in `support/catalog_host.rs`.
 
 The Python feature needs matching CPython headers and a shared `libpython`. Set
 `PYO3_PYTHON` for the build and `LD_LIBRARY_PATH` when that library is outside the
-system loader path. For the local pyenv installation:
+system loader path. For an interpreter managed by pyenv, resolve its paths with:
 
 ```sh
-PYO3_PYTHON="$HOME/.pyenv/versions/3.12.9/bin/python3" \
-LD_LIBRARY_PATH="$HOME/.pyenv/versions/3.12.9/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+PYTHON="$(pyenv which python3.12)"
+PYTHON_LIB="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+PYO3_PYTHON="$PYTHON" \
+LD_LIBRARY_PATH="$PYTHON_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 python3 scripts/test.py -- --all-targets --features python
 ```
 

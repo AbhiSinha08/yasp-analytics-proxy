@@ -303,11 +303,13 @@ docker cp config/local-tls/ca.crt yasp-metabase:/tmp/yasp-ca.crt
 ```
 
 The copy survives restarts but not container recreation. For a durable deployment,
-mount only the public CA certificate read-only at the same path:
+mount only the public CA certificate read-only at the same path. Replace
+`/path/to/yasp` with the absolute repository checkout path in the format expected
+by your Docker host:
 
 ```yaml
 volumes:
-  - /home/abhisinha08/code/yasp/config/local-tls/ca.crt:/tmp/yasp-ca.crt:ro
+  - /path/to/yasp/config/local-tls/ca.crt:/tmp/yasp-ca.crt:ro
 ```
 
 In DBeaver, set these values under **Driver properties**, using a CA path readable

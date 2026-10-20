@@ -89,10 +89,11 @@ data, host Redis data and the existing Snowflake environment remain available.
 
 ## Connect to YASP
 
-YASP runs separately in WSL. Use **host.docker.internal:6432**, gateway database
-**development**, and login **yasp / yasp_password** for the current PostgreSQL
-gateway configuration. The [Snowflake demo](../snowflake/README.md) uses **6433**.
-Use the gateway protocol and credentials configured for that listener.
+Run YASP separately from the BI containers on the host. For the current
+PostgreSQL gateway configuration, use **host.docker.internal:6432**, database
+**development**, and login **yasp / yasp_password**. The
+[Snowflake demo](../snowflake/README.md) uses **6433**. Use the gateway protocol
+and credentials configured for that listener.
 
 For JDBC clients, set `preferQueryMode=simple`, `prepareThreshold=0` and
 `binaryTransfer=false`; Redshift JDBC also needs `compression=off`. For psycopg2

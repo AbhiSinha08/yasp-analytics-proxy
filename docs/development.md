@@ -10,9 +10,9 @@ emulator, including host-service prerequisites, ports, and persistent state.
 ## Toolchain and checks
 
 Use Rust 1.89.0 with rustfmt and Clippy as pinned in
-[rust-toolchain.toml](../rust-toolchain.toml). Run Linux service-backed checks in
-Debian WSL when working from Windows. Verify the compiler selected by the shell;
-a system Cargo installation does not automatically honor rustup toolchain files.
+[rust-toolchain.toml](../rust-toolchain.toml). Run service-backed checks in a
+Linux environment. Verify the compiler selected by the shell; a system Cargo
+installation does not automatically honor rustup toolchain files.
 
 ```sh
 rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy
@@ -26,7 +26,7 @@ python3 scripts/test.py --full
 ```
 
 The runner provisions disposable PostgreSQL 18 and Redis instances and executes
-`cargo test --locked --all-targets`. It needs an unprivileged Linux/WSL user,
+`cargo test --locked --all-targets`. It needs an unprivileged Linux user,
 PostgreSQL 18 server tools plus psql/libpq, a TLS-capable Redis server/CLI,
 OpenSSL, and Python 3.
 `YASP_TEST_PG_BIN` can select the PostgreSQL binary directory. It cleans up its own
