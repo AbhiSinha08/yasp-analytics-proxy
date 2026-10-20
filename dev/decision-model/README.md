@@ -8,20 +8,25 @@ first start needs internet access to fetch the pinned public checkpoint.
 
 The service builds the latest Laya source from its `main` branch and uses its
 `typed-decisions` checkpoint. That checkpoint has 421 million parameters and a
-1,024-token context. One checkpoint is resident at a time, request concurrency
-is capped at one, and model requests are capped at 1,024 tokens. The CPU
-configuration uses four threads and an 8 GiB container memory limit. The
-upstream CPU setup calls for 8 GiB RAM and about 10 GiB free disk; Docker keeps
-the downloaded model in a named volume.
+1,024-token default context. One checkpoint is resident at a time. The API
+admits up to four requests and allows explicit per-request token limits up to
+2,048; Laya serializes model inference through one worker, so the concurrency
+setting prevents early busy responses but does not run four GPU inferences in
+parallel. The CPU configuration uses four threads and an 8 GiB container memory
+limit. The upstream CPU setup calls for 8 GiB RAM and about 10 GiB free disk;
+Docker keeps the downloaded model in a named volume.
 
 The Laya source revision follows the current `main` branch tip when the image is
 built. `LAYA_REVISION=reviewed` keeps the model checkpoint at its reviewed SHA
 (`55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`) between rebuilds. Rebuild the image
 with `--build` to pick up newer Laya source.
 
-The CPU configuration is the fallback when Docker cannot access a compatible
-NVIDIA GPU. The CUDA compose override uses PyTorch 2.14.0 with CUDA 13.0 and
-fp16 inference to reduce GPU memory use.
+The CUDA compose override uses PyTorch 2.14.0 with CUDA 13.0. By default it
+keeps the checkpoint's precision setting instead of forcing fp16. Set
+`LAYA_CUDA_AMP=fp16` only if you want to trade precision for lower GPU memory
+use. The typed-decisions checkpoint defaults to a 1,024-token context, so the
+larger server limit only permits explicit request overrides; it does not
+increase the default context or make short requests more accurate.
 
 ## Start
 
@@ -48,7 +53,8 @@ curl --fail http://127.0.0.1:8000/health
 
 To see which checkpoint revision and device actually loaded, the health response
 includes `loaded`, `revisions`, and `device`. A healthy status alone only checks
-that the HTTP process is up.
+that the HTTP process is up. With the CUDA compose file, verify that `device` is
+`cuda`; with CPU mode it is `cpu`.
 
 ## Send a PII-column decision
 

@@ -19,8 +19,8 @@ services:
       LAYA_DEFAULT_MODEL: typed-decisions
       LAYA_PRELOAD: "1"
       LAYA_MAX_LOADED: "1"
-      LAYA_MAX_CONCURRENT: "1"
-      LAYA_MAX_TOKEN_BUDGET: "1024"
+      LAYA_MAX_CONCURRENT: "4"
+      LAYA_MAX_TOKEN_BUDGET: "2048"
       LAYA_THREADS: "4"
       LAYA_JEV_STRICT: "1"
       LAYA_API_KEY: "${LAYA_API_KEY:-}"
