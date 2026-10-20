@@ -119,7 +119,7 @@ async fn fixture_controlled(
                 socket.write_all(&response).await
             }
             .await;
-            // A paused submission may intentionally outlive its cancelled client.
+            // A paused request may intentionally outlive its cancelled client.
             if !paused {
                 written.unwrap();
             }
@@ -306,11 +306,18 @@ async fn frontend_compatibility_transaction_does_not_submit_transaction_sql() {
 #[tokio::test]
 async fn cancellation_keeps_admission_until_known_handle_cleanup_finishes() {
     let pending = json!({"code":"333334","statementHandle":"abc-123"}).to_string();
-    let (address, task) = fixture(vec![
-        pending,
-        json!({"code":"000604","statementHandle":"abc-123"}).to_string(),
-        json!({"code":"000604","statementHandle":"abc-123"}).to_string(),
-    ])
+    let (entered_tx, entered) = oneshot::channel();
+    let (resume, paused) = oneshot::channel();
+    let terminal = json!({"code":"000604","statementHandle":"abc-123"}).to_string();
+    let (address, task) = fixture_controlled(
+        vec![
+            (200, pending.clone().into_bytes()),
+            (200, pending.into_bytes()),
+            (200, terminal.clone().into_bytes()),
+            (200, terminal.into_bytes()),
+        ],
+        Some((1, entered_tx, paused)),
+    )
     .await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
     let settings = GatewaySettings::default();
@@ -322,17 +329,18 @@ async fn cancellation_keeps_admission_until_known_handle_cleanup_finishes() {
         Box::pin(session.execute_sql("SELECT slow", &mut output, &settings, &frontend, cancel));
     tokio::select! {
         result=&mut run => panic!("completed before cancellation: {}", result.is_ok()),
-        _=tokio::time::sleep(Duration::from_millis(20))=>{}
+        entered=tokio::time::timeout(Duration::from_secs(3), entered)=>entered.unwrap().unwrap()
     }
     sender.send(()).unwrap();
+    resume.send(()).unwrap();
     assert!(matches!(
         run.await,
         Err(ExecutionError::Rejected { code: "57014", .. })
     ));
     session.finish(false).await.unwrap();
     let requests = task.await.unwrap();
-    assert!(requests[1].starts_with("POST /api/v2/statements/abc-123/cancel "));
-    assert!(requests[2].starts_with("GET /api/v2/statements/abc-123 "));
+    assert!(requests[2].starts_with("POST /api/v2/statements/abc-123/cancel "));
+    assert!(requests[3].starts_with("GET /api/v2/statements/abc-123 "));
     assert!(backend.open(&settings, false).await.is_ok());
 }
 

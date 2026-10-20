@@ -25,7 +25,7 @@ nullability, defaults, and native type details including available length/precis
 scale. PostgreSQL reports native OIDs/modifiers, declared primary-key membership,
 and whole-relation SELECT privilege. Its source grants also filter schemas/columns.
 
-Snowflake additionally imports view definitions and declared primary, unique and
+Both providers import view definitions and declared primary, unique and
 foreign keys, with ordered local/referenced columns and referential actions. These
 are declarations, not enforcement guarantees. Snowflake datetime precision and
 generated-column status remain unknown; its information-schema datetime precision
@@ -56,13 +56,17 @@ schema_discovery:
     max_bytes: 16777216
 ```
 
-`schemas` is required when enabling a catalog. Other fields above are defaults.
-Omitting `catalog` retains live PostgreSQL discovery; Snowflake discovery requires
-one. Scope is exact and bounded to 256 schema names, not an application access policy.
+`schemas` is required for both engines. Other fields above are defaults.
+`catalog` is required for both PostgreSQL and Snowflake discovery. Missing or empty
+schema scope prevents startup. Library hosts must attach a matching loaded catalog
+with `GatewayConfig::with_catalog` before calling any serving entry point. Scope is
+exact and bounded to 256 schema names, not an application access policy.
 
-Initial loading must succeed before accepting clients. PostgreSQL uses one bounded
-metadata statement. Snowflake reads definitions and scoped SHOW KEYS using one
-admitted SQL API binding, with independent autocommit requests. Row/byte bounds cover the combined candidate. Only a complete,
+Initial loading must succeed before accepting clients. PostgreSQL collects shared
+definitions and typed source-specific facts in one admitted, read-only repeatable-read
+transaction. Its statements share row/byte bounds and a refresh deadline. Snowflake
+reads definitions and scoped SHOW KEYS using one admitted SQL API binding, with
+independent autocommit requests. Row/byte bounds cover the combined candidate. Only a complete,
 validated result becomes a generation; this does not promise stronger DDL consistency
 than the source supplies. No partially loaded candidate is published.
 
@@ -102,14 +106,30 @@ Snapshot responses bypass application context, selection and result caching. Fai
 frontend transactions reject metadata until rollback. Previews and value scans stay
 on ordinary routing, including when initiated by schema synchronization.
 
-PostgreSQL retains live discovery for other classified metadata. SQLAlchemy Redshift
-reflection over PostgreSQL uses real owners, ACLs, view definitions, source identifiers
-and declared constraints through that adapter. Snowflake responses instead use the
-configured snapshot, including its explicit schema scope; unknown catalog requests
-fail with `0A000`. Snowflake has no physical PostgreSQL indexes or user-defined
-PostgreSQL domains/enums. Compatible empty results describe that absence rather
-than inventing source objects. SQLAlchemy identity-option reflection is explicitly
-unsupported when the required sequence details are unavailable.
+Both engines serve supported metadata entirely from the configured snapshot and its
+explicit schema scope. Unknown classified catalog requests fail with `0A000`;
+unavailable or expired snapshots fail with `55000`. Neither path falls back to a
+source query, including inside frontend transactions. Source metadata reads occur
+only during initial loading and refresh. Unsupported catalog SQL, including broader
+psql/DBeaver inspection shapes, requires a reviewed snapshot handler.
+
+PostgreSQL snapshots retain real owners, ACLs, native relation/schema identifiers,
+view definitions, ordered constraints, index facts, scoped domains/enums, formatted
+native types and identity sequence options. Version/profile probes use captured
+source settings. Source grants filter relations, columns and keys; index definitions
+require whole-relation SELECT access. Foreign keys outside the configured scope or
+referencing inaccessible columns are excluded. Visible columns retain reported
+primary-key membership even when the complete key is outside their visibility.
+These metadata grants are observations
+at refresh time, not a live authorization check.
+
+Snowflake has no physical PostgreSQL indexes or user-defined PostgreSQL domains/enums.
+Compatible empty results describe that absence rather than inventing source objects.
+Snowflake SQLAlchemy identity-option reflection is explicitly unsupported when the
+required sequence details are unavailable.
+
+The Redshift client dialect does not request physical PostgreSQL indexes through
+its index-reflection API; PostgreSQL-profile reflection exposes those captured facts.
 
 The pinned `sqlalchemy-redshift` 0.8.14 dialect retains SQL quotes in primary and
 foreign key identifiers parsed from constraint definitions: its reflection API

@@ -79,11 +79,9 @@ impl Backends {
         compute: Option<&str>,
     ) -> Option<super::discovery::DiscoverySource<'_>> {
         if compute.is_none()
-            && let Some((binding, backend)) = self.snowflake.get_key_value(selection)
+            && let Some(backend) = self.snowflake.get(selection)
         {
-            return Some(super::discovery::DiscoverySource::Snowflake(
-                backend, binding,
-            ));
+            return Some(super::discovery::DiscoverySource::Snowflake(backend));
         }
         self.postgres
             .as_ref()?

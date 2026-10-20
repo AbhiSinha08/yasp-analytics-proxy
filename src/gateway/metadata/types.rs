@@ -51,6 +51,13 @@ impl FrontendType {
             "TIMESTAMPTZ" | "TIMESTAMP_LTZ" | "TIMESTAMP_TZ" => {
                 (1184, 2014, "timestamptz", 8, Some(35))
             }
+            _ if t.postgres_oid.is_some() => (
+                t.postgres_oid.unwrap(),
+                1111,
+                t.name.as_str(),
+                -1,
+                t.character_length,
+            ),
             _ => {
                 return Err(ExecutionError::rejected(
                     "0A000",

@@ -222,8 +222,10 @@ builtin because its SQL mutator is deployment configured.
   selection. Service authentication authenticates that integration, not each viewer;
   query comments alone do not prove an end-user identity. Verified end-user context
   is a later integration, not a requirement for the configuration/script prototype.
-- Route recognized schema-discovery queries directly to the configured metadata
-  source. Field scanning uses ordinary application routing. Schema caching is deferred.
+- Serve captured schema-discovery queries from a required catalog loaded through
+  the configured metadata identity and explicit schema scope. Refresh immutable
+  generations periodically; reject unsupported metadata without live fallback.
+  Field scanning uses ordinary application routing.
 - Support read-only session setup. Reject writes, COPY, replication, and
   temporary-table workflows with explicit errors.
 - Enforce read-only backend transactions as well as least-privileged source logins.

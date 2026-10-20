@@ -187,7 +187,7 @@ fn compute_types_overflow_share_capacity_and_reclaim_idle_connections() {
         let conflict = client.queries(&[
             "BEGIN",
             "SELECT pg_backend_pid(), current_database() /* limited */",
-            "SELECT 'escaped', current_database() /* limited large_compute */",
+            "SELECT 'escaped', current_database() || ':' || current_user /* limited large_compute */",
             "SELECT 'still_failed' /* limited */",
             "ROLLBACK",
             "SELECT 'after_conflict' /* limited */",
@@ -409,7 +409,7 @@ fn configured_host_resolves_partial_decisions_and_credential_overrides() {
                 "large": {"max_in_flight": 1, "max_connections": 1, "instances": [{"id": "large_a", "host": source.host, "port": source.port}]}
             }}
         }},
-        "schema_discovery": {"backend_login": "owner", "compute": "small_a"},
+        "schema_discovery": {"backend_login": "owner", "compute": "small_a", "catalog": {"schemas": ["public"]}},
         "hooks": {"select_backend": {
             "type": "rust", "callback": "builtin.select_backend.passthrough",
             "params": {"backend_login": "reader", "compute_type": "large"}

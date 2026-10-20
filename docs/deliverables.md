@@ -81,13 +81,13 @@
   - [x] **Connector and response checks** — Use focused HTTP tests for signed identity, polling, partitions, exact values, malformed or oversized responses, and incomplete results; exercise end-to-end query, cancellation, and recovery through the network emulator.
   - [x] **Warehouse acceptance tests** — Verify the adapter's signed identity and fixed role/warehouse request fields, output formats and partitions, value and frontend transaction behavior, resource bounds, cancellation, recovery, and disposable-fixture cleanup using focused HTTP tests and the network emulator. The emulator does not enforce Snowflake authentication, grants, or role/warehouse isolation; those provider-side controls remain proprietary.
   - [x] **Shared connection budget** — Enforce one occupied-capacity total across every target and login, preserving local limits and retaining permits through cleanup; reclaim idle connections under pressure.
-- [ ] **Gateway and dialect support** — Tracks which BI clients, gateway profiles, and backend SQL combinations YASP has verified.
+- [x] **Gateway and dialect support** — Tracks which BI clients, gateway profiles, and backend SQL combinations YASP has verified.
   - [x] **Client test baseline** — Pin supported client versions, capture the bundled JDBC connection and metadata SQL, and provide `scripts/test.py --full` for repeatable integration coverage.
   - [x] **Dialect selection and query forwarding** — Resolve input grammar before parsing. Route native and generated data SQL through read-only checks and forward it unchanged; SQL translation is not implemented yet.
+  - [x] **Snapshot-only discovery** — Require a matching catalog at startup for both engines and reject unsupported or expired metadata without source fallback.
   - [x] **Refreshed schema catalog** — Import bounded PostgreSQL or Snowflake metadata into periodic generations, with explicit schema scope, source identity, status and age.
   - [x] **Frontend metadata compatibility** — Answer captured PostgreSQL/Redshift JDBC, Metabase, Redash and SQLAlchemy discovery queries from catalog facts, including Snowflake views and declared keys. PostgreSQL/Redshift profiles share the handlers.
   - [x] **Snowflake development environment** — Seed and persist a two-schema Go/DuckDB emulator reached through the Snowflake SQL API. The emulator does not expose VARCHAR lengths.
-  - [ ] **Redshift SQLAlchemy key identifiers** — Correct the dialect's reflected key names when it returns `"ID"` including the quotes instead of `ID`; the mismatch can hide detected relationships.
 - [ ] **Decision model and dynamic masking** — Classifies bounded result data and applies schema-preserving masks before results are sent.\
   - [x] Dev Setup of Laya
   - [ ] ...
@@ -105,7 +105,9 @@
 ## Phase 3 — Advanced analytics and integrations
 
 - [ ] **Benchmarking Framework**
-- [ ] **Incremental result caching** — Stream result chunks into Redis and replay them with bounded YASP memory, publishing only complete results.
+- [ ] **Cache Improvements**
+  - [ ] **Incremental result caching** — Stream result chunks into Redis and replay them with bounded YASP memory, publishing only complete results.
+  - [ ] **Dynamic Cache TTL Support** - Support to define custom TTL of cached results based on query, context, result etc.
 - [ ] **Additional load-distribution algorithms** — Add round-robin and least-busy allocation within a selected compute type, preserving access, capacity, and cancellation bounds.
 - [ ] **Compute lifecycle** — Coordinates provider-specific provisioning, suspension, readiness, and recovery.
 - [ ] **More Gateway & Dialect Support**

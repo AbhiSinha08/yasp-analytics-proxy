@@ -57,8 +57,12 @@ fn columns_message(columns: Vec<crate::backend::result::ResultColumn>) -> PgWire
                 ColumnType::Bool => (16, 1, -1),
                 ColumnType::Int16 => (21, 2, -1),
                 ColumnType::Int32 => (23, 4, -1),
+                ColumnType::Oid => (26, 4, -1),
                 ColumnType::Int64 => (20, 8, -1),
                 ColumnType::Int16Array => (1005, -1, -1),
+                ColumnType::TextArray => (1009, -1, -1),
+                ColumnType::Json => (114, -1, -1),
+                ColumnType::Float32 => (700, 4, -1),
                 ColumnType::Float64 => (701, 8, -1),
                 ColumnType::Decimal { precision, scale } => (
                     1700,

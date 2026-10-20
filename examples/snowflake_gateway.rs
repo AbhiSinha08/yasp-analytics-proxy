@@ -49,18 +49,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_response_bytes: 8 * 1024 * 1024,
     })?);
     let backends = Arc::new(Backends::new(postgres).with_snowflake(selected.clone(), snowflake)?);
+    let snapshot = backends
+        .catalog(
+            &catalog,
+            None,
+            yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+        )
+        .await?;
     let selector = bind_select_backend(selected, |_, route| Ok(route.clone()));
     let config = GatewayConfig::new(
         env::var("YASP_GATEWAY_USERNAME")?,
         env::var("YASP_GATEWAY_PASSWORD")?,
         env::var("YASP_GATEWAY_DATABASE")?,
     )?
+    .with_catalog(snapshot.clone())
     .with_schema_discovery(catalog)
     .with_input_options(metabase(SqlDialect::Snowflake));
     let listener = tokio::net::TcpListener::bind(config.settings().listen).await?;
-    yasp::gateway::serve_backends(listener, config, backends, selector, async {
+    let result = yasp::gateway::serve_backends(listener, config, backends, selector, async {
         let _ = tokio::signal::ctrl_c().await;
     })
-    .await?;
+    .await;
+    snapshot.stop_refreshing().await;
+    result?;
     Ok(())
 }

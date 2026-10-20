@@ -102,19 +102,6 @@ pub enum QueryError {
 }
 
 impl ParsedQuery {
-    /// A generated metadata statement has its own effective SQL and query ID.
-    pub(crate) fn from_statement(statement: Statement) -> Result<Self, QueryError> {
-        let sql = statement.to_string();
-        let tokens = bounded_tokens(&sql, MAX_SQL_BYTES, SqlDialect::Postgresql)?;
-        let query_id = query_id(&sql, &tokens);
-        Ok(Self {
-            sql,
-            statement,
-            query_id,
-            options: InputOptions::frontend(SqlDialect::Postgresql),
-        })
-    }
-
     pub fn parse(sql: &str) -> Result<Self, QueryError> {
         Self::parse_with_limit(sql, MAX_SQL_BYTES)
     }

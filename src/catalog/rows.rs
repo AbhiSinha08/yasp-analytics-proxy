@@ -11,11 +11,17 @@ pub(crate) struct Rows {
     bytes: usize,
     max_rows: usize,
     max_bytes: usize,
+    postgres: Option<super::PostgresMetadata>,
+    fact_rows: usize,
+    postgres_bytes: usize,
     facts: BTreeMap<RelationId, (Option<String>, Vec<Constraint>)>,
 }
 impl Rows {
     pub(crate) fn new(settings: &CatalogSettings) -> Self {
         Self {
+            postgres: None,
+            fact_rows: 0,
+            postgres_bytes: 0,
             rows: Vec::new(),
             bytes: 0,
             max_rows: settings.max_rows,
@@ -55,18 +61,41 @@ impl Rows {
             .flatten()
             .try_fold(self.bytes, |n, s| n.checked_add(s.len()))
             .ok_or(CatalogError::TooLarge)?;
-        if self.rows.len() >= self.max_rows || bytes > self.max_bytes {
+        if self.rows.len() + self.fact_rows >= self.max_rows || bytes > self.max_bytes {
             return Err(CatalogError::TooLarge);
         }
         self.bytes = bytes;
         self.rows.push(row);
         Ok(())
     }
+    pub(crate) fn postgres_row(
+        &mut self,
+        kind: &str,
+        oid: u32,
+        json: &str,
+    ) -> Result<(), CatalogError> {
+        self.bytes = self
+            .bytes
+            .checked_add(json.len())
+            .ok_or(CatalogError::TooLarge)?;
+        self.postgres_bytes += json.len();
+        self.fact_rows += 1;
+        if self.bytes > self.max_bytes || self.rows.len() + self.fact_rows > self.max_rows {
+            return Err(CatalogError::TooLarge);
+        }
+        self.postgres
+            .get_or_insert_with(Default::default)
+            .record(kind, oid, json)
+    }
+
     pub(crate) fn snapshot(
-        self,
+        mut self,
         source: SourceIdentity,
         generation: u64,
     ) -> Result<Snapshot, CatalogError> {
+        if let Some(pg) = &mut self.postgres {
+            pg.shared_facts(&mut self.facts)?;
+        }
         let mut schemas = BTreeSet::new();
         let mut relations: BTreeMap<RelationId, Relation> = BTreeMap::new();
         for mut row in self.rows {
@@ -158,9 +187,12 @@ impl Rows {
                 relation.view_definition = view.clone();
                 relation.constraints = Some(constraints.clone());
                 for column in &mut relation.columns {
-                    column.primary_key = Some(constraints.iter().any(|c| {
-                        c.kind == ConstraintKind::PrimaryKey && c.columns.contains(&column.id.name)
-                    }));
+                    column.primary_key.get_or_insert_with(|| {
+                        constraints.iter().any(|c| {
+                            c.kind == ConstraintKind::PrimaryKey
+                                && c.columns.contains(&column.id.name)
+                        })
+                    });
                 }
             }
             relation.columns.sort_by_key(|c| c.ordinal);
@@ -178,6 +210,9 @@ impl Rows {
             {
                 return Err(CatalogError::InvalidMetadata);
             }
+        }
+        if let Some(pg) = &self.postgres {
+            pg.validate_relations(&relations)?;
         }
         if source.dialect == crate::query::SqlDialect::Snowflake {
             let ids = relations
@@ -221,6 +256,7 @@ impl Rows {
                 })
                 .sum::<usize>();
         let bytes = bytes
+            + self.postgres_bytes
             + self
                 .facts
                 .iter()
@@ -230,6 +266,7 @@ impl Rows {
             return Err(CatalogError::TooLarge);
         }
         Ok(Snapshot {
+            postgres: self.postgres,
             generation,
             loaded_at: SystemTime::now(),
             source,

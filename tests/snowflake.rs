@@ -80,11 +80,26 @@ fn native_snowflake_through_pgwire_routes_values_transactions_and_recovers() {
         .unwrap()
         .with_input_options(metabase(SqlDialect::Snowflake));
     let server = support::GatewayServer::start(move |listener, stopped| async move {
-        yasp::gateway::serve_backends(listener, config, backends, selector, async {
-            let _ = stopped.await;
-        })
+        let catalog = backends
+            .catalog(
+                config.schema_discovery().unwrap(),
+                None,
+                yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+            )
+            .await
+            .unwrap();
+        yasp::gateway::serve_backends(
+            listener,
+            config.with_catalog(catalog.clone()),
+            backends,
+            selector,
+            async {
+                let _ = stopped.await;
+            },
+        )
         .await
         .unwrap();
+        catalog.stop_refreshing().await;
     });
     check_native_runtime(&identity, server);
 }
@@ -146,13 +161,13 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
         );
         let routed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = routed.clone();
-        let selector = bind_select_backend(sf_selection, move |_, state| {
+        let selector = bind_select_backend(sf_selection.clone(), move |_, state| {
             observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(state.clone())
         });
         let config = identity
             .gateway_config()
-            .with_schema_discovery(pg_selection)
+            .with_schema_discovery(sf_selection)
             .with_settings(GatewaySettings {
                 protocol: profile.into(),
                 tls: yasp::config::GatewayTls {
@@ -328,10 +343,15 @@ fn check_native_runtime(identity: &support::Identity, server: support::GatewaySe
         spoof.stdout.is_empty(),
         "native catalog hints cannot borrow PostgreSQL discovery"
     );
+    assert!(String::from_utf8_lossy(&connection.query(catalog_sql).stderr).contains("0A000"));
+    let tables = include_str!("../src/gateway/metadata/queries/sqlalchemy_postgresql_tables.sql")
+        .replace("__YASP_SCHEMA__", "public");
+    let metadata = connection.query(&tables);
     support::assert_success(
-        &connection.query(catalog_sql),
-        "catalog definitions retain designated PostgreSQL authority",
+        &metadata,
+        "snapshot definitions retain designated PostgreSQL authority",
     );
+    assert!(String::from_utf8_lossy(&metadata.stdout).contains("yasp_catalog_only_marker"));
     let timeout = connection.query(&format!(
         "{NATIVE}SELECT SUM(RANDOM()) FROM range(1000000000)"
     ));

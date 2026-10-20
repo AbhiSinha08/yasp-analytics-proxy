@@ -91,22 +91,14 @@ fn transactions_pin_routes_preserve_settings_and_bypass_cache() {
         .collect();
     assert_eq!(pids.len(), 2);
     assert_eq!(pids[0], pids[1]);
-    for queries in [
-        vec![
-            "BEGIN",
-            "SELECT pg_backend_pid() AS source_pid",
-            "SELECT current_user /* secondary_route */",
-            "SELECT 1",
-            "ROLLBACK",
-        ],
-        vec!["BEGIN", "SELECT version()", "SELECT 1", "ROLLBACK"],
-        vec![
-            "BEGIN",
-            "SELECT pg_backend_pid() AS source_pid",
-            "SELECT version()",
-            "ROLLBACK",
-        ],
-    ] {
+    let queries = [
+        "BEGIN",
+        "SELECT pg_backend_pid() AS source_pid",
+        "SELECT current_user /* secondary_route */",
+        "SELECT 1",
+        "ROLLBACK",
+    ];
+    {
         let output = client.queries(&queries);
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("25000"),
@@ -164,9 +156,9 @@ fn transactions_pin_routes_preserve_settings_and_bypass_cache() {
         "COMMIT",
         "SELECT value FROM scope_value",
         "SET application_name = 'first'",
-        "SELECT current_setting('application_name') || '_value'",
+        "SELECT current_setting('application_name') || '_value' FROM scope_value LIMIT 1",
         "SET application_name = 'second'",
-        "SELECT current_setting('application_name') || '_value'",
+        "SELECT current_setting('application_name') || '_value' FROM scope_value LIMIT 1",
     ]);
     assert_success(&values, "transactional settings and autocommit cache scope");
     let output = stdout(&values);

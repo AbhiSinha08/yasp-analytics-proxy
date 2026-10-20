@@ -113,7 +113,7 @@ fn remarks_choose_grammar_but_cannot_bypass_routing() {
     let spoof = connection.query("-- Metabase:: userID: 7 queryType: native queryHash: abc\nSELECT relname FROM pg_catalog.pg_class");
     assert!(String::from_utf8_lossy(&spoof.stderr).contains("does not match"));
     support::assert_success(
-        &connection.query("SELECT relname FROM pg_catalog.pg_class LIMIT 1"),
+        &connection.query("SELECT current_catalog"),
         "ordinary metadata bypass remains available",
     );
     let oversized = connection.query(&format!("SELECT 1 /* {} */", "x".repeat(512)));

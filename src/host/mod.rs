@@ -84,42 +84,25 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Arc::new(backends)
             };
-            let catalog = match &host.file.schema_discovery.catalog {
-                Some(settings) => {
-                    #[cfg(feature = "snowflake")]
-                    {
-                        Some(
-                            backends
-                                .catalog(
-                                    &discovery,
-                                    discovery_compute.as_deref(),
-                                    settings.runtime()?,
-                                )
-                                .await?,
-                        )
-                    }
-                    #[cfg(not(feature = "snowflake"))]
-                    {
-                        let source = backends
-                            .get_discovery(&discovery, discovery_compute.as_deref())
-                            .ok_or_else(|| {
-                                io::Error::other("catalog discovery binding is unavailable")
-                            })?;
-                        Some(
-                            yasp::catalog::Catalog::postgres(
-                                Arc::new(source.clone()),
-                                settings.runtime()?,
-                            )
-                            .await?,
-                        )
-                    }
-                }
-                None => None,
+            let settings = host
+                .file
+                .schema_discovery
+                .catalog
+                .as_ref()
+                .ok_or(yasp::config::ConfigError::InvalidCatalog)?
+                .runtime()?;
+            #[cfg(feature = "snowflake")]
+            let catalog = backends
+                .catalog(&discovery, discovery_compute.as_deref(), settings)
+                .await?;
+            #[cfg(not(feature = "snowflake"))]
+            let catalog = {
+                let source = backends
+                    .get_discovery(&discovery, discovery_compute.as_deref())
+                    .ok_or_else(|| io::Error::other("catalog discovery binding is unavailable"))?;
+                yasp::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await?
             };
-            let gateway = match &catalog {
-                Some(catalog) => gateway.with_catalog(catalog.clone()),
-                None => gateway,
-            };
+            let gateway = gateway.with_catalog(catalog.clone());
             let serving = async {
                 let listener = TcpListener::bind(gateway.settings().listen).await?;
                 tracing::info!(address = %listener.local_addr()?, "YASP gateway listening");
@@ -148,9 +131,7 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             .await;
-            if let Some(catalog) = catalog {
-                catalog.stop_refreshing().await;
-            }
+            catalog.stop_refreshing().await;
             serving?;
             Ok::<(), Box<dyn std::error::Error>>(())
         }

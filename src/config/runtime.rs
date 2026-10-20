@@ -68,6 +68,17 @@ impl GatewayConfig {
         self
     }
 
+    /// The configured metadata source, before catalog construction.
+    pub fn schema_discovery(&self) -> Option<&crate::hooks::BackendSelection> {
+        self.schema_discovery.as_ref()
+    }
+    pub fn schema_discovery_compute(&self) -> Option<&str> {
+        self.schema_discovery_compute.as_deref()
+    }
+    pub fn catalog(&self) -> Option<&std::sync::Arc<crate::catalog::Catalog>> {
+        self.catalog.as_ref()
+    }
+
     /// Use a configured pair for discovery without invoking application hooks.
     pub fn with_schema_discovery(mut self, route: crate::hooks::BackendSelection) -> Self {
         self.schema_discovery = Some(route);

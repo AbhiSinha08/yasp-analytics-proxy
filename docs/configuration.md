@@ -1,6 +1,6 @@
 # Runtime configuration
 
-Library hosts can attach a shared, periodically refreshed schema catalog with
+Library hosts must attach a shared, periodically refreshed schema catalog with
 `GatewayConfig::with_catalog`. Its source identity, schema scope, refresh/age and
 row/byte limits are described in [Shared schema catalog](catalog.md). The YAML host
 enables the configured source provider through `schema_discovery.catalog`.
@@ -123,7 +123,7 @@ exact count of TCP sockets. PostgreSQL cancellation uses a separate control conn
 For a total of four, three occupied PostgreSQL connections leave one slot for
 Snowflake. A waiting binding can reclaim an idle PostgreSQL connection to make room;
 active connections and retained cleanup are never reclaimed. Catalog refreshes and
-live discovery use the same budget. Cache hits and snapshot metadata responses
+catalog refreshes use the same budget. Cache hits and snapshot metadata responses
 acquire no backend slot. Separate processes have separate budgets.
 
 Overflow stays within the selected type and login. If all eligible instances or
@@ -263,14 +263,18 @@ The selected pair must exist. For multiple eligible compute instances, specify
 limits as ordinary queries. Recognized metadata queries use this binding independently
 of ordinary-query callbacks and caching. Library hosts use
 `GatewayConfig::with_schema_discovery` and optional
-`with_schema_discovery_compute` to choose explicitly.
+`with_schema_discovery_compute` to choose explicitly. Their matching accessors and
+`PostgresBackends::discovery_route` let a host resolve the same binding before
+constructing a catalog; `GatewayConfig::catalog` exposes an attached handle.
 
-`schema_discovery.catalog` enables bounded, periodically refreshed definitions from
-that same discovery target, login and optional compute. `schemas` lists exact source
-names; it is required when the catalog is enabled. Initial loading must succeed
-before the listener accepts clients. Omit `catalog` to retain PostgreSQL discovery
-forwarding. Redshift Metabase's captured table/column scans require the catalog;
-Redshift-specific views are answered locally rather than forwarded to PostgreSQL.
+`schema_discovery.catalog` is required for both engines. It supplies bounded,
+periodically refreshed definitions from the same discovery target, login and optional
+compute. `schemas` must list exact source names. Initial loading and source identity
+validation must succeed before accepting clients. Library hosts attach the catalog
+using `GatewayConfig::with_catalog`; configurations without one fail startup.
+Supported metadata uses snapshots exclusively. Unsupported classified requests return
+`0A000`; expired or unavailable snapshots return `55000`. Metadata never falls back
+to live discovery. Redshift-specific views use captured frontend handlers.
 See [catalog configuration](catalog.md#refresh-and-failure-behavior) for refresh, age and memory bounds.
 
 ### JDBC clients
@@ -379,14 +383,14 @@ Snowflake discovery supports the captured reflection surface through normalized
 catalog facts; see [the local environment](../dev/snowflake/README.md).
 The Redshift dialect queries fields such as `pg_class.reldiststyle`, late-binding
 view columns and external catalogs. YASP recognizes the complete captured SQL,
-accepts only bounded literal schema/table filters, and translates these metadata
-requests inside the PostgreSQL adapter. They bypass ordinary context, selection
+accepts only bounded literal schema/table filters, and renders these requests from
+the configured catalog snapshot. They bypass ordinary context, selection
 and result caching. Types, comments, defaults, view definitions, declared keys,
 owners and ACLs come from PostgreSQL; Redshift distribution, encoding and sort-key
 properties are NULL. Unknown SQL remains outside this compatibility surface.
-These live PostgreSQL discovery responses use the configured identity rather than
-the snapshot's imported schema list. Snowflake reflection instead uses the snapshot
-scope, virtual identifiers and declared key definitions. Unknown source owners,
+Both engines restrict reflection to the snapshot's imported schema list and captured
+discovery-role visibility. PostgreSQL retains native identifiers and source facts;
+Snowflake uses virtual identifiers and declared key definitions. Unknown source owners,
 privileges and physical Redshift properties remain NULL. Unknown catalog requests
 fail explicitly.
 

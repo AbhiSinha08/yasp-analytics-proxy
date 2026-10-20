@@ -49,13 +49,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     match env::args().nth(1).as_deref() {
         None | Some("fixed") => {
-            gateway::serve(
+            let backend = Arc::new(PostgresBackend::new(backend)?);
+            let catalog = yasp::catalog::Catalog::postgres(
+                backend.clone(),
+                yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+            )
+            .await?;
+            let result = gateway::serve(
                 listener,
-                config,
-                Arc::new(PostgresBackend::new(backend)?),
+                config.with_catalog(catalog.clone()),
+                backend,
                 shutdown,
             )
-            .await?
+            .await;
+            catalog.stop_refreshing().await;
+            result?;
         }
         Some("routed") => {
             let route = BackendSelection {
@@ -67,14 +75,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 BTreeMap::from([(route.clone(), backend)]),
                 BackendSettings::default(),
             )?);
-            gateway::serve_routed(
+            let source = backends
+                .get_discovery(&route, None)
+                .ok_or("missing discovery source")?;
+            let catalog = yasp::catalog::Catalog::postgres(
+                Arc::new(source.clone()),
+                yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+            )
+            .await?;
+            let result = gateway::serve_routed(
                 listener,
-                config.with_schema_discovery(route),
+                config
+                    .with_schema_discovery(route)
+                    .with_catalog(catalog.clone()),
                 backends,
                 selector,
                 shutdown,
             )
-            .await?;
+            .await;
+            catalog.stop_refreshing().await;
+            result?;
         }
         Some(_) => return Err("usage: tls_gateway [fixed|routed]".into()),
     }

@@ -7,7 +7,6 @@ pub(crate) mod redshift;
 mod session;
 pub(crate) mod template;
 
-pub(crate) use catalog::{catalog_relation, helper, name};
 pub use classify::{DiscoveryKind, classify};
 pub(crate) use session::{SessionSettings, SetupResponse};
 

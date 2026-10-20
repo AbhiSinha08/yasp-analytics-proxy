@@ -29,27 +29,28 @@ pub(super) async fn serve_sessions(
 ) -> io::Result<()> {
     let profile =
         FrontendProfile::from_protocol(&config.settings.protocol).map_err(io::Error::other)?;
-    if let Some(catalog) = &config.catalog {
-        let snapshot = catalog.snapshot().map_err(io::Error::other)?;
-        if (snapshot.source.dialect == crate::query::SqlDialect::Postgresql
-            || execution.discovery().catalog_identity().dialect
-                == crate::query::SqlDialect::Snowflake)
-            && snapshot.source != execution.discovery().catalog_identity()
-        {
-            return Err(io::Error::other(
-                "catalog and discovery identities must match",
-            ));
-        }
+    let catalog = config.catalog.as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "schema discovery requires a catalog; attach it with GatewayConfig::with_catalog",
+        )
+    })?;
+    let snapshot = catalog.snapshot().map_err(io::Error::other)?;
+    if snapshot.source != execution.discovery().catalog_identity() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "catalog and discovery identities must match",
+        ));
     }
     let server_version = match profile {
-        // Preserve the existing source-backed PostgreSQL metadata surface.
-        FrontendProfile::Postgres => execution
-            .discovery()
-            .server_version()
-            .await
-            .map_err(|_| io::Error::other("cannot obtain PostgreSQL discovery profile"))?,
+        FrontendProfile::Postgres => snapshot
+            .postgres
+            .as_ref()
+            .map(|pg| pg.server_version.clone())
+            .unwrap_or_else(|| "18.0".into()),
         FrontendProfile::Redshift => "8.0.2".into(),
     };
+    drop(snapshot);
     if profile == FrontendProfile::Redshift && config.tls.is_none() {
         return Err(io::Error::other(
             "Redshift password authentication requires TLS",
@@ -83,7 +84,9 @@ pub(super) async fn serve_sessions(
         server_version,
         profile,
         input_options: config.input_options,
-        catalog: config.catalog,
+        catalog: config
+            .catalog
+            .expect("catalog was validated before serving"),
         pid_generator: Arc::new(RandomPidSecretKeyGenerator::default()),
     });
     let mut sessions = JoinSet::new();
@@ -161,7 +164,7 @@ pub(super) async fn serve_sessions(
 
 pub(super) struct Credentials {
     pub(super) pid_generator: Arc<RandomPidSecretKeyGenerator>,
-    pub(super) catalog: Option<Arc<crate::catalog::Catalog>>,
+    pub(super) catalog: Arc<crate::catalog::Catalog>,
     pub(super) tls: Option<Arc<crate::tls::ServerTls>>,
     pub(super) username: String,
     pub(super) database: String,

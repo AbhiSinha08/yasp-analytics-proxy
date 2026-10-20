@@ -420,10 +420,8 @@ impl FileConfig {
         if self.hooks.select_backend.rust_callback() == Some("builtin.select_backend.passthrough") {
             self.default_decision()?;
         }
-        let discovery = self.discovery_backend()?;
-        if self.targets[&discovery.target].engine == "snowflake"
-            && self.schema_discovery.catalog.is_none()
-        {
+        self.discovery_backend()?;
+        if self.schema_discovery.catalog.is_none() {
             return Err(ConfigError::InvalidCatalog);
         }
         self.discovery_compute()?;

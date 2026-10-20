@@ -93,7 +93,7 @@ impl FrontendProfile {
     }
 
     /// Profile fingerprints describe the frontend, independently of the source.
-    /// PostgreSQL retains its existing source-backed discovery behavior.
+    /// PostgreSQL profile probes use the captured source catalog settings.
     pub(crate) fn fingerprint(self, statement: &Statement) -> Option<SetupResponse> {
         if self != Self::Redshift {
             return None;

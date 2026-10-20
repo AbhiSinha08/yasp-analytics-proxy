@@ -9,7 +9,7 @@ contracts and validate decisions without interpreting organization policy. Share
 execution receives authenticated identity and bounded services; source driver and
 frontend password/TLS objects remain in their adapters.
 
-Hosts can also construct a shared [schema catalog](catalog.md), attach it with
+Hosts must construct a shared [schema catalog](catalog.md), attach it with
 `GatewayConfig::with_catalog`, and retain its `Arc<Snapshot>` for later AST binding.
 Catalog source identity and refresh settings belong to the host; core owns bounded
 loading, atomic publication, expiry and frontend response handling. Schema coordinates

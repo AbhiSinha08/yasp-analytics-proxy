@@ -22,6 +22,11 @@ impl Request {
         if query.input_options().native || query.input_options().dialect != SqlDialect::Redshift {
             return None;
         }
+        let actual = tokens(query.sql(), &RedshiftSqlDialect {})?;
+        Self::recognize_tokens(&actual)
+    }
+
+    pub(crate) fn recognize_tokens(actual: &[Token]) -> Option<Self> {
         static TEMPLATES: OnceLock<Vec<(Kind, Vec<Token>)>> = OnceLock::new();
         let templates = TEMPLATES.get_or_init(|| {
             let mut templates = Vec::new();
@@ -62,9 +67,8 @@ impl Request {
             }
             templates
         });
-        let actual = tokens(query.sql(), &RedshiftSqlDialect {})?;
         templates.iter().find_map(|(kind, template)| {
-            let captures = capture(&actual, template)?;
+            let captures = capture(actual, template)?;
             let value = |key| captures.get(key).map(|v| v[0].to_owned());
             Some(Self {
                 kind: *kind,

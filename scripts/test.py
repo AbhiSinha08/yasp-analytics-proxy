@@ -131,6 +131,7 @@ def services():
                     raise RuntimeError("isolated Redis did not become ready")
                 time.sleep(0.03)
             config = {
+                "schema_discovery": {"catalog": {"schemas": ["public"]}},
                 "version": 1,
                 "targets": {"primary": {
                     "engine": "postgresql", "host": "127.0.0.1", "port": postgres_port,

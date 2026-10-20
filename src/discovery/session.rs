@@ -71,6 +71,31 @@ impl SessionSettings {
     }
     /// Only bounded literal assignments; rejected commands cannot alter pool state.
     pub fn handle(&mut self, statement: &Statement) -> Result<Option<SetupResponse>, &'static str> {
+        let probe = matches!(statement, Statement::Query(query)
+            if matches!(query.body.as_ref(), sqlparser::ast::SetExpr::Select(select)
+                if select.from.is_empty() && matches!(select.projection.as_slice(),
+                    [sqlparser::ast::SelectItem::UnnamedExpr(Expr::Function(function))]
+                    if name(&function.name).is_some_and(|(_, n)| n == "current_setting"))));
+        let setting = if probe {
+            match statement.to_string().to_ascii_lowercase().as_str() {
+                "select current_setting('application_name')"
+                | "select pg_catalog.current_setting('application_name')" => {
+                    Some(&self.application_name)
+                }
+                "select current_setting('search_path')"
+                | "select pg_catalog.current_setting('search_path')" => Some(&self.search_path),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(value) = setting {
+            return Ok(Some(SetupResponse::Row {
+                name: "current_setting".into(),
+                value: value.clone(),
+                tag: "SELECT 1",
+            }));
+        }
         let mut assignment = None;
         match statement {
             Statement::Set(Set::SingleAssignment {

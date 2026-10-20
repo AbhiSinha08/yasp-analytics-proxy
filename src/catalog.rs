@@ -2,6 +2,8 @@
 //! rows or authorization decisions. AST binding and masking are separate stages.
 
 mod model;
+mod postgres;
+pub use postgres::*;
 mod rows;
 pub use model::{
     Column, ColumnId, Constraint, ConstraintKind, ForeignKey, NativeType, Relation, RelationId,

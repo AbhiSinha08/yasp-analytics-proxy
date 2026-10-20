@@ -3,7 +3,6 @@
 
 mod catalog;
 mod connection;
-mod discovery;
 mod execution;
 mod pool;
 mod result;
@@ -13,7 +12,6 @@ mod transaction;
 pub(crate) use transaction::PostgresTransaction;
 
 use super::ConnectionBudget;
-pub(super) use discovery::{discover, prepare as prepare_discovery};
 use pool::{InstanceState, PgManager};
 
 use crate::{
@@ -60,26 +58,6 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
-    pub(crate) async fn server_version(&self) -> PgWireResult<String> {
-        let route = self.route();
-        let lease = route
-            .acquire()
-            .await
-            .map_err(|_| error_response("08006", "discovery source is unavailable"))?;
-        let connection = lease.object.as_ref().unwrap();
-        connection
-            .info
-            .parameters
-            .get("server_version")
-            .cloned()
-            .ok_or_else(|| {
-                error_response(
-                    "08006",
-                    "discovery source did not supply its PostgreSQL version",
-                )
-            })
-    }
-
     pub(crate) fn discovery(&self) -> super::discovery::DiscoverySource<'_> {
         super::discovery::DiscoverySource::Postgres(self)
     }
@@ -359,31 +337,6 @@ impl<'a> BackendLease<'a> {
             .await
     }
 
-    pub(super) async fn execute_discovery<S>(
-        self,
-        query: &ParsedQuery,
-        output: &mut S,
-        query_timeout: Duration,
-        write_timeout: Duration,
-        cancel: futures::channel::oneshot::Receiver<()>,
-        session: &crate::discovery::SessionSettings,
-    ) -> PgWireResult<bool>
-    where
-        S: Sink<PgWireBackendMessage> + Unpin + Send,
-        S::Error: fmt::Debug,
-        PgWireError: From<S::Error>,
-    {
-        self.execute_with_session(
-            query,
-            output,
-            query_timeout,
-            write_timeout,
-            Some(cancel),
-            Some(session),
-        )
-        .await
-    }
-
     pub(crate) async fn execute_with_session<S>(
         self,
         query: &ParsedQuery,
@@ -431,7 +384,8 @@ impl Drop for BackendLease<'_> {
 }
 
 impl PostgresBackends {
-    pub(crate) fn discovery_route(
+    /// Resolve the configured metadata binding, or the sole configured target.
+    pub fn discovery_route(
         &self,
         route: Option<&BackendSelection>,
     ) -> io::Result<BackendSelection> {

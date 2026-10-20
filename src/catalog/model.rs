@@ -81,7 +81,8 @@ pub struct Relation {
     /// Whole-relation SELECT privilege for the discovery identity; None if unknown.
     pub selectable: Option<bool>,
     pub view_definition: Option<String>,
-    /// Declared keys, not a statement that the source enforces them. None means unknown.
+    /// Visible complete declared keys, without source enforcement guarantees.
+    /// None means the provider does not report these facts.
     pub constraints: Option<Vec<Constraint>>,
     /// Ordered by source ordinal, including gaps left by dropped columns.
     pub columns: Vec<Column>,
@@ -113,6 +114,8 @@ pub struct Constraint {
 
 #[derive(Debug)]
 pub struct Snapshot {
+    /// Source-specific facts captured in the same generation as shared metadata.
+    pub postgres: Option<super::PostgresMetadata>,
     pub generation: u64,
     pub loaded_at: SystemTime,
     pub source: SourceIdentity,

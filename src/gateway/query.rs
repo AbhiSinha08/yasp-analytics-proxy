@@ -71,13 +71,14 @@ impl<'backend> QuerySession<'_, 'backend> {
                 "generated SQL must use the frontend dialect",
             ));
         }
+        let catalog = &self.source.catalog;
         if !options.native
-            && let Some(catalog) = &self.source.catalog
-            && let Some(request) = (catalog.status().source_dialect
-                != crate::query::SqlDialect::Postgresql)
-                .then(|| super::metadata::Request::recognize_foreign(sql, self.source.profile))
-                .flatten()
-                .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
+            && let Some(request) = super::metadata::Request::recognize_snapshot(
+                sql,
+                self.source.profile,
+                catalog.status().source_dialect == crate::query::SqlDialect::Postgresql,
+            )
+            .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
         {
             let query_id: String = Sha256::digest(sql.as_bytes())
                 .iter()
@@ -110,6 +111,7 @@ impl<'backend> QuerySession<'_, 'backend> {
                         &mut super::result::output(socket),
                         self.settings,
                         cancel,
+                        self.session,
                     )
                     .await
                     .map_err(Into::into)
@@ -185,9 +187,6 @@ impl<'backend> QuerySession<'_, 'backend> {
                 cache: self.source.cache.as_deref(),
                 context_hook: self.source.context_hook.as_deref(),
                 datasets: self.source.datasets.as_ref(),
-                foreign_catalog: self.source.catalog.as_ref().is_some_and(|catalog| {
-                    catalog.status().source_dialect != crate::query::SqlDialect::Postgresql
-                }),
                 stopped: self.source.stopped.clone(),
             },
         };

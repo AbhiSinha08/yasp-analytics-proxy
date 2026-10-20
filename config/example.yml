@@ -112,9 +112,9 @@ targets:
 # Metadata bypasses application hooks and the result cache. A target is required
 # when several targets exist; an omitted login uses its first declared login.
 schema_discovery:
-  # Optional periodically refreshed metadata from this discovery identity.
-  # catalog:
-  #   schemas: [public]
+  # Required periodically refreshed metadata from this discovery identity.
+  catalog:
+    schemas: [public]
   #   refresh_interval_seconds: 60
   #   refresh_timeout_ms: 10000
   #   max_age_seconds: 300

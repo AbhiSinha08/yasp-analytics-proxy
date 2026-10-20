@@ -18,7 +18,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                              | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code. |
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                           |
 | Shared schema catalog          | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work. |
-| Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; metadata dispatch in `backend/discovery`.                                                                                            |
+| Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)             | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                                                                                            |
 | Backend capacity                | [backend/budget.rs](../src/backend/budget.rs) | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation. |
 | PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)  | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                       |
 | Experimental Snowflake adapter | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake) | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
@@ -31,7 +31,7 @@ flowchart LR
     Host --> Datasets[Shared application datasets]
     Host --> Gateway[PostgreSQL or Redshift frontend profile]
     Host --> Hooks[Registered application callbacks]
-    Host -->|Optional discovery catalog configuration| Catalog[Periodically refreshed schema catalog]
+    Host -->|Required discovery catalog configuration| Catalog[Periodically refreshed schema catalog]
     Catalog -->|Captured frontend metadata| Gateway
     Catalog -->|Source identity and shared admission| Adapter
     Catalog -->|Source identity and shared admission| Snowflake
@@ -77,11 +77,12 @@ provides its own result/session implementation after its connector gates pass.
 flowchart TD
     Query[Simple-query message] --> Bound[SQL byte bound]
     Bound --> Hint[Optional host input-dialect resolver]
-    Hint --> CatalogMatch{Non-native captured metadata and catalog attached?}
+    Hint --> CatalogMatch{Non-native captured metadata?}
     CatalogMatch -->|yes| CatalogState{Transaction usable and snapshot fresh?}
     CatalogState -->|yes| CatalogResponse[Pin generation and render frontend metadata]
     CatalogResponse --> Ready
-    CatalogState -->|no| Aborted
+    CatalogState -->|no| CatalogFailure[Reject failed transaction or unavailable snapshot]
+    CatalogFailure --> Ready
     CatalogMatch -->|no| Fallback{Configured native default for unmarked data?}
     Fallback -->|yes| Compatibility[Keep recognized frontend setup and metadata; select native grammar for data]
     Fallback -->|no| Parse[Dialect-aware tokenize and parse]
@@ -96,7 +97,7 @@ flowchart TD
     ReadOnly --> Descriptor{Exact frontend descriptor query?}
     Descriptor -->|yes| Local
     Descriptor -->|no| Metadata{Classified PostgreSQL or captured Redshift metadata?}
-    Metadata -->|yes| Discovery[Configured discovery source]
+    Metadata -->|yes| UnsupportedMetadata[Reject unsupported metadata with 0A000]
     Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
     DatasetRead --> Context[Derive optional bounded context]
     Context --> Route[Resolve target, login, and optional compute type]
@@ -123,14 +124,7 @@ flowchart TD
     Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
     TxControl --> Ready
     Aborted --> Ready
-    Discovery --> MetadataAuthority{Catalog permits live discovery fallback?}
-    MetadataAuthority -->|yes| MetadataNative[Source adapter prepares native metadata SQL]
-    MetadataAuthority -->|no| UnsupportedMetadata[Reject unsupported metadata]
     UnsupportedMetadata --> Ready
-    MetadataNative --> MetadataTxn{Explicit transaction?}
-    MetadataTxn -->|yes| Pin
-    MetadataTxn -->|no| DiscoverOnce[Execute metadata and clean up]
-    DiscoverOnce --> Ready
     Pin --> PinnedExecute[Execute on retained connection without result cache]
     PinnedExecute --> Ready
     Replay --> Ready
@@ -145,7 +139,7 @@ source affinity is enforced before cache or pool acquisition. Frontend fingerpri
 describe the configured frontend. PostgreSQL discovery preserves its source version; Snowflake discovery advertises PostgreSQL 18.0 or Redshift 8.0.2. Supported reads
 include SELECT, read-only WITH/subqueries/joins/aggregates/unions, catalog queries,
 and supported SHOW requests. Application query rewrites are not implemented; the
-metadata adapter does rewrite catalog SQL. Parsing has a default
+metadata providers collect engine-native facts during refresh. Parsing has a default
 1 MiB SQL limit, 4,096 significant tokens, and recursion budget 64. Unicode escaped
 identifiers are unsupported. Inspection does not analyze custom function bodies;
 PostgreSQL read-only transactions and source grants remain necessary.
@@ -204,7 +198,7 @@ Queries wait asynchronously under one `backend.acquire_timeout_ms` deadline, the
 receive `53300`. Closing a binding stops its waiters without releasing active or
 cleanup permits or closing unrelated bindings. Session limits bound waiting queries;
 Redis query queuing is future work. Cache replay and snapshot metadata responses
-acquire no capacity; catalog refreshes and live discovery share normal admission.
+acquire no capacity; catalog refreshes share normal source admission.
 
 ```mermaid
 flowchart TD
@@ -226,43 +220,35 @@ flowchart TD
 
 ## Discovery and frontend state
 
-The optional [shared catalog](catalog.md) imports bounded PostgreSQL or Snowflake
-schema definitions and periodically publishes immutable generations. Exact captured
-JDBC schema/table/column/key requests and the captured BI definition-discovery scans
-use frontend-specific snapshot responses before general parsing. The PostgreSQL
-provider includes declared primary-key membership for the field scans. The YAML
-host attaches a catalog when `schema_discovery.catalog` defines an explicit schema
-scope, using the discovery binding's adapter capacity and identity.
-Native SQL skips this path. Responses pin a generation and use no
-backend transaction, context hook, selector or result cache. Unknown warehouse
-metadata requests fail explicitly. The schema model also exposes qualified column
-coordinates for future AST binding; it does not resolve lineage or apply masks.
+The required [shared catalog](catalog.md) imports bounded PostgreSQL or Snowflake
+schema definitions and periodically publishes immutable generations. Captured JDBC,
+Metabase, Redash and SQLAlchemy requests use frontend-specific snapshot responses
+before general parsing. The YAML host requires `schema_discovery.catalog` with an
+explicit schema scope. Library serving entry points require a loaded catalog matching
+the configured discovery source identity.
 
-Recognized catalog reads use the configured discovery target/login and optional
-compute instance, sharing capacity limits while bypassing
-application hooks and the result cache. The frontend classifier checks nested
-relations, functions, and casts, including nonrecursive metadata-only CTEs.
-Allowlisted privilege/type probes and schema/version probes use this route even
-without a catalog table or when their functions appear in FROM.
-Mixed application/catalog reads, recursive CTEs, CTEs that shadow native catalog
-names, TABLE set expressions, and unrecognized helpers follow ordinary routing.
-Source-role visibility still applies.
-Captured SQLAlchemy Redshift relation, column and constraint reflection queries
-also use this live discovery path. Complete statement templates accept only
-bounded literal schema/table predicates; the PostgreSQL adapter produces native
-catalog SQL and preserves source types, definitions and declared keys. Physical
-Redshift storage properties remain NULL. This path uses discovery-source
-permissions independently of snapshot schema scope. A Snowflake catalog rejects
-this PostgreSQL fallback explicitly and serves supported reflection from normalized
-facts, virtual identifiers, view definitions and declared keys. Client fixtures are in
-[`superset_redshift.json`](../tests/fixtures/superset_redshift.json).
-The PostgreSQL handler qualifies native names, limits database listings to the
-source database, and applies discovery session state inside the existing read-only
-transaction. The source must be reachable at startup to supply its server version.
+Providers own native metadata SQL and source-specific facts. PostgreSQL collects a
+consistent generation in one admitted read-only repeatable-read transaction; it
+retains native identifiers, owners, ACLs, keys, views, indexes, types and identity
+options. Snowflake retains normalized facts and stable virtual frontend identifiers.
+Shared catalog code owns bounds, immutable publication, refresh, expiry and status.
+Frontend metadata modules recognize reviewed statement templates and encode the
+client response. The source version is captured during loading, without a separate
+listener-startup source lookup.
+
+Native SQL skips snapshot handling. Metadata responses pin a generation and acquire
+no backend session or application context, selection or result-cache hooks.
+Unsupported classified metadata returns `0A000` for either engine. Expired snapshots
+return `55000`; neither failure triggers live discovery. Failed frontend transactions
+reject metadata until rollback. The conservative AST classifier remains responsible
+for keeping unsupported catalog requests away from application routing. Mixed
+application/catalog reads and unrecognized helpers retain ordinary routing and its
+source-role authorization. Snapshot metadata is not an authorization policy and does
+not resolve lineage or apply masks.
 
 Frontend state supports bounded `application_name` and `search_path`, matching SHOW
-requests, and reaffirming fixed encoding/text/read-only settings. Both discovery
-and ordinary execution replay these settings. Explicit transactions retain their
+requests, and reaffirming fixed encoding/text/read-only settings. Ordinary execution
+replays these settings; snapshot schema probes resolve the scoped frontend search path. Explicit transactions retain their
 initial frontend settings for rollback; commit preserves supported changes.
 Autocommit cache scope includes these settings. Client setup is in
 [configuration](configuration.md#discovery-and-client-setup).
@@ -270,8 +256,8 @@ Autocommit cache scope includes these settings. Client setup is in
 `BEGIN` records a pending read-only, read-committed transaction without selecting a
 backend. The first backend operation pins its actual physical connection. Each
 ordinary statement still runs context and selection; its route must permit that
-connection. Discovery retains its independently configured binding and fails on a
-conflicting pin. Transaction controls need no context or fresh selection. Explicit
+connection. Snapshot discovery retains its configured source identity and does not
+create or change a physical transaction pin. Transaction controls need no context or fresh selection. Explicit
 transactions bypass cache reads and writes. Errors produce failed transaction
 status until rollback; commit in failed state rolls back.
 
@@ -281,12 +267,18 @@ status until rollback; commit in failed state rolls back.
 sequenceDiagram
     participant Client
     participant Session as Frontend session
+    participant Catalog as Schema catalog
     participant Adapter as PostgreSQL adapter
     participant PG as PostgreSQL
     Client->>Session: SSLRequest and TLS handshake when enabled
     Client->>Session: Startup and profile authentication (PostgreSQL SCRAM or Redshift TLS password)
     Session-->>Client: Backend key and ReadyForQuery
     Client->>Session: Simple query
+    alt Captured metadata
+        Session->>Catalog: Check freshness and pin generation
+        Catalog-->>Session: Immutable facts or unavailable error
+        Session-->>Client: Bounded metadata response and ReadyForQuery
+    else Ordinary query
     Session->>Adapter: Validated query and cancellation receiver
     Adapter->>PG: Verified TLS when configured, BEGIN READ ONLY and query
     opt Client cancels on a separate connection
@@ -307,6 +299,7 @@ sequenceDiagram
         Adapter->>PG: Commit or rollback, reset and verify idle
         Adapter-->>Session: Release clean lease or discard uncertain connection
         Session-->>Client: Completion and idle ReadyForQuery
+    end
     end
 ```
 

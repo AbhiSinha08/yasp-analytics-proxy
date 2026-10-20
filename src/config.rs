@@ -38,7 +38,7 @@ pub enum ConfigError {
     #[error("application context dataset limits or names are invalid")]
     InvalidApplicationContexts,
     #[error(
-        "schema_discovery.catalog requires explicit schemas and valid refresh, age, row and byte bounds"
+        "schema_discovery.catalog is required with nonempty schemas and valid refresh, age, row and byte bounds"
     )]
     InvalidCatalog,
     #[error(

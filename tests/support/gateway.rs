@@ -29,21 +29,60 @@ impl GatewayServer {
         selector: impl Into<RoutedSelector> + Send + 'static,
     ) -> Self {
         Self::start(move |listener, shutdown| async move {
-            yasp::gateway::serve_routed(listener, gateway, backends, selector, async move {
-                let _ = shutdown.await;
-            })
+            let catalog = match gateway.catalog() {
+                Some(catalog) => catalog.clone(),
+                None => {
+                    let selection = backends
+                        .discovery_route(gateway.schema_discovery())
+                        .unwrap();
+                    let backend = backends
+                        .get_discovery(&selection, gateway.schema_discovery_compute())
+                        .unwrap();
+                    yasp::catalog::Catalog::postgres(
+                        Arc::new(backend.clone()),
+                        yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+                    )
+                    .await
+                    .unwrap()
+                }
+            };
+            yasp::gateway::serve_routed(
+                listener,
+                gateway.with_catalog(catalog.clone()),
+                backends,
+                selector,
+                async move {
+                    let _ = shutdown.await;
+                },
+            )
             .await
             .expect("routed gateway stops cleanly");
+            catalog.stop_refreshing().await;
         })
     }
 
     pub fn fixed(gateway: GatewayConfig, backend: Arc<PostgresBackend>) -> Self {
         Self::start(move |listener, shutdown| async move {
-            yasp::gateway::serve(listener, gateway, backend, async move {
-                let _ = shutdown.await;
-            })
+            let catalog = match gateway.catalog() {
+                Some(catalog) => catalog.clone(),
+                None => yasp::catalog::Catalog::postgres(
+                    backend.clone(),
+                    yasp::catalog::CatalogSettings::new(vec!["public".into()]),
+                )
+                .await
+                .unwrap(),
+            };
+            yasp::gateway::serve(
+                listener,
+                gateway.with_catalog(catalog.clone()),
+                backend,
+                async move {
+                    let _ = shutdown.await;
+                },
+            )
             .await
             .expect("fixed gateway stops cleanly");
+            catalog.stop_refreshing().await;
         })
     }
 

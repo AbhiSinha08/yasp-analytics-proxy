@@ -35,3 +35,7 @@ hooks:
     params:
       target: primary
       backend_login: restricted
+
+schema_discovery:
+  catalog:
+    schemas: [public]

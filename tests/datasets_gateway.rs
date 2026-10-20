@@ -185,6 +185,7 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
     let mut config = serde_json::to_value(&environment.config).unwrap();
     config["gateway"]["listen"] = address.to_string().into();
     config["schema_discovery"] = serde_json::json!({
+        "catalog": {"schemas": ["public"]},
         "target": route.target.clone(),
         "backend_login": route.backend_login.clone(),
     });

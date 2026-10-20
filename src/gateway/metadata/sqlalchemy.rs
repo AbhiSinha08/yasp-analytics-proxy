@@ -1,4 +1,4 @@
-//! Captured PostgreSQL SQLAlchemy reflection over normalized warehouse facts.
+//! Captured PostgreSQL SQLAlchemy requests and shared reflection facts.
 use super::*;
 use crate::catalog::{Constraint, ConstraintKind, Relation};
 #[derive(Clone, Copy)]
@@ -17,7 +17,7 @@ pub(super) enum Kind {
     Enums,
 }
 
-pub(super) fn templates() -> Vec<(super::foreign::Kind, &'static str)> {
+pub(super) fn templates() -> Vec<(super::snapshot::Kind, &'static str)> {
     [
         (
             Kind::Enums,
@@ -69,7 +69,7 @@ pub(super) fn templates() -> Vec<(super::foreign::Kind, &'static str)> {
         ),
     ]
     .into_iter()
-    .map(|(kind, sql)| (super::foreign::Kind::PgSqlAlchemy(kind), sql))
+    .map(|(kind, sql)| (super::snapshot::Kind::PgSqlAlchemy(kind), sql))
     .collect()
 }
 pub(super) fn columns(kind: Kind) -> Vec<(&'static str, u8)> {
@@ -85,16 +85,16 @@ pub(super) fn columns(kind: Kind) -> Vec<(&'static str, u8)> {
         ],
         Kind::PrimaryKeyName => vec![("conname", 0)],
         Kind::Tables | Kind::Views => vec![("relname", 0)],
-        Kind::Oid => vec![("oid", 2)],
+        Kind::Oid => vec![("oid", 8)],
         Kind::Columns => vec![
             ("attname", 0),
             ("format_type", 0),
             ("default", 0),
             ("attnotnull", 3),
-            ("table_oid", 2),
+            ("table_oid", 8),
             ("comment", 0),
             ("generated", 0),
-            ("identity_options", 0),
+            ("identity_options", 6),
         ],
         Kind::PrimaryKeyColumns => vec![("attname", 0)],
         Kind::ForeignKeys => vec![("conname", 0), ("condef", 0), ("conschema", 0)],
@@ -104,10 +104,10 @@ pub(super) fn columns(kind: Kind) -> Vec<(&'static str, u8)> {
             ("indexprs", 0),
             ("attname", 0),
             ("attnum", 2),
-            ("conrelid", 2),
+            ("conrelid", 8),
             ("indkey", 0),
             ("indoption", 0),
-            ("reloptions", 0),
+            ("reloptions", 7),
             ("amname", 0),
             ("pg_get_expr", 0),
             ("indnkeyatts", 2),

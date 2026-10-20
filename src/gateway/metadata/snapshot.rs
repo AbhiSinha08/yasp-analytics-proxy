@@ -1,16 +1,13 @@
-//! Bounded frontend catalog responses for non-PostgreSQL discovery sources.
+//! Captured frontend requests shared by snapshot-backed discovery sources.
 use super::*;
-use crate::{
-    catalog::{ConstraintKind, Relation},
-    query::{InputOptions, ParsedQuery},
-};
+use crate::catalog::{ConstraintKind, Relation};
 
 pub(super) struct Request {
-    kind: Kind,
-    schema: Option<String>,
-    table: Option<String>,
-    schemas: Vec<String>,
-    oid: Option<u32>,
+    pub(super) kind: Kind,
+    pub(super) schema: Option<String>,
+    pub(super) table: Option<String>,
+    pub(super) schemas: Vec<String>,
+    pub(super) oid: Option<u32>,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Kind {
@@ -19,6 +16,8 @@ pub(super) enum Kind {
     ForeignKeys,
     Indexes,
     MaxIndexKeys,
+    Setting(&'static str, &'static str),
+    VersionSetting,
     ConnectionCheck,
     Version(FrontendProfile),
     CurrentSchema,
@@ -37,6 +36,14 @@ impl Request {
             &RedshiftSqlDialect {}
         };
         let actual = tokens(sql, dialect)?;
+        static PG: OnceLock<Vec<(Kind, Vec<Token>)>> = OnceLock::new();
+        static RS: OnceLock<Vec<(Kind, Vec<Token>)>> = OnceLock::new();
+        let storage = if profile == FrontendProfile::Postgres {
+            &PG
+        } else {
+            &RS
+        };
+        let templates = storage.get_or_init(|| {
         let jdbc = if profile == FrontendProfile::Postgres {
             [
                 include_str!("queries/postgresql_primary_keys.sql"),
@@ -52,6 +59,11 @@ impl Request {
         };
         let candidates = [Kind::PrimaryKeys, Kind::ForeignKeys, Kind::Indexes].into_iter().zip(jdbc)
             .chain([(Kind::ConnectionCheck, "SELECT 1"),
+                (Kind::Setting("server_version", "server_version"), "SHOW server_version"),
+                (Kind::Setting("server_version_num", "server_version_num"), "SHOW server_version_num"),
+                (Kind::Setting("server_version", "current_setting"), "SELECT current_setting('server_version')"),
+                (Kind::Setting("server_version_num", "current_setting"), "SELECT current_setting('server_version_num')"),
+                (Kind::VersionSetting, "SELECT name, setting FROM pg_catalog.pg_settings WHERE name = 'server_version'"),
                 (Kind::MaxIndexKeys, "SELECT setting FROM pg_catalog.pg_settings WHERE name='max_index_keys'"),
                 (Kind::Version(profile), "SELECT version()"), (Kind::Version(profile), "SELECT pg_catalog.version()"),
                 (Kind::Hstore,"SELECT t.oid, typarray FROM pg_type t JOIN pg_namespace ns ON typnamespace = ns.oid WHERE typname = 'hstore'"),
@@ -61,10 +73,12 @@ impl Request {
                 (Kind::Schemas,"SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname != 'information_schema' ORDER BY nspname"),
                 (Kind::PgSqlAlchemy(super::sqlalchemy::Kind::Oid),"SELECT '__YASP_RELATION__'::regclass::oid")])
             .chain(super::sqlalchemy::templates())
-            .chain(super::metabase::foreign_templates(profile))
+            .chain(super::metabase::snapshot_templates(profile))
             .chain(if profile == FrontendProfile::Postgres { vec![(Kind::RedashColumns,include_str!("queries/redash_postgresql_columns.sql"))] } else { Vec::new() });
-        for (kind, template) in candidates {
-            if let Some(values) = capture(&actual, &tokens(template, dialect)?) {
+            candidates.map(|(kind,sql)| (kind,tokens(sql,dialect).expect("captured metadata SQL"))).collect()
+        });
+        for (kind, template) in templates {
+            if let Some(values) = capture(&actual, template) {
                 let mut schema = values.get("__YASP_SCHEMA__").map(|v| v[0].to_owned());
                 let mut table = values.get("__YASP_TABLE__").map(|v| v[0].to_owned());
                 if let Some(relation) = values.get("__YASP_RELATION__") {
@@ -97,7 +111,7 @@ impl Request {
                     table = Some(ident(t));
                 }
                 return Some(Self {
-                    kind,
+                    kind: *kind,
                     oid: values
                         .get("__YASP_OID__")
                         .map(|v| v[0].parse())
@@ -114,13 +128,10 @@ impl Request {
                 });
             }
         }
-        let parsed = ParsedQuery::parse_with_options(
-            sql,
-            1024 * 1024,
-            InputOptions::frontend(profile.dialect()),
-        )
-        .ok()?;
-        let request = crate::discovery::redshift::Request::recognize(&parsed)?;
+        if profile != FrontendProfile::Redshift {
+            return None;
+        }
+        let request = crate::discovery::redshift::Request::recognize_tokens(&actual)?;
         Some(Self {
             kind: Kind::SqlAlchemy(request.kind),
             schema: request.schema,
@@ -176,17 +187,37 @@ impl Request {
                 ("ORDINAL_POSITION", 1),
                 ("COLUMN_NAME", 0),
                 ("ASC_OR_DESC", 0),
-                ("CARDINALITY", 4),
-                ("PAGES", 4),
+                (
+                    "CARDINALITY",
+                    if profile == FrontendProfile::Postgres {
+                        9
+                    } else {
+                        4
+                    },
+                ),
+                (
+                    "PAGES",
+                    if profile == FrontendProfile::Postgres {
+                        2
+                    } else {
+                        4
+                    },
+                ),
                 ("FILTER_CONDITION", 0),
             ],
-            Kind::Hstore => vec![("oid", 2), ("typarray", 2)],
+            Kind::Hstore => vec![("oid", 8), ("typarray", 8)],
+            Kind::Setting(_, column) => vec![(column, 0)],
+            Kind::VersionSetting => vec![("name", 0), ("setting", 0)],
             Kind::MaxIndexKeys => vec![("setting", 0)],
             Kind::ConnectionCheck => vec![("?column?", 2)],
             Kind::Version(_) => vec![("version", 0)],
             Kind::CurrentSchema => vec![("current_schema", 0)],
             Kind::Schemas => vec![("nspname", 0)],
         };
+        let mut names = names;
+        if matches!(self.kind, Kind::Indexes) && profile == FrontendProfile::Postgres {
+            names.push(("REMARKS", 0));
+        }
         names
             .into_iter()
             .map(|(name, kind)| ResultColumn {
@@ -197,8 +228,12 @@ impl Request {
                 },
                 kind: match kind {
                     5 => ColumnType::Int16Array,
+                    6 => ColumnType::Json,
+                    7 => ColumnType::TextArray,
                     1 => ColumnType::Int16,
                     2 => ColumnType::Int32,
+                    8 => ColumnType::Oid,
+                    9 => ColumnType::Float32,
                     3 => ColumnType::Bool,
                     4 => ColumnType::Int64,
                     _ => ColumnType::Text,
@@ -213,10 +248,43 @@ impl Request {
         snapshot: &Snapshot,
         output: &mut S,
         settings: &GatewaySettings,
+        profile: FrontendProfile,
+        search_path: &str,
     ) -> ExecutionResult<u64>
     where
         S: Sink<ResultEvent, Error = ExecutionError> + Send + Unpin,
     {
+        if matches!(self.kind, Kind::CurrentSchema) && snapshot.postgres.is_some() {
+            let tokens = sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, search_path)
+                .tokenize()
+                .map_err(|_| ExecutionError::rejected("0A000", "invalid metadata search path"))?;
+            let schema = tokens
+                .into_iter()
+                .filter_map(|token| match token {
+                    Token::Word(word) => Some(if word.quote_style.is_some() {
+                        word.value
+                    } else {
+                        word.value.to_ascii_lowercase()
+                    }),
+                    Token::Placeholder(value) => Some(value),
+                    _ => None,
+                })
+                .map(|name| {
+                    if name == "$user" {
+                        snapshot.source.principal.clone()
+                    } else {
+                        name
+                    }
+                })
+                .find(|name| snapshot.schemas.iter().any(|(_, s)| s == name));
+            request.send(output, vec![schema], settings).await?;
+            return Ok(1);
+        }
+        if let Some(count) =
+            super::postgres::serve(self, request, snapshot, profile, output, settings).await?
+        {
+            return Ok(count);
+        }
         if matches!(self.kind, Kind::RedashColumns) {
             return super::redash::serve_postgres(request, snapshot, output, settings).await;
         }
@@ -230,6 +298,22 @@ impl Request {
                 settings,
             )
             .await;
+        }
+        if let Kind::Setting(name, _) = self.kind {
+            let value = match (name, profile) {
+                ("server_version", FrontendProfile::Redshift) => "8.0.2",
+                ("server_version_num", FrontendProfile::Redshift) => "80002",
+                ("server_version", _) => "18.0",
+                _ => "180000",
+            };
+            request.send(output, vec![some(value)], settings).await?;
+            return Ok(1);
+        }
+        if matches!(self.kind, Kind::VersionSetting) {
+            request
+                .send(output, vec![some("server_version"), some("18.0")], settings)
+                .await?;
+            return Ok(1);
         }
         if matches!(self.kind, Kind::Hstore) {
             return Ok(0);
@@ -371,12 +455,12 @@ fn sqlalchemy_columns(kind: crate::discovery::redshift::Kind) -> Vec<(&'static s
     match kind {
         Relations => vec![
             ("relkind", 0),
-            ("schema_oid", 2),
+            ("schema_oid", 8),
             ("schema", 0),
-            ("rel_oid", 2),
+            ("rel_oid", 8),
             ("relname", 0),
             ("diststyle", 0),
-            ("owner_id", 2),
+            ("owner_id", 8),
             ("owner_name", 0),
             ("view_definition", 0),
             ("privileges", 0),
@@ -395,8 +479,8 @@ fn sqlalchemy_columns(kind: crate::discovery::redshift::Kind) -> Vec<(&'static s
             ("attnum", 2),
             ("format_type", 0),
             ("default", 0),
-            ("schema_oid", 2),
-            ("table_oid", 2),
+            ("schema_oid", 8),
+            ("table_oid", 8),
         ],
         Constraints => vec![
             ("schema", 0),
@@ -407,8 +491,8 @@ fn sqlalchemy_columns(kind: crate::discovery::redshift::Kind) -> Vec<(&'static s
             ("attnum", 2),
             ("attname", 0),
             ("condef", 0),
-            ("schema_oid", 2),
-            ("rel_oid", 2),
+            ("schema_oid", 8),
+            ("rel_oid", 8),
         ],
     }
 }

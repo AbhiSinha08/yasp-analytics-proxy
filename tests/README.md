@@ -102,7 +102,9 @@ directions, idle reclamation, cached reads and catalog refresh under saturation.
 Focused adapter tests cover multiple bindings and aliases, conflicting registrations,
 atomic admission, cancelled waiters and retained cleanup after an interrupted request.
 
-The `catalog` test covers periodic DDL refresh, pinned generation stability, source
+The `catalog_gateway` test covers required/matching catalog startup, native reflection,
+metadata with an unavailable source, unsupported requests, transaction failure and
+expiry. The `catalog` test covers periodic DDL refresh, pinned generation stability, source
 spelling/types, column-grant isolation, bounded-load failures and expiry.
 Focused HTTP tests validate signed JWTs, polling, partitions and malformed/oversized
 responses independently of emulator limitations. The signing key under

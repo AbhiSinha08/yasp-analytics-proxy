@@ -160,12 +160,12 @@ where
     Ok(count)
 }
 
-pub(super) fn foreign_templates(
+pub(super) fn snapshot_templates(
     profile: FrontendProfile,
-) -> Vec<(super::foreign::Kind, &'static str)> {
+) -> Vec<(super::snapshot::Kind, &'static str)> {
     // The Redshift driver inherits PostgreSQL's bulk foreign-key query.
     let mut templates = vec![(
-        super::foreign::Kind::Metabase(3),
+        super::snapshot::Kind::Metabase(3),
         include_str!("queries/metabase_foreign_keys.sql"),
     )];
     if profile == FrontendProfile::Postgres {
@@ -179,7 +179,7 @@ pub(super) fn foreign_templates(
             ]
             .into_iter()
             .enumerate()
-            .map(|(i, sql)| (super::foreign::Kind::Metabase(i as u8), sql)),
+            .map(|(i, sql)| (super::snapshot::Kind::Metabase(i as u8), sql)),
         );
     }
     templates
@@ -359,6 +359,7 @@ mod tests {
                 })
                 .collect();
             let snapshot = Snapshot {
+                postgres: None,
                 generation: 1,
                 loaded_at: std::time::SystemTime::now(),
                 source: SourceIdentity {

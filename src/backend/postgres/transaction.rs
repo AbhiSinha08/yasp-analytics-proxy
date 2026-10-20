@@ -53,6 +53,20 @@ impl<'a> BackendLease<'a> {
 }
 
 impl PostgresTransaction<'_> {
+    /// All provider statements observe one source metadata snapshot.
+    pub(super) async fn catalog_isolation(&mut self) -> PgWireResult<()> {
+        timeout(
+            CONNECT_TIMEOUT,
+            self.connection
+                .0
+                .as_mut()
+                .unwrap()
+                .control("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+        )
+        .await
+        .map_err(|_| error_response("08006", "catalog transaction setup timed out"))?
+    }
+
     pub(crate) fn backend(&self) -> &PostgresBackend {
         self.owner.backend
     }

@@ -1,9 +1,10 @@
 //! Exact bundled-driver SQL shapes over shared source definitions. Parameters
 //! can only replace designated string predicates; client SQL is never executed
 //! by these handlers, including strings containing SQL or catalog names.
-mod foreign;
 mod metabase;
+mod postgres;
 mod redash;
+mod snapshot;
 mod sqlalchemy;
 mod types;
 use super::FrontendProfile;
@@ -24,11 +25,12 @@ use types::FrontendType;
 
 #[derive(Clone, Copy)]
 enum Kind {
-    Foreign,
+    Captured,
     Schemas,
     Tables,
     Columns,
     Database,
+    DatabaseFunction,
     MetabaseTables,
     MetabaseColumns,
     RedashColumns,
@@ -38,7 +40,7 @@ struct Template {
     tokens: Vec<Token>,
 }
 pub(super) struct Request {
-    foreign: Option<foreign::Request>,
+    captured: Option<snapshot::Request>,
     kind: Kind,
     schema: String,
     table: String,
@@ -74,7 +76,7 @@ impl Request {
                         .collect()
                 };
                 return Some(Self {
-                    foreign: None,
+                    captured: None,
                     kind: template.kind,
                     schema: scalar("__YASP_SCHEMA__"),
                     table: scalar("__YASP_TABLE__"),
@@ -87,10 +89,18 @@ impl Request {
         None
     }
 
-    pub(super) fn recognize_foreign(sql: &str, profile: FrontendProfile) -> Option<Self> {
+    pub(super) fn recognize_snapshot(
+        sql: &str,
+        profile: FrontendProfile,
+        postgres: bool,
+    ) -> Option<Self> {
+        let request = snapshot::Request::recognize(sql, profile)?;
+        if postgres && matches!(request.kind, snapshot::Kind::ConnectionCheck) {
+            return None;
+        }
         Some(Self {
-            foreign: Some(foreign::Request::recognize(sql, profile)?),
-            kind: Kind::Foreign,
+            captured: Some(request),
+            kind: Kind::Captured,
             schema: String::new(),
             table: String::new(),
             column: String::new(),
@@ -106,6 +116,7 @@ impl Request {
         output: &mut S,
         settings: &GatewaySettings,
         mut cancel: oneshot::Receiver<()>,
+        session: &crate::discovery::SessionSettings,
     ) -> ExecutionResult<()>
     where
         S: Sink<ResultEvent, Error = ExecutionError> + Send + Unpin,
@@ -115,12 +126,19 @@ impl Request {
             send_event(output, ResultEvent::Columns(columns), settings).await?;
             let mut count = 0;
             match self.kind {
-                Kind::Foreign => {
+                Kind::Captured => {
                     count = self
-                        .foreign
+                        .captured
                         .as_ref()
-                        .expect("foreign request")
-                        .serve(self, snapshot, output, settings)
+                        .expect("captured metadata request")
+                        .serve(
+                            self,
+                            snapshot,
+                            output,
+                            settings,
+                            profile,
+                            &session.search_path,
+                        )
                         .await?;
                 }
                 Kind::MetabaseTables | Kind::MetabaseColumns => {
@@ -136,18 +154,24 @@ impl Request {
                         count += 1;
                     }
                 }
-                Kind::Database => {
-                    let databases: std::collections::BTreeSet<_> =
-                        snapshot.schemas.iter().map(|(d, _)| d).collect();
-                    if databases.len() != 1 {
-                        return Err(ExecutionError::rejected(
-                            "0A000",
-                            "catalog database is unavailable or ambiguous",
-                        ));
+                Kind::Database | Kind::DatabaseFunction => {
+                    if let Some(pg) = &snapshot.postgres {
+                        self.send(output, vec![some(&pg.database)], settings)
+                            .await?;
+                        count = 1;
+                    } else {
+                        let databases: std::collections::BTreeSet<_> =
+                            snapshot.schemas.iter().map(|(d, _)| d).collect();
+                        if databases.len() != 1 {
+                            return Err(ExecutionError::rejected(
+                                "0A000",
+                                "catalog database is unavailable or ambiguous",
+                            ));
+                        }
+                        self.send(output, vec![some(databases.first().unwrap())], settings)
+                            .await?;
+                        count += 1;
                     }
-                    self.send(output, vec![some(databases.first().unwrap())], settings)
-                        .await?;
-                    count += 1;
                 }
                 Kind::Tables | Kind::Columns => {
                     let mut relations: Vec<_> = snapshot.relations.values().collect();
@@ -166,7 +190,17 @@ impl Request {
                         {
                             continue;
                         }
+                        let native = snapshot.postgres.as_ref().and_then(|pg| {
+                            relation
+                                .native_id
+                                .as_deref()
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .and_then(|oid| pg.relations.get(&oid))
+                        });
                         if matches!(self.kind, Kind::Tables) {
+                            if native.is_some_and(|r| !matches!(r.kind.as_str(), "r" | "v")) {
+                                continue;
+                            }
                             let kind = match relation.kind {
                                 RelationKind::Table => "TABLE",
                                 RelationKind::View => "VIEW",
@@ -195,7 +229,9 @@ impl Request {
                                 if !like(&column.id.name, &self.column) {
                                     continue;
                                 }
-                                let row = column_row(column, profile, index + 1)?;
+                                let native_column =
+                                    native.and_then(|r| r.columns.get(&column.ordinal));
+                                let row = column_row(column, profile, index + 1, native_column)?;
                                 self.send(output, row, settings).await?;
                                 count += 1;
                             }
@@ -237,17 +273,18 @@ impl Request {
     }
 
     fn columns(&self, profile: FrontendProfile) -> Vec<ResultColumn> {
-        if let Some(request) = &self.foreign {
+        if let Some(request) = &self.captured {
             return request.columns(profile);
         }
         let names = match self.kind {
-            Kind::Foreign => unreachable!("foreign request columns"),
+            Kind::Captured => unreachable!("captured metadata columns"),
             Kind::MetabaseTables | Kind::MetabaseColumns => metabase::columns(self.kind),
             Kind::RedashColumns => ["table_name", "table_schema", "column_name", "data_type"]
                 .into_iter()
                 .map(|name| (name, 0))
                 .collect(),
             Kind::Schemas => vec![("TABLE_SCHEM", 0), ("TABLE_CATALOG", 0)],
+            Kind::DatabaseFunction => vec![("current_database", 0)],
             Kind::Database => vec![("current_catalog", 0)],
             Kind::Tables => [
                 "TABLE_CAT",
@@ -269,7 +306,7 @@ impl Request {
                 ("nspname", 0),
                 ("relname", 0),
                 ("attname", 0),
-                ("atttypid", 2),
+                ("atttypid", 8),
                 ("attnotnull", 3),
                 ("atttypmod", 2),
                 ("attlen", 1),
@@ -279,7 +316,7 @@ impl Request {
                 ("attgenerated", 0),
                 ("adsrc", 0),
                 ("description", 0),
-                ("typbasetype", 2),
+                ("typbasetype", 8),
                 ("typtype", 0),
             ],
             Kind::Columns => vec![
@@ -320,6 +357,7 @@ impl Request {
                 kind: match kind {
                     1 => ColumnType::Int16,
                     2 => ColumnType::Int32,
+                    8 => ColumnType::Oid,
                     3 => ColumnType::Bool,
                     4 => ColumnType::Int64,
                     _ => ColumnType::Text,
@@ -346,6 +384,7 @@ fn column_row(
     c: &Column,
     profile: FrontendProfile,
     sequence: usize,
+    native: Option<&crate::catalog::PostgresColumn>,
 ) -> ExecutionResult<Vec<Option<String>>> {
     let t = FrontendType::column(c)?;
     let r = &c.id.relation;
@@ -360,15 +399,19 @@ fn column_row(
             some(t.oid),
             some(if c.nullable { "f" } else { "t" }),
             some(t.modifier),
-            some(t.length),
-            some(-1),
+            some(native.map_or(t.length, |c| c.length)),
+            some(native.map_or(-1, |c| c.type_modifier)),
             some(sequence),
-            c.identity.then(|| "d".into()),
-            c.generated.and_then(|g| g.then(|| "s".into())),
+            native
+                .and_then(|c| (!c.identity.is_empty()).then(|| c.identity.clone()))
+                .or_else(|| c.identity.then(|| "d".into())),
+            native
+                .and_then(|c| (!c.generated.is_empty()).then(|| c.generated.clone()))
+                .or_else(|| c.generated.and_then(|g| g.then(|| "s".into()))),
             c.default.clone(),
             c.comment.clone(),
-            some(0),
-            some("b"),
+            some(native.map_or(0, |c| c.base_type)),
+            some(native.map_or("b", |c| c.type_kind.as_str())),
         ]
     } else {
         vec![
@@ -434,7 +477,14 @@ fn templates(redshift: bool) -> Vec<Template> {
     let queries = [Kind::Schemas, Kind::Tables, Kind::Columns]
         .into_iter()
         .zip(queries)
-        .chain([(Kind::Database, "select current_catalog")])
+        .chain([
+            (Kind::Database, "select current_catalog"),
+            (Kind::DatabaseFunction, "SELECT current_database()"),
+            (
+                Kind::DatabaseFunction,
+                "SELECT pg_catalog.current_database()",
+            ),
+        ])
         .chain(if redshift {
             metabase::templates()
                 .into_iter()
@@ -486,6 +536,52 @@ fn like(value: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_snapshot_request_emits_no_rows() {
+        let request =
+            Request::recognize("select current_catalog", FrontendProfile::Postgres).unwrap();
+        let snapshot = Snapshot {
+            postgres: None,
+            generation: 1,
+            loaded_at: std::time::SystemTime::now(),
+            source: crate::catalog::SourceIdentity {
+                dialect: crate::query::SqlDialect::Snowflake,
+                endpoint: "fixture".into(),
+                principal: "reader".into(),
+                role: None,
+                warehouse: None,
+                default_schema: None,
+            },
+            schemas: [("database".into(), "PUBLIC".into())].into(),
+            relations: Default::default(),
+        };
+        let (sender, cancel) = oneshot::channel();
+        sender.send(()).unwrap();
+        let mut emitted = Vec::new();
+        let result = {
+            let output = futures::sink::unfold(&mut emitted, |events, event| async move {
+                events.push(event);
+                Ok::<_, ExecutionError>(events)
+            });
+            let mut output = std::pin::pin!(output);
+            request
+                .execute(
+                    &snapshot,
+                    FrontendProfile::Postgres,
+                    &mut output,
+                    &GatewaySettings::default(),
+                    cancel,
+                    &crate::discovery::SessionSettings::default(),
+                )
+                .await
+        };
+        assert!(matches!(
+            result,
+            Err(ExecutionError::Rejected { code: "57014", .. })
+        ));
+        assert!(emitted.is_empty());
+    }
 
     #[test]
     fn redash_scan_matches_only_the_captured_metadata_statement() {

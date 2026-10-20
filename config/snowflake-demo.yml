@@ -33,9 +33,9 @@ schema_discovery:
   backend_login: reader
   catalog:
     schemas: [PUBLIC, ANALYTICS]
-    refresh_interval_seconds: 30
+    refresh_interval_seconds: 120
     refresh_timeout_ms: 10000
-    max_age_seconds: 120
+    max_age_seconds: 240
     max_rows: 10000
     max_bytes: 16777216
 hooks:

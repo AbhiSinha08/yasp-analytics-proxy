@@ -60,19 +60,57 @@ impl PostgresBackend {
         let mut output = Collector {
             rows: Rows::new(settings),
             error: None,
+            facts: false,
         };
-        let result = self
-            .execute(
-                &query,
-                &mut output,
-                settings.refresh_timeout,
-                settings.refresh_timeout,
-            )
-            .await;
+        let mut transaction = self
+            .route()
+            .acquire()
+            .await
+            .map_err(|_| CatalogError::SourceUnavailable)?
+            .begin(settings.refresh_timeout, settings.refresh_timeout)
+            .await
+            .map_err(|_| CatalogError::SourceUnavailable)?;
+        transaction
+            .catalog_isolation()
+            .await
+            .map_err(|_| CatalogError::SourceUnavailable)?;
+        let result = async {
+            transaction
+                .execute(
+                    &query,
+                    &mut output,
+                    settings.refresh_timeout,
+                    settings.refresh_timeout,
+                    None,
+                    None,
+                )
+                .await?;
+            output.facts = true;
+            let sql = include_str!("catalog_facts.sql")
+                .replace("__LIMIT__", &(settings.max_rows + 1).to_string())
+                .replace("__SCHEMAS__", &schemas);
+            let query = ParsedQuery::parse(&sql)
+                .map_err(|_| super::error_response("54000", "catalog query exceeds its bound"))?;
+            transaction
+                .execute(
+                    &query,
+                    &mut output,
+                    settings.refresh_timeout,
+                    settings.refresh_timeout,
+                    None,
+                    None,
+                )
+                .await?;
+            Ok::<_, PgWireError>(())
+        }
+        .await;
+        let cleanup = transaction.finish(false).await;
         if let Some(error) = output.error {
             return Err(error);
         }
-        result.map_err(|_| CatalogError::SourceUnavailable)?;
+        result
+            .and(cleanup)
+            .map_err(|_| CatalogError::SourceUnavailable)?;
         Ok(output.rows)
     }
 }
@@ -80,14 +118,16 @@ impl PostgresBackend {
 struct Collector {
     rows: Rows,
     error: Option<CatalogError>,
+    facts: bool,
 }
 impl Collector {
     fn row(&mut self, mut row: pgwire::messages::data::DataRow) -> Result<(), CatalogError> {
-        if row.field_count != 22 {
+        let count = if self.facts { 3 } else { 22 };
+        if row.field_count != count {
             return Err(CatalogError::InvalidMetadata);
         }
-        let mut values = Vec::with_capacity(22);
-        for _ in 0..22 {
+        let mut values = Vec::with_capacity(count as usize);
+        for _ in 0..count {
             if row.data.remaining() < 4 {
                 return Err(CatalogError::InvalidMetadata);
             }
@@ -110,7 +150,18 @@ impl Collector {
         if row.data.has_remaining() {
             return Err(CatalogError::InvalidMetadata);
         }
-        self.rows.push(values)
+        if self.facts {
+            let field = |n: usize| values[n].as_deref().ok_or(CatalogError::InvalidMetadata);
+            self.rows.postgres_row(
+                field(0)?,
+                field(1)?
+                    .parse()
+                    .map_err(|_| CatalogError::InvalidMetadata)?,
+                field(2)?,
+            )
+        } else {
+            self.rows.push(values)
+        }
     }
 }
 impl Sink<PgWireBackendMessage> for Collector {

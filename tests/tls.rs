@@ -236,8 +236,7 @@ async fn configured_host_tls_paths_compute_cache_and_datasets() {
             serde_json::json!({"listen": format!("0.0.0.0:{}", address.port()), "tls": {"mode": "disable"}})
         };
         config["hooks"] = serde_json::json!({"select_backend": {"type": "rust", "callback": "builtin.select_backend.passthrough", "params": {}}});
-        config["schema_discovery"] =
-            serde_json::json!({"target": route.target, "backend_login": "reader"});
+        config["schema_discovery"] = serde_json::json!({"target": route.target, "backend_login": "reader", "catalog": {"schemas": ["public"]}});
         config["cache"] = serde_json::json!({"enabled": true, "namespace": format!("{namespace}:cache"), "url_env": if cache_tls { "YASP_TEST_REDIS_TLS_URL" } else { "YASP_TEST_REDIS_URL" }, "tls": if cache_tls { relative_tls.clone() } else { serde_json::json!({}) }});
         config["application_contexts"] = serde_json::json!({"namespace": format!("{namespace}:datasets"), "url_env": if dataset_tls { "YASP_TEST_REDIS_TLS_URL" } else { "YASP_TEST_REDIS_URL" }, "tls": if dataset_tls { relative_tls.clone() } else { serde_json::json!({}) },
         "datasets": {"email_locations": {"loader": {"type": "rust", "callback": "example.datasets.email_locations"}}}});
@@ -300,7 +299,7 @@ async fn configured_host_tls_paths_compute_cache_and_datasets() {
         let metadata = psql(
             address,
             &identity,
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='public' AND c.relkind in ('r','p')",
             frontend_tls,
         );
         support::assert_success(&metadata, "TLS discovery");
@@ -379,11 +378,7 @@ async fn encrypted_gateway_postgres_cancellation_and_bounds() {
     );
     let mut client = connect_client(server.address, &identity).await;
     query(&mut client, "SELECT current_user").await;
-    query(
-        &mut client,
-        "SELECT table_name FROM information_schema.tables LIMIT 1",
-    )
-    .await;
+    query(&mut client, "SELECT current_catalog").await;
 
     let pid = client.process_id();
     let key = client.secret_key().clone();
@@ -596,7 +591,6 @@ async fn startup_rejections_reach_tls_clients_before_disconnect() {
 async fn source_tls_refusal_and_invalid_certificates_never_send_credentials() {
     use pgwire::tokio::TlsAcceptor;
     use rustls::pki_types::PrivateKeyDer;
-    let env = support::TestEnvironment::load();
     for name in ["refuse", "wrong", "expired"] {
         let peer = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = peer.local_addr().unwrap().port();
@@ -646,15 +640,12 @@ async fn source_tls_refusal_and_invalid_certificates_never_send_credentials() {
         )
         .unwrap();
         let backend = Arc::new(PostgresBackend::new(config).unwrap());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         assert!(
             timeout(
                 Duration::from_secs(3),
-                yasp::gateway::serve(
-                    listener,
-                    env.gateway().gateway_config(),
+                yasp::catalog::Catalog::postgres(
                     backend,
-                    std::future::pending()
+                    yasp::catalog::CatalogSettings::new(vec!["public".into()])
                 )
             )
             .await

@@ -6,7 +6,6 @@ pub(crate) use transaction::{Transaction, TransactionStatus};
 
 use crate::{
     backend::{
-        discovery::DiscoveryRequest,
         execution::{Execution, SessionRequest},
         result::{ExecutionError, ExecutionResult, ResultEvent},
     },
@@ -32,8 +31,6 @@ pub(crate) struct QueryContext<'a> {
     pub cache: Option<&'a RedisCache>,
     pub context_hook: Option<&'a ContextHook>,
     pub datasets: Option<&'a DatasetReader>,
-    /// Unknown catalog SQL cannot fall through to a different engine's authority.
-    pub foreign_catalog: bool,
     pub stopped: watch::Receiver<bool>,
 }
 
@@ -98,50 +95,16 @@ impl<'backend> QuerySession<'_, 'backend> {
             return Ok(Some(response));
         }
         if !query.input_options().native
-            && let Some(kind) = discovery::classify(query)
+            && (discovery::classify(query).is_some()
+                || matches!(
+                    query.statement(),
+                    sqlparser::ast::Statement::ShowVariable { .. }
+                ))
         {
-            if self.source.foreign_catalog {
-                return Err(ExecutionError::rejected(
-                    "0A000",
-                    "metadata query is outside the virtual catalog compatibility surface",
-                ));
-            }
-            if self.transaction.active() {
-                let execution: &'backend Execution = self.execution;
-                let discovery = execution.discovery();
-                return self
-                    .transaction
-                    .execute(
-                        &discovery.route(),
-                        SessionRequest {
-                            query: &discovery.prepare(query)?,
-                            session: self.session,
-                            settings: self.settings,
-                            client_id: self.client_id,
-                        },
-                        output,
-                        cancel,
-                    )
-                    .await
-                    .map(|_| None);
-            }
-            return self
-                .execution
-                .discovery()
-                .execute(
-                    DiscoveryRequest {
-                        query,
-                        kind,
-                        session: self.session,
-                        client_id: self.client_id,
-                        query_timeout: self.settings.query_timeout(),
-                        write_timeout,
-                    },
-                    output,
-                    cancel,
-                )
-                .await
-                .map(|_| None);
+            return Err(ExecutionError::rejected(
+                "0A000",
+                "metadata query is outside the catalog compatibility surface",
+            ));
         }
 
         // Ordinary queries derive context and select a route even on cache hits.

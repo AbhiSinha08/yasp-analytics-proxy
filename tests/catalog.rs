@@ -10,15 +10,15 @@ use yasp::{
 async fn source_schema_refresh_is_atomic_and_old_generations_keep_their_origins() {
     let env = support::TestEnvironment::load();
     let database = support::TestDatabase::create(&env.source(None), "yasp_catalog");
-    database.connection.execute("CREATE SCHEMA \"Mixed.Schema's\"; CREATE TABLE \"Mixed.Schema's\".\"T's\" (\"Column.Name\" numeric(20,9) NOT NULL, other text); COMMENT ON COLUMN \"Mixed.Schema's\".\"T's\".\"Column.Name\" IS 'source spelling'");
+    database.connection.execute("CREATE SCHEMA \"Mixed.__LIMIT__.Schema's\"; CREATE TABLE \"Mixed.__LIMIT__.Schema's\".\"T's\" (\"Column.Name\" numeric(20,9) NOT NULL, other text); COMMENT ON COLUMN \"Mixed.__LIMIT__.Schema's\".\"T's\".\"Column.Name\" IS 'source spelling'");
     let backend = Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap());
-    let mut settings = CatalogSettings::new(vec!["Mixed.Schema's".into()]);
+    let mut settings = CatalogSettings::new(vec!["Mixed.__LIMIT__.Schema's".into()]);
     settings.refresh_interval = Duration::from_millis(100);
     let catalog = Catalog::postgres(backend, settings).await.unwrap();
     let old = catalog.snapshot().unwrap();
     let id = RelationId {
         database: database.connection.identity.database.clone(),
-        schema: "Mixed.Schema's".into(),
+        schema: "Mixed.__LIMIT__.Schema's".into(),
         name: "T's".into(),
     };
     let relation = &old.relations[&id];
@@ -33,7 +33,7 @@ async fn source_schema_refresh_is_atomic_and_old_generations_keep_their_origins(
     assert_eq!(old.source.principal, database.connection.identity.user);
     database
         .connection
-        .execute("ALTER TABLE \"Mixed.Schema's\".\"T's\" ADD COLUMN added integer");
+        .execute("ALTER TABLE \"Mixed.__LIMIT__.Schema's\".\"T's\" ADD COLUMN added integer");
     let next = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             let next = catalog.snapshot().unwrap();
@@ -54,9 +54,9 @@ async fn source_schema_refresh_is_atomic_and_old_generations_keep_their_origins(
     assert!(catalog.status().last_error.is_none());
     catalog.stop_refreshing().await;
     let generation = catalog.status().generation;
-    database
-        .connection
-        .execute("ALTER TABLE \"Mixed.Schema's\".\"T's\" ADD COLUMN manual_refresh integer");
+    database.connection.execute(
+        "ALTER TABLE \"Mixed.__LIMIT__.Schema's\".\"T's\" ADD COLUMN manual_refresh integer",
+    );
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(catalog.status().generation, generation);
     catalog.refresh().await.unwrap();
@@ -72,7 +72,7 @@ async fn refresh_failure_retains_last_schema_then_expires_without_publishing_emp
         .execute("CREATE TABLE small_schema (id integer, value text)");
     let backend = Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap());
     let mut settings = CatalogSettings::new(vec!["public".into()]);
-    settings.max_rows = 2;
+    settings.max_rows = 6;
     settings.refresh_interval = Duration::from_millis(100);
     settings.max_age = Duration::from_millis(800);
     let catalog = Catalog::postgres(backend.clone(), settings.clone())
@@ -105,7 +105,7 @@ async fn source_roles_keep_catalogs_and_column_grants_separate() {
     let reader = env
         .source(Some("secondary"))
         .database(&database.connection.identity.database);
-    database.connection.execute(&format!("CREATE TABLE permitted (id integer, secret text); CREATE TABLE hidden (id integer); GRANT SELECT (id) ON permitted TO {}", support::quote_ident(&reader.identity.user)));
+    database.connection.execute(&format!("CREATE TABLE permitted (id integer, secret text UNIQUE, PRIMARY KEY (id, secret)); CREATE TABLE hidden (id integer); GRANT SELECT (id) ON permitted TO {}", support::quote_ident(&reader.identity.user)));
     let settings = CatalogSettings::new(vec!["public".into()]);
     let owner = Catalog::postgres(
         Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap()),
@@ -127,6 +127,28 @@ async fn source_roles_keep_catalogs_and_column_grants_separate() {
     let permitted = reader_schema.relations.values().next().unwrap();
     assert_eq!(permitted.id.name, "permitted");
     assert_eq!(permitted.selectable, Some(false));
+    assert_eq!(
+        permitted.columns[0].primary_key,
+        Some(true),
+        "visible column membership survives hidden key details"
+    );
+    let native = reader_schema
+        .postgres
+        .as_ref()
+        .unwrap()
+        .relations
+        .values()
+        .next()
+        .unwrap();
+    assert!(
+        native.constraints.is_empty(),
+        "keys cannot reveal restricted columns"
+    );
+    assert!(
+        native.indexes.is_empty(),
+        "index definitions require whole-table access"
+    );
+    assert!(native.columns.values().all(|c| c.name == "id"));
     assert!(
         owner_schema
             .relations

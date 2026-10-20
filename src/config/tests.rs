@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
     serde_saphyr::from_str(&format!(
-        "version: 1\nschema_discovery: {{target: primary}}\nhooks:\n  select_backend: {hooks}\nbackend:\n{backend}\ntargets:\n{targets}"
+        "version: 1\nschema_discovery: {{target: primary, catalog: {{schemas: [public]}}}}\nhooks:\n  select_backend: {hooks}\nbackend:\n{backend}\ntargets:\n{targets}"
     ))
     .unwrap()
 }
@@ -73,7 +73,7 @@ fn tls_modes_and_target_certificate_fields_use_one_nested_schema() {
 #[test]
 fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
     let yaml = format!(
-        "version: 1\nhooks: {{select_backend: app.selector}}\ntargets:\n{}",
+        "version: 1\nschema_discovery: {{catalog: {{schemas: [public]}}}}\nhooks: {{select_backend: app.selector}}\ntargets:\n{}",
         ONE_TARGET.replace("reader:\n", "z_first:\n")
     ) + "\n      a_second:\n        username: second\n        password_env: SECOND_PASSWORD";
     let mut config: FileConfig = serde_saphyr::from_str(&yaml).unwrap();
@@ -110,6 +110,12 @@ fn discovery_default_follows_declaration_order_and_checks_explicit_pairs() {
 #[test]
 fn catalog_configuration_requires_bounded_explicit_schema_scope() {
     let config = make_config("app.selector", ONE_TARGET, "  {}");
+    let mut missing = make_config("app.selector", ONE_TARGET, "  {}");
+    missing.schema_discovery.catalog = None;
+    assert!(matches!(
+        missing.validate(),
+        Err(ConfigError::InvalidCatalog)
+    ));
     let mut value = serde_json::to_value(&config).unwrap();
     value["schema_discovery"]["catalog"] = serde_json::json!({"schemas": ["Mixed.Schema's"]});
     let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
@@ -290,8 +296,10 @@ fn application_params_are_preserved_for_both_languages() {
         config.validate().unwrap();
         assert_eq!(config.default_backend().unwrap().backend_login, "reader");
     }
-    let config: FileConfig =
-        serde_saphyr::from_str(&format!("version: 1\ntargets:\n{ONE_TARGET}")).unwrap();
+    let config: FileConfig = serde_saphyr::from_str(&format!(
+        "version: 1\nschema_discovery: {{catalog: {{schemas: [public]}}}}\ntargets:\n{ONE_TARGET}"
+    ))
+    .unwrap();
     config.validate().unwrap();
     assert_eq!(config.default_backend().unwrap().target, "primary");
 }
@@ -426,7 +434,7 @@ fn compute_topology_validates_partial_discovery_scope_and_login_overrides() {
     ));
 
     let selected = format!(
-        "version: 1\nschema_discovery: {{target: primary, compute: small_b}}\nhooks: {{select_backend: custom.selector}}\nbackend: {{max_connections_total: 1}}\ntargets:\n{target}"
+        "version: 1\nschema_discovery: {{target: primary, compute: small_b, catalog: {{schemas: [public]}}}}\nhooks: {{select_backend: custom.selector}}\nbackend: {{max_connections_total: 1}}\ntargets:\n{target}"
     );
     let selected: FileConfig = serde_saphyr::from_str(&selected).unwrap();
     selected.validate().unwrap();
@@ -436,7 +444,7 @@ fn compute_topology_validates_partial_discovery_scope_and_login_overrides() {
     );
 
     let partial: FileConfig = serde_saphyr::from_str(&format!(
-        "version: 1\nschema_discovery: {{target: primary, compute: small_a}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {{target: primary, compute_type: small}}}}\ntargets:\n{target}"
+        "version: 1\nschema_discovery: {{target: primary, compute: small_a, catalog: {{schemas: [public]}}}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {{target: primary, compute_type: small}}}}\ntargets:\n{target}"
     ))
     .unwrap();
     partial.validate().unwrap();
@@ -493,7 +501,7 @@ fn passthrough_partial_fields_resolve_and_validate_after_inference() {
     let target = "  primary:\n    engine: postgresql\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader: {username: reader, password_env: READER_PASSWORD}\n    compute:\n      types:\n        small:\n          max_in_flight: 2\n          max_connections: 4\n          instances:\n            - {id: small_a, host: localhost, port: 5433}\n            - {id: small_b, host: localhost, port: 5434}";
     let config_text = |params: &str| {
         format!(
-            "version: 1\nschema_discovery: {{target: primary, compute: small_a}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}\ntargets:\n{target}"
+            "version: 1\nschema_discovery: {{target: primary, compute: small_a, catalog: {{schemas: [public]}}}}\nhooks:\n  select_backend: {{type: rust, callback: builtin.select_backend.passthrough, params: {params}}}\ntargets:\n{target}"
         )
     };
 
@@ -594,6 +602,7 @@ fn snowflake_yaml_requires_its_feature_catalog_and_engine_specific_identity() {
         role: PUBLIC"#,
         "  {}",
     );
+    config.schema_discovery.catalog = None;
     if !cfg!(feature = "snowflake") {
         assert!(matches!(
             config.validate(),
