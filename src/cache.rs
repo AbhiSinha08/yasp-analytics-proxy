@@ -36,6 +36,55 @@ pub(crate) struct CacheBuffer {
     _permit: OwnedSemaphorePermit,
 }
 
+impl CacheBuffer {
+    /// Reserve three copies before allocating/growing payload or metadata buffers.
+    fn reserve_bytes(&mut self, bytes: usize) -> bool {
+        let Some(required) = bytes.checked_mul(3).and_then(|n| u32::try_from(n).ok()) else {
+            return false;
+        };
+        let extra = (required as usize).saturating_sub(self._permit.num_permits());
+        if extra == 0 {
+            return true;
+        }
+        match self
+            ._permit
+            .semaphore()
+            .clone()
+            .try_acquire_many_owned(extra as u32)
+        {
+            Ok(permit) => {
+                self._permit.merge(permit);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn prepare(&mut self, additional: usize, limit: usize) -> bool {
+        let Some(length) = self
+            .bytes
+            .len()
+            .checked_add(additional)
+            .filter(|n| *n <= limit)
+        else {
+            return false;
+        };
+        if length <= self.bytes.capacity() {
+            return true;
+        }
+        let capacity = length
+            .max(self.bytes.capacity().saturating_mul(2))
+            .min(limit);
+        if !self.reserve_bytes(capacity) {
+            return false;
+        }
+        let mut grown = BytesMut::with_capacity(capacity);
+        grown.extend_from_slice(&self.bytes);
+        self.bytes = grown;
+        true
+    }
+}
+
 impl RedisCache {
     /// Validate transport configuration and certificate material without connecting to Redis.
     /// An unavailable cache is retried lazily and never prevents database execution.
@@ -84,12 +133,13 @@ impl RedisCache {
         if max_entry_bytes <= HEADER_BYTES {
             return None;
         }
+        let capacity = max_entry_bytes.min(4096);
         let permit = self
             .budget
             .clone()
-            .try_acquire_many_owned((max_entry_bytes * 3) as u32)
+            .try_acquire_many_owned((capacity * 3) as u32)
             .ok()?;
-        let mut bytes = BytesMut::with_capacity(max_entry_bytes);
+        let mut bytes = BytesMut::with_capacity(capacity);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(scope);
         Some(CacheBuffer {
@@ -115,15 +165,26 @@ impl RedisCache {
         scope: &[u8; 32],
         buffer: &mut CacheBuffer,
     ) -> bool {
-        let mut cmd = redis::cmd("GETRANGE");
-        cmd.arg(cache_key(
-            &self.settings.namespace,
-            target,
-            backend_login,
-            query_id,
-        ))
-        .arg(0)
-        .arg(self.max_entry_bytes());
+        let key = cache_key(&self.settings.namespace, target, backend_login, query_id);
+        let mut size = redis::cmd("STRLEN");
+        size.arg(&key);
+        let Some(Value::Int(length)) = self.command(size).await else {
+            return false;
+        };
+        let Ok(length) = usize::try_from(length) else {
+            return false;
+        };
+        if length <= HEADER_BYTES
+            || length > self.max_entry_bytes()
+            || !buffer.reserve_bytes(length.max(buffer.bytes.capacity()))
+        {
+            return false;
+        }
+        // Check size and read atomically: a replacement between the probe and
+        // read must never return a truncated prefix or exceed the reservation.
+        let mut cmd = redis::cmd("EVAL");
+        cmd.arg("if redis.call('STRLEN',KEYS[1])~=tonumber(ARGV[1]) then return false end return redis.call('GETRANGE',KEYS[1],0,tonumber(ARGV[1])-1)")
+            .arg(1).arg(key).arg(length);
         if let Some(Value::BulkString(value)) = self.command(cmd).await
             && value.len() > HEADER_BYTES
             && value.len() <= self.max_entry_bytes()

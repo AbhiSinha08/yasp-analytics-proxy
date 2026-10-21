@@ -233,6 +233,16 @@ impl FileConfig {
         self.gateway.validate()?;
         self.hooks.python.validate()?;
         self.cache.validate()?;
+        validate_value(
+            "data_contexts.ast.namespace",
+            &self.data_contexts.ast.namespace,
+        )?;
+        if self.cache.enabled
+            && self.data_contexts.ast.enabled
+            && self.cache.namespace == self.data_contexts.ast.namespace
+        {
+            return Err(ConfigError::InvalidCacheNamespaces);
+        }
         if let Some(model) = &self.data_contexts.decision_model {
             model.validate()?;
         }

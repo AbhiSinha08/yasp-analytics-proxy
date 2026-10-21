@@ -11,6 +11,7 @@ pub struct GatewayConfig {
     pub(crate) tls: Option<std::sync::Arc<crate::tls::ServerTls>>,
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) decision_model: Option<std::sync::Arc<crate::decision_model::DecisionModel>>,
+    pub(crate) ast: crate::lineage::AstSettings,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) input_options: Option<std::sync::Arc<crate::hooks::InputOptionsResolver>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
@@ -38,6 +39,7 @@ impl GatewayConfig {
             tls: None,
             cache: None,
             decision_model: None,
+            ast: crate::lineage::AstSettings::default(),
             context_hook: None,
             input_options: None,
             schema_discovery: None,
@@ -104,6 +106,12 @@ impl GatewayConfig {
         model: std::sync::Arc<crate::decision_model::DecisionModel>,
     ) -> Self {
         self.decision_model = Some(model);
+        self
+    }
+
+    /// Configure local output lineage and the optional default data-query grammar.
+    pub fn with_ast_context(mut self, settings: crate::lineage::AstSettings) -> Self {
+        self.ast = settings;
         self
     }
 

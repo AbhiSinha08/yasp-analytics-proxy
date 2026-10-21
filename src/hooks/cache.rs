@@ -74,6 +74,7 @@ impl CacheEligibility {
                 .map_or((None, None), |(reader, guard)| (Some(reader), Some(guard)))
         };
         let scoped = SelectionRequest {
+            data_contexts: request.data_contexts,
             authenticated_user: request.authenticated_user,
             client_id: request.client_id,
             query_id: request.query_id,

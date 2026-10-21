@@ -93,9 +93,10 @@
   - [x] **Shared result classification** — Optional System 1 REST client under `data_contexts.decision_model`, bounded first-prefix samples, and validated per-column probability/confidence outcomes.
   - [x] **Decision cache and verification** — Associate column decisions with raw Redis entries; prove hit reuse, failure handling, bounds, cancellation, and both backends using HTTP mocks.
   - [ ] **Dynamic masking** — Apply application-selected, schema-preserving masks using classification outcomes.
-- [ ] **AST Based Dynamic Masking**
-  - [ ] **AST dictionary data context** — Derive output context through AST parsing with a preset dictionary as a second `data_contexts` source.
-  - [ ] **Column binding and lineage** — Pin a catalog generation, expand wildcards, resolve aliases/joins/CTEs/subqueries/expressions and expose ambiguous origins before policy-driven masking.
+- [x] **AST Based Data Context**
+  - [x] **AST hook access** — Share the existing immutable Rust AST and its bounded sqlparser JSON representation with applicable Python hooks after parsing.
+  - [x] **Column binding and lineage** — Analyze the currently available catalog for PostgreSQL, Snowflake, and Redshift; resolve output constituents, stars, aliases, joins, CTEs, subqueries, functions and native JSON paths, preserving known sources alongside unknowns.
+  - [x] **Lineage cache association** — Atomically associate bounded output lineage with complete raw result fills, alone or with model decisions, using the same TTL. Current analysis is recomputed before hooks.
 - [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [x] **Redshift Gateway**
   - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.

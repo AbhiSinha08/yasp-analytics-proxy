@@ -44,16 +44,21 @@ cache:
   ttl_seconds: 120
   namespace: "yasp:cache"
   max_rows_per_query: 10000
-  max_buffered_bytes_total: 33554432
+  max_buffered_bytes_total: 268400000
 
 data_contexts:
   decision_model:
+    namespace: "yasp:decision_cache"
     endpoint: http://127.0.0.1:8001/v1/systemone
     sample_size: 5
     timeout_ms: 2000
     fail_on_error: false
     questions:
       email: "Do these values contain email addresses?"
+  ast:
+    enabled: true
+    dialect: postgresql
+    namespace: "yasp:ast_cache"
 
 application_contexts:
   url_env: YASP_REDIS_URL

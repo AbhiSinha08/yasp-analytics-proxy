@@ -236,6 +236,7 @@ async fn reads_json_values_missing_keys_limits_and_new_redis_values() {
     let query = ParsedQuery::parse("SELECT 1").unwrap();
     let query_id = query.query_id();
     let context_request = ContextRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "frontend",
         frontend_database: "analytics",
         client_id: 1,

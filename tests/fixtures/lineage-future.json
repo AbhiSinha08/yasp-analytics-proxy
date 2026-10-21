@@ -1,0 +1,19 @@
+[
+  {
+    "dialect": "bigquery",
+    "source": "https://developers.google.com/analytics/bigquery/advanced-queries",
+    "status": "example for a future dialect adapter; not an executable acceptance claim",
+    "sql": "WITH purchases AS (SELECT user_pseudo_id, items FROM events WHERE event_name='purchase') SELECT item.item_name, SUM(item.quantity) AS quantity FROM purchases, UNNEST(items) item GROUP BY 1",
+    "expected_sources": [["events.items[*].item_name"], ["events.items[*].quantity"]],
+    "required_rules": ["UNNEST value scopes", "STRUCT paths", "backtick identifiers", "value tables and expression stars", "BY NAME set alignment"]
+  },
+  {
+    "dialect": "databricks",
+    "source": "https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-qry-star",
+    "status": "example for a future dialect adapter; not an executable acceptance claim",
+    "schema": {"contacts": {"email": "STRING", "backup_email": "STRING"}},
+    "sql": "SELECT COALESCE(c.*) AS contact FROM contacts c",
+    "expected_sources": [["contacts.email", "contacts.backup_email"]],
+    "required_rules": ["function argument stars", "STRUCT field stars and EXCEPT", "VARIANT paths", "EXPLODE relation outputs", "higher-order lambda scopes"]
+  }
+]

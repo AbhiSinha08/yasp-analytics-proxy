@@ -11,14 +11,22 @@ pub(super) const CLASSIFIED_HEADER: usize = HEADER_BYTES + 32;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Sidecar {
+struct Sidecar<T> {
     version: u8,
     association: String,
     fingerprint: String,
-    classification: ColumnClassification,
+    classification: T,
+}
+
+#[derive(Serialize)]
+struct AstSidecar<'a> {
+    version: u8,
+    association: &'a str,
+    ast: &'a crate::lineage::AstDataContext,
 }
 
 fn key(
+    namespace: &str,
     target: &str,
     login: &str,
     query_id: &str,
@@ -26,44 +34,100 @@ fn key(
 ) -> String {
     format!(
         "{}:{}:{}",
-        cache_key("yasp:decision_cache", target, login, query_id),
+        cache_key(namespace, target, login, query_id),
         column.ordinal,
         escape_component(&column.name)
     )
 }
 
 impl RedisCache {
-    pub(super) async fn put_classified(
+    pub(super) async fn put_contexts(
         &self,
         target: &str,
         login: &str,
         query_id: &str,
-        buffer: &CacheBuffer,
-        results: &Classifications,
-        model: &DecisionModel,
+        buffer: &mut CacheBuffer,
+        decisions: Option<(&Classifications, &DecisionModel)>,
+        ast: Option<(&crate::lineage::AstDataContext, &str)>,
     ) {
+        let mut copied = 0;
+        if let Some((results, _)) = decisions {
+            let Ok(size) = crate::hooks::payload::serialized_size(results, MAX_METADATA_BYTES)
+            else {
+                return;
+            };
+            copied += size;
+        }
+        if let Some((ast, _)) = ast {
+            let Ok(size) = crate::hooks::payload::serialized_size(ast, MAX_METADATA_BYTES) else {
+                return;
+            };
+            copied += size;
+        }
+        if copied > MAX_METADATA_BYTES
+            || !buffer.reserve_bytes(buffer.bytes.capacity() + copied + 32)
+        {
+            return;
+        }
         let mut hash = Sha256::new();
         hash.update(buffer.bytes.as_ref());
-        hash.update(model.fingerprint());
-        let Ok(metadata) = serde_json::to_vec(results) else {
-            return;
-        };
-        hash.update(&metadata);
+        if let Some((results, model)) = decisions {
+            hash.update(model.fingerprint());
+            let Ok(metadata) = serde_json::to_vec(results) else {
+                return;
+            };
+            hash.update(metadata);
+        }
+        if let Some((ast, _)) = ast {
+            if crate::hooks::payload::serialized_size(ast, MAX_METADATA_BYTES).is_err() {
+                return;
+            }
+            let Ok(metadata) = serde_json::to_vec(ast) else {
+                return;
+            };
+            hash.update(metadata);
+        }
         let association: [u8; 32] = hash.finalize().into();
         let association_text = hex(&association);
         let mut sidecars = Vec::new();
         let mut total = buffer.bytes.len() + 32;
         let mut metadata_bytes = 0usize;
-        for result in &results.columns {
-            let Ok(value) = serde_json::to_vec(&Sidecar {
+        for (result, model) in decisions
+            .into_iter()
+            .flat_map(|(results, model)| results.columns.iter().map(move |result| (result, model)))
+        {
+            let sidecar = Sidecar {
                 version: 1,
                 association: association_text.clone(),
                 fingerprint: model.fingerprint().into(),
-                classification: result.clone(),
-            }) else {
+                classification: result,
+            };
+            let Ok(size) = crate::hooks::payload::serialized_size(&sidecar, MAX_METADATA_BYTES)
+            else {
                 return;
             };
-            let key = key(target, login, query_id, &result.column);
+            let key_bound = model.settings().namespace.len()
+                + 3 * (target.len() + login.len() + result.column.name.len())
+                + query_id.len()
+                + 32;
+            if metadata_bytes + size + key_bound > MAX_METADATA_BYTES
+                || metadata_bytes + size + key_bound + buffer.bytes.len() + 32
+                    > self.max_entry_bytes()
+                || !buffer
+                    .reserve_bytes(buffer.bytes.capacity() + metadata_bytes + size + key_bound + 32)
+            {
+                return;
+            }
+            let Ok(value) = serde_json::to_vec(&sidecar) else {
+                return;
+            };
+            let key = key(
+                &model.settings().namespace,
+                target,
+                login,
+                query_id,
+                &result.column,
+            );
             metadata_bytes = metadata_bytes
                 .saturating_add(value.len())
                 .saturating_add(key.len());
@@ -76,7 +140,46 @@ impl RedisCache {
             }
             sidecars.push((key, value));
         }
+        if let Some((ast, namespace)) = ast {
+            if namespace.trim().is_empty() || namespace.contains('\0') {
+                return;
+            }
+            let sidecar = AstSidecar {
+                version: 1,
+                association: &association_text,
+                ast,
+            };
+            let Ok(size) = crate::hooks::payload::serialized_size(&sidecar, MAX_METADATA_BYTES)
+            else {
+                return;
+            };
+            let key_bound = namespace.len() + 3 * (target.len() + login.len()) + query_id.len() + 3;
+            if metadata_bytes + size + key_bound > MAX_METADATA_BYTES
+                || metadata_bytes + size + key_bound + buffer.bytes.len() + 32
+                    > self.max_entry_bytes()
+                || !buffer
+                    .reserve_bytes(buffer.bytes.capacity() + metadata_bytes + size + key_bound + 32)
+            {
+                return;
+            }
+            let key = cache_key(namespace, target, login, query_id);
+            let Ok(value) = serde_json::to_vec(&sidecar) else {
+                return;
+            };
+            metadata_bytes = metadata_bytes
+                .saturating_add(key.len())
+                .saturating_add(value.len());
+            total = total.saturating_add(key.len()).saturating_add(value.len());
+            if metadata_bytes > MAX_METADATA_BYTES {
+                return;
+            }
+            sidecars.push((key, value));
+        }
         if total > self.max_entry_bytes() {
+            return;
+        }
+        let raw_key = cache_key(&self.settings.namespace, target, login, query_id);
+        if sidecars.iter().any(|(key, _)| key == &raw_key) {
             return;
         }
         let mut data = Vec::with_capacity(buffer.bytes.len() + 32);
@@ -89,7 +192,7 @@ impl RedisCache {
         let mut cmd = redis::cmd("EVAL");
         cmd.arg("for i=1,#KEYS do redis.call('SET',KEYS[i],ARGV[i+1],'EX',ARGV[1]) end return 1")
             .arg(sidecars.len() + 1)
-            .arg(cache_key(&self.settings.namespace, target, login, query_id));
+            .arg(raw_key);
         for (key, _) in &sidecars {
             cmd.arg(key);
         }
@@ -97,7 +200,14 @@ impl RedisCache {
         for (_, value) in sidecars {
             cmd.arg(value);
         }
-        self.command(cmd).await;
+        if self.command(cmd).await.is_some() {
+            tracing::debug!(
+                query_id,
+                target,
+                backend_login = login,
+                "query and data contexts cached"
+            );
+        }
     }
 
     pub(super) async fn classifications(
@@ -119,7 +229,7 @@ impl RedisCache {
             .arg(columns.len());
         let mut key_bytes = 0usize;
         for column in columns {
-            let key = key(target, login, query_id, column);
+            let key = key(&model.settings().namespace, target, login, query_id, column);
             key_bytes = key_bytes.saturating_add(key.len());
             if key_bytes > MAX_METADATA_BYTES
                 || key_bytes > self.max_entry_bytes().saturating_sub(buffer.bytes.len())
@@ -128,11 +238,16 @@ impl RedisCache {
             }
             cmd.arg(key);
         }
-        let budget = MAX_METADATA_BYTES.min(
-            self.max_entry_bytes()
-                .saturating_sub(buffer.bytes.len())
-                .saturating_sub(key_bytes),
-        );
+        let budget = MAX_METADATA_BYTES
+            .min(
+                self.max_entry_bytes()
+                    .saturating_sub(buffer.bytes.capacity()),
+            )
+            .min(
+                self.max_entry_bytes()
+                    .saturating_sub(buffer.bytes.len())
+                    .saturating_sub(key_bytes),
+            );
         cmd.arg(budget);
         let Some(Value::Array(values)) = self.command(cmd).await else {
             return Classifications::default();
@@ -142,7 +257,8 @@ impl RedisCache {
             let Value::BulkString(value) = value else {
                 continue;
             };
-            let Ok(sidecar) = serde_json::from_slice::<Sidecar>(&value) else {
+            let Ok(sidecar) = serde_json::from_slice::<Sidecar<ColumnClassification>>(&value)
+            else {
                 continue;
             };
             if sidecar.version == 1

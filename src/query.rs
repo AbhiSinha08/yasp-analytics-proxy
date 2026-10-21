@@ -83,6 +83,7 @@ pub struct ParsedQuery {
     statement: Statement,
     query_id: String,
     options: InputOptions,
+    serialized_ast: std::sync::OnceLock<serde_json::Value>,
 }
 
 #[derive(Debug, Error)]
@@ -149,6 +150,7 @@ impl ParsedQuery {
             statement: statements.remove(0),
             query_id,
             options,
+            serialized_ast: std::sync::OnceLock::new(),
         })
     }
 
@@ -169,6 +171,15 @@ impl ParsedQuery {
     /// construct a new query and validate its effective SQL before execution.
     pub fn statement(&self) -> &Statement {
         &self.statement
+    }
+
+    /// The sqlparser 0.63 Serde shape, constructed once for plain JSON hooks.
+    /// Parser upgrades may change this representation; Rust uses `statement()`.
+    pub fn serialized_ast(&self) -> &serde_json::Value {
+        self.serialized_ast.get_or_init(|| {
+            serde_json::to_value(&self.statement)
+                .expect("sqlparser AST contains only JSON-serializable values")
+        })
     }
 
     pub fn validate_read_only(&self) -> Result<(), QueryError> {

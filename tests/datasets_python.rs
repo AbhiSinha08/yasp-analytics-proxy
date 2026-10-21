@@ -293,6 +293,7 @@ def queued(request, params):
     let query = ParsedQuery::parse("SELECT 1").unwrap();
     let query_id = query.query_id();
     let context_request = ContextRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         frontend_database: "analytics",
         client_id: 7,
@@ -330,6 +331,7 @@ def queued(request, params):
     );
 
     let selection_request = SelectionRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         client_id: 7,
         query_id,

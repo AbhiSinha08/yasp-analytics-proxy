@@ -1,0 +1,855 @@
+[
+  {
+    "name": "join aggregates",
+    "sql": "SELECT u.id, COUNT(t.id) AS ticket_count FROM users u JOIN support_tickets t ON t.email=u.email GROUP BY u.id",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "support_tickets.id"
+      ]
+    ]
+  },
+  {
+    "name": "partial unresolved argument",
+    "sql": "SELECT CONCAT(id, missing_date) AS label FROM users",
+    "sources": [
+      [
+        "users.id",
+        "?missing_date"
+      ]
+    ]
+  },
+  {
+    "name": "branch values only",
+    "sql": "SELECT CASE WHEN email IS NULL THEN id ELSE created_at END AS value FROM users",
+    "sources": [
+      [
+        "users.id",
+        "users.created_at"
+      ]
+    ]
+  },
+  {
+    "name": "simple case operand excluded",
+    "sql": "SELECT CASE email WHEN 'a' THEN id ELSE id+1 END FROM users",
+    "sources": [
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "constant branch and filtered constant",
+    "sql": "SELECT CASE WHEN email IS NULL THEN 1 ELSE 0 END, 1 FROM users WHERE profile IS NOT NULL",
+    "sources": [
+      [],
+      []
+    ]
+  },
+  {
+    "name": "window arguments only",
+    "sql": "SELECT SUM(id) OVER(PARTITION BY email ORDER BY created_at), ROW_NUMBER() OVER(ORDER BY email) FROM users",
+    "sources": [
+      [
+        "users.id"
+      ],
+      []
+    ]
+  },
+  {
+    "name": "aggregate function arguments",
+    "sql": "SELECT MAX(subject), COUNT(email), COUNT(*) FROM support_tickets",
+    "sources": [
+      [
+        "support_tickets.subject"
+      ],
+      [
+        "support_tickets.email"
+      ],
+      []
+    ]
+  },
+  {
+    "name": "filtered aggregate",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT COUNT(id) FILTER(WHERE email IS NOT NULL) FROM users",
+    "sources": [
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "nested ordinary functions",
+    "sql": "SELECT COALESCE(LOWER(email), CONCAT(id, context_key)) FROM users",
+    "sources": [
+      [
+        "users.email",
+        "users.id",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "duplicate output aliases",
+    "sql": "SELECT email AS x, id AS x FROM users",
+    "sources": [
+      [
+        "users.email"
+      ],
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "cte explicit names",
+    "sql": "WITH c(x,y) AS (SELECT email,id FROM users) SELECT x,y+1 FROM c",
+    "sources": [
+      [
+        "users.email"
+      ],
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "cte sibling output isolation",
+    "sql": "WITH c AS (SELECT u.email, COUNT(t.id) AS tickets FROM users u JOIN support_tickets t ON t.user_id=u.id GROUP BY u.email) SELECT tickets FROM c",
+    "sources": [
+      [
+        "support_tickets.id"
+      ]
+    ]
+  },
+  {
+    "name": "cte shadows physical relation",
+    "sql": "WITH users AS (SELECT subject AS email FROM support_tickets) SELECT email FROM users",
+    "sources": [
+      [
+        "support_tickets.subject"
+      ]
+    ]
+  },
+  {
+    "name": "nested cte shadows outer cte",
+    "sql": "WITH c AS (SELECT id FROM users) SELECT x.id FROM (WITH c AS (SELECT user_id AS id FROM support_tickets) SELECT id FROM c) x",
+    "sources": [
+      [
+        "support_tickets.user_id"
+      ]
+    ]
+  },
+  {
+    "name": "correlated scalar value",
+    "sql": "SELECT (SELECT MAX(t.subject) FROM support_tickets t WHERE t.user_id=u.id) FROM users u",
+    "sources": [
+      [
+        "support_tickets.subject"
+      ]
+    ]
+  },
+  {
+    "name": "correlated returned expression",
+    "sql": "SELECT (SELECT u.email FROM support_tickets t WHERE t.user_id=u.id LIMIT 1) FROM users u",
+    "sources": [
+      [
+        "users.email"
+      ]
+    ]
+  },
+  {
+    "name": "union by position",
+    "sql": "SELECT email AS contact,id FROM users UNION ALL SELECT subject,user_id FROM support_tickets",
+    "sources": [
+      [
+        "users.email",
+        "support_tickets.subject"
+      ],
+      [
+        "users.id",
+        "support_tickets.user_id"
+      ]
+    ]
+  },
+  {
+    "name": "select star",
+    "sql": "SELECT u.* FROM users u",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "users.email"
+      ],
+      [
+        "users.profile"
+      ],
+      [
+        "users.created_at"
+      ],
+      [
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "join using output order",
+    "sql": "SELECT * FROM users u JOIN support_tickets t USING (email,id)",
+    "sources": [
+      [
+        "users.email"
+      ],
+      [
+        "users.id"
+      ],
+      [
+        "users.profile"
+      ],
+      [
+        "users.created_at"
+      ],
+      [
+        "users.context_key"
+      ],
+      [
+        "support_tickets.user_id"
+      ],
+      [
+        "support_tickets.subject"
+      ]
+    ]
+  },
+  {
+    "name": "right join using",
+    "sql": "SELECT id,email FROM users u RIGHT JOIN support_tickets t USING(id,email)",
+    "sources": [
+      [
+        "support_tickets.id"
+      ],
+      [
+        "support_tickets.email"
+      ]
+    ]
+  },
+  {
+    "name": "full join using",
+    "sql": "SELECT id FROM users u FULL JOIN support_tickets t USING(id)",
+    "sources": [
+      [
+        "users.id",
+        "support_tickets.id"
+      ]
+    ]
+  },
+  {
+    "name": "natural join output order",
+    "sql": "SELECT * FROM users NATURAL JOIN support_tickets",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "users.email"
+      ],
+      [
+        "users.profile"
+      ],
+      [
+        "users.created_at"
+      ],
+      [
+        "users.context_key"
+      ],
+      [
+        "support_tickets.user_id"
+      ],
+      [
+        "support_tickets.subject"
+      ]
+    ]
+  },
+  {
+    "name": "qualified stars retain originals",
+    "sql": "SELECT u.id,t.id FROM users u JOIN support_tickets t USING(id)",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "support_tickets.id"
+      ]
+    ]
+  },
+  {
+    "name": "ambiguous source",
+    "sql": "SELECT CONCAT(u.id,email) FROM users u JOIN support_tickets t ON u.id=t.user_id",
+    "sources": [
+      [
+        "users.id",
+        "?email"
+      ]
+    ]
+  },
+  {
+    "name": "function hidden body ignored",
+    "sql": "SELECT lookup_email_by_id(id) FROM users",
+    "sources": [
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "postgres json cte",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "WITH c AS(SELECT profile->'contact' AS contact FROM users) SELECT contact->>'email' FROM c",
+    "sources": [
+      [
+        "users.profile:contact:email"
+      ]
+    ]
+  },
+  {
+    "name": "postgres json index",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT profile->'contacts'->0->>'email' FROM users",
+    "sources": [
+      [
+        "users.profile:contacts[0]:email"
+      ]
+    ]
+  },
+  {
+    "name": "postgres text path",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT profile#>>'{contacts,0,email}' FROM users",
+    "sources": [
+      [
+        "users.profile:{contacts}:{0}:{email}"
+      ]
+    ]
+  },
+  {
+    "name": "postgres array text path",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT profile#>ARRAY['contact','email'] FROM users",
+    "sources": [
+      [
+        "users.profile:{contact}:{email}"
+      ]
+    ]
+  },
+  {
+    "name": "postgres dynamic key",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT profile->>context_key FROM users",
+    "sources": [
+      [
+        "users.profile:?",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "postgres conservative object",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "WITH c AS(SELECT jsonb_build_object('contact',email,'uid',id) AS obj FROM users) SELECT obj->>'contact' FROM c",
+    "sources": [
+      [
+        "users.email",
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "postgres array generator",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT e.value->>'email' FROM users u CROSS JOIN LATERAL jsonb_array_elements(u.profile->'contacts') AS e(value)",
+    "sources": [
+      [
+        "users.profile:contacts[*]:email"
+      ]
+    ]
+  },
+  {
+    "name": "postgres record constructor",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT ROW(id,email) FROM users",
+    "sources": [
+      [
+        "users.id",
+        "users.email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake json cte",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "WITH c AS(SELECT profile:contact AS contact FROM users) SELECT contact:email::STRING FROM c",
+    "sources": [
+      [
+        "users.profile:contact:email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake indexed path",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT profile:contacts[0].email::STRING FROM users",
+    "sources": [
+      [
+        "users.profile:contacts[0]:email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake dynamic get",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT GET(profile,context_key) FROM users",
+    "sources": [
+      [
+        "users.profile:?",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake literal get path",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT GET_PATH(profile,'contacts[0].email') FROM users",
+    "sources": [
+      [
+        "users.profile:contacts[0]:email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake dotted literal key",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT profile:\"contact.email\" FROM users",
+    "sources": [
+      [
+        "users.profile:contact.email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake conservative object",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "WITH c AS(SELECT OBJECT_CONSTRUCT('contact',email,'uid',id) AS obj FROM users) SELECT obj:contact FROM c",
+    "sources": [
+      [
+        "users.email",
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake function star",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT ARRAY_AGG(OBJECT_CONSTRUCT(u.*)) FROM users u",
+    "sources": [
+      [
+        "users.id",
+        "users.email",
+        "users.profile",
+        "users.created_at",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake count qualified star",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT COUNT(u.*) FROM users u",
+    "sources": [
+      [
+        "users.id",
+        "users.email",
+        "users.profile",
+        "users.created_at",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake function star exclude",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT ARRAY_AGG(OBJECT_CONSTRUCT(* EXCLUDE (profile,context_key))) FROM users",
+    "sources": [
+      [
+        "users.id",
+        "users.email",
+        "users.created_at"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake function star ilike",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT OBJECT_CONSTRUCT(* ILIKE '%id') FROM users",
+    "sources": [
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake star modifiers",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT * EXCLUDE profile REPLACE(CONCAT(email,context_key) AS email) RENAME email AS contact FROM users",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "users.email",
+        "users.context_key"
+      ],
+      [
+        "users.created_at"
+      ],
+      [
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake flatten",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT f.value:email::STRING FROM users u, LATERAL FLATTEN(INPUT=>u.profile:contacts) f",
+    "sources": [
+      [
+        "users.profile:contacts[*]:email"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake flatten literal path",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT f.value:email FROM users u, LATERAL FLATTEN(INPUT=>u.profile,PATH=>'contacts') f",
+    "sources": [
+      [
+        "users.profile:contacts[*]:email"
+      ]
+    ]
+  },
+  {
+    "name": "redshift super navigation",
+    "dialects": [
+      "redshift"
+    ],
+    "sql": "SELECT u.profile.contact.email FROM users u",
+    "sources": [
+      [
+        "users.profile:contact:email"
+      ]
+    ]
+  },
+  {
+    "name": "redshift super index",
+    "dialects": [
+      "redshift"
+    ],
+    "sql": "SELECT u.profile.contacts[0].email FROM users u",
+    "sources": [
+      [
+        "users.profile:contacts[0]:email"
+      ]
+    ]
+  },
+  {
+    "name": "redshift prior target alias",
+    "dialects": [
+      "redshift"
+    ],
+    "sql": "SELECT id+1 AS next_id, next_id*2 AS doubled FROM users",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "redshift source alias collision",
+    "dialects": [
+      "redshift"
+    ],
+    "sql": "SELECT id AS email, LOWER(email) FROM users",
+    "sources": [
+      [
+        "users.id"
+      ],
+      [
+        "users.email"
+      ]
+    ]
+  },
+  {
+    "name": "aws tickit outer join",
+    "source": "https://docs.aws.amazon.com/redshift/latest/dg/r_Join_examples.html",
+    "sql": "SELECT listing.listid,SUM(pricepaid) AS price,SUM(commission) AS comm FROM listing LEFT OUTER JOIN sales ON sales.listid=listing.listid WHERE listing.listid BETWEEN 1 AND 5 GROUP BY 1 ORDER BY 1",
+    "sources": [
+      [
+        "listing.listid"
+      ],
+      [
+        "sales.pricepaid"
+      ],
+      [
+        "sales.commission"
+      ]
+    ]
+  },
+  {
+    "name": "aws running total",
+    "source": "https://docs.aws.amazon.com/redshift/latest/dg/c_Window_functions.html",
+    "sql": "SELECT dateid,pricepaid,SUM(pricepaid) OVER(ORDER BY dateid ROWS UNBOUNDED PRECEDING) AS sumpaid FROM sales",
+    "sources": [
+      [
+        "sales.dateid"
+      ],
+      [
+        "sales.pricepaid"
+      ],
+      [
+        "sales.pricepaid"
+      ]
+    ]
+  },
+  {
+    "name": "dbt customer mart",
+    "source": "https://github.com/dbt-labs/jaffle-shop-classic/blob/main/models/customers.sql",
+    "sql": "WITH customers AS(SELECT * FROM stg_customers), orders AS(SELECT * FROM stg_orders), payments AS(SELECT * FROM stg_payments), customer_orders AS(SELECT customer_id,MIN(order_date) AS first_order,MAX(order_date) AS most_recent_order,COUNT(order_id) AS number_of_orders FROM orders GROUP BY customer_id), customer_payments AS(SELECT orders.customer_id,SUM(amount) AS total_amount FROM payments LEFT JOIN orders ON payments.order_id=orders.order_id GROUP BY orders.customer_id), final AS(SELECT customers.customer_id,customers.first_name,customers.last_name,customer_orders.first_order,customer_orders.most_recent_order,customer_orders.number_of_orders,customer_payments.total_amount AS customer_lifetime_value FROM customers LEFT JOIN customer_orders ON customers.customer_id=customer_orders.customer_id LEFT JOIN customer_payments ON customers.customer_id=customer_payments.customer_id) SELECT * FROM final",
+    "sources": [
+      [
+        "stg_customers.customer_id"
+      ],
+      [
+        "stg_customers.first_name"
+      ],
+      [
+        "stg_customers.last_name"
+      ],
+      [
+        "stg_orders.order_date"
+      ],
+      [
+        "stg_orders.order_date"
+      ],
+      [
+        "stg_orders.order_id"
+      ],
+      [
+        "stg_payments.amount"
+      ]
+    ]
+  },
+  {
+    "name": "snowflake car sales tax",
+    "dialects": [
+      "snowflake"
+    ],
+    "source": "https://docs.snowflake.com/en/user-guide/querying-semistructured",
+    "sql": "SELECT src:vehicle[0].price::NUMBER*0.10 AS tax FROM car_sales ORDER BY tax",
+    "sources": [
+      [
+        "car_sales.src:vehicle[0]:price"
+      ]
+    ]
+  },
+  {
+    "name": "purchase analysis adapted to postgres",
+    "dialects": [
+      "postgresql"
+    ],
+    "source": "https://developers.google.com/analytics/bigquery/advanced-queries",
+    "sql": "WITH purchases AS(SELECT id AS user_id,profile FROM users WHERE id>0) SELECT i.value->>'item_name' AS item_name,SUM((i.value->>'quantity')::INT) FROM purchases p CROSS JOIN LATERAL jsonb_array_elements(p.profile->'items') i(value) WHERE p.user_id IS NOT NULL GROUP BY 1",
+    "sources": [
+      [
+        "users.profile:items[*]:item_name"
+      ],
+      [
+        "users.profile:items[*]:quantity"
+      ]
+    ]
+  },
+  {
+    "name": "dynamic path followed by key does not rewrite selector origin",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT GET(profile,context_key):email FROM users",
+    "sources": [
+      [
+        "users.profile:?",
+        "users.context_key"
+      ]
+    ]
+  },
+  {
+    "name": "unknown table function retains visible inputs",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT f.result FROM users u CROSS JOIN LATERAL custom_table_function(u.id) f",
+    "sources": [
+      [
+        "users.id",
+        "?table function",
+        "?f.result"
+      ]
+    ]
+  },
+  {
+    "name": "path with escaped text tokens",
+    "dialects": [
+      "postgresql"
+    ],
+    "sql": "SELECT profile #>> '{\"a,b\",\"x\\\\y\"}' FROM users",
+    "sources": [
+      [
+        "users.profile:{a,b}:{x\\y}"
+      ]
+    ]
+  },
+  {
+    "name": "alias hides original table name",
+    "sql": "SELECT users.id,u.email FROM users u",
+    "sources": [
+      [
+        "?users.id"
+      ],
+      [
+        "users.email"
+      ]
+    ]
+  },
+  {
+    "name": "scalar extract and substring",
+    "sql": "SELECT EXTRACT(YEAR FROM created_at),SUBSTRING(email FROM 1 FOR id) FROM users",
+    "sources": [
+      [
+        "users.created_at"
+      ],
+      [
+        "users.email",
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "membership subquery keeps its own scope",
+    "sql": "SELECT id IN(SELECT user_id FROM support_tickets WHERE email IS NOT NULL) FROM users",
+    "sources": [
+      [
+        "users.id",
+        "support_tickets.user_id"
+      ]
+    ]
+  },
+  {
+    "name": "ordered-set percentile value",
+    "sql": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP(ORDER BY id) FROM users",
+    "sources": [
+      [
+        "users.id"
+      ]
+    ]
+  },
+  {
+    "name": "native date part is not a missing column",
+    "dialects": [
+      "snowflake",
+      "redshift"
+    ],
+    "sql": "SELECT DATEADD(day,id,created_at),DATEDIFF(day,created_at,created_at) FROM users",
+    "sources": [
+      [
+        "users.id",
+        "users.created_at"
+      ],
+      [
+        "users.created_at"
+      ]
+    ]
+  },
+  {
+    "name": "dynamic generator path does not attach to selector",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT f.value:email FROM users u,LATERAL FLATTEN(INPUT=>u.profile,PATH=>u.context_key) f",
+    "sources": [
+      [
+        "users.profile",
+        "users.context_key",
+        "?flatten path"
+      ]
+    ]
+  },
+  {
+    "name": "flatten constructed object remains a union",
+    "dialects": [
+      "snowflake"
+    ],
+    "sql": "SELECT f.value:email FROM users u,LATERAL FLATTEN(INPUT=>OBJECT_CONSTRUCT('x',u.email,'y',u.id),PATH=>'x') f",
+    "sources": [
+      [
+        "users.email",
+        "users.id"
+      ]
+    ]
+  }
+]

@@ -8,6 +8,7 @@ use std::{net::SocketAddr, time::Duration};
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DataContextsSettings {
+    pub ast: crate::lineage::AstSettings,
     pub decision_model: Option<crate::decision_model::DecisionModelSettings>,
 }
 

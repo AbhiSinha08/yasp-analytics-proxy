@@ -16,7 +16,8 @@ for PostgreSQL and Redis.
 | [Hook examples](../hooks/README.md)                                | Binding callbacks and choosing runnable examples.                                                                |
 | [Tests](../tests/README.md)                                        | Isolated test services, fixtures, requirements, and Cargo filters.                                               |
 | [Multi-engine compatibility](multi-engine.md)                      | Frontend profiles, Snowflake execution and metadata, SQL API execution limits, and remaining compatibility work. |
-| [Shared schema catalog](catalog.md)                                | Stored schema generations, periodic refresh, frontend metadata handlers, and the future AST lineage boundary.    |
+| [Shared schema catalog](catalog.md)                                | Stored schema generations, periodic refresh, frontend metadata handlers, and current AST lineage inputs.         |
+| [AST output lineage](ast-lineage.md)                               | Implemented PostgreSQL, Snowflake, and Redshift lineage, hook access, uncertainty handling, and cache metadata.  |
 | [Result classification](decision-model.md)                         | Optional System 1 REST classification, bounded samples, failures, and Redis decision sidecars.                   |
 | [Plan](PLAN.md)                                                    | Product direction, phase boundaries, and planned capabilities.                                                   |
 | [Source access and compute routing](source-access-routing-plan.md) | Partial selector decisions, compute types, overflow, shared budgets, and future queuing.                         |

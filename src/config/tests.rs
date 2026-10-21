@@ -35,6 +35,37 @@ fn optional_data_contexts_validate_nested_decision_model_configuration() {
     let round_trip: FileConfig = serde_json::from_value(value.clone()).unwrap();
     round_trip.validate().unwrap();
 
+    let mut custom = value.clone();
+    custom["data_contexts"]["ast"] = serde_json::json!({"enabled":true,"namespace":"custom:ast"});
+    custom["data_contexts"]["decision_model"]["namespace"] = "custom:decisions".into();
+    serde_json::from_value::<FileConfig>(custom.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    for name in ["ast", "decision_model"] {
+        for namespace in ["", "   ", "bad\0namespace"] {
+            let mut invalid = custom.clone();
+            invalid["data_contexts"][name]["namespace"] = namespace.into();
+            assert!(
+                serde_json::from_value::<FileConfig>(invalid)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
+        }
+    }
+    let mut collision = custom.clone();
+    collision["cache"]["enabled"] = true.into();
+    collision["data_contexts"]["ast"]["namespace"] = collision["cache"]["namespace"].clone();
+    assert!(matches!(
+        serde_json::from_value::<FileConfig>(collision)
+            .unwrap()
+            .validate(),
+        Err(ConfigError::InvalidCacheNamespaces)
+    ));
+    let mut nested_ast = value.clone();
+    nested_ast["data_contexts"]["decision_model"]["ast"] = serde_json::json!({"enabled":true});
+    assert!(serde_json::from_value::<FileConfig>(nested_ast).is_err());
     let mut invalid = value.clone();
     invalid["data_contexts"]["decision_model"]["sample_size"] = 0.into();
     assert!(matches!(

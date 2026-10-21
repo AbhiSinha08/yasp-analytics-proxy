@@ -15,6 +15,7 @@ use thiserror::Error;
 /// Available query metadata before the application derives context.
 #[derive(Clone, Copy)]
 pub struct ContextRequest<'a> {
+    pub data_contexts: &'a crate::lineage::DataContexts,
     pub authenticated_user: &'a str,
     pub frontend_database: &'a str,
     pub client_id: u64,
@@ -96,6 +97,8 @@ impl ContextHook {
                                 "client_id": request.client_id,
                                 "query_id": request.query_id,
                                 "sql": request.query.sql(),
+                                "query_ast": request.query.serialized_ast(),
+                                "data_contexts": request.data_contexts,
                             }),
                             request.datasets.cloned(),
                         )

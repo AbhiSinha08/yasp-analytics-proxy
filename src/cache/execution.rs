@@ -15,13 +15,17 @@ pub(crate) async fn execute<S>(
     request: ExecutionRequest<'_, '_>,
     frontend_database: &str,
     cache: Option<&RedisCache>,
-    model: Option<&crate::decision_model::DecisionModel>,
+    contexts: (
+        &crate::lineage::AstSettings,
+        Option<&crate::decision_model::DecisionModel>,
+    ),
     output: &mut S,
     mut cancel: oneshot::Receiver<()>,
 ) -> ExecutionResult<()>
 where
     S: Sink<ResultEvent, Error = ExecutionError> + Unpin + Send,
 {
+    let (ast_settings, model) = contexts;
     // Cache hits must obey the same adapter session restrictions as source reads.
     route.validate_session(request.session)?;
     let selected = route.selection();
@@ -49,6 +53,15 @@ where
                         cache.max_rows_per_query(),
                         request.settings.max_message_bytes,
                     )
+                    && (model.is_none()
+                        || entry.reserve_bytes(
+                            entry.bytes.capacity()
+                                + crate::decision_model::MAX_METADATA_BYTES.min(
+                                    cache
+                                        .max_entry_bytes()
+                                        .saturating_sub(entry.bytes.capacity()),
+                                ),
+                        ))
                 {
                     if let Some(model) = model {
                         let columns = response::columns(&entry.bytes);
@@ -69,13 +82,16 @@ where
                     )
                     .await;
                 }
-                if hit {
-                    // Discard the entire invalid payload before capturing a fresh response.
-                    drop(buffer.take());
-                    buffer = cache.reserve(&scope);
-                }
+                // Release lookup/metadata reservations before capturing a miss.
+                drop(buffer.take());
+                buffer = cache.reserve(&scope);
             }
-            tracing::debug!(query_id, client_id, "cache miss or buffer limit reached");
+            tracing::debug!(
+                query_id,
+                client_id,
+                capturing = buffer.is_some(),
+                "cache miss"
+            );
         }
     }
     let (completed_source, mut buffer, classifications) = if let Some(model) = model {
@@ -125,15 +141,22 @@ where
             cache.max_rows_per_query(),
             request.settings.max_message_bytes,
         ) {
-            if let (Some(model), Some(results)) = (model, classifications.as_ref()) {
+            let ast = request.selection.data_contexts.ast.as_ref().map(|ast| {
+                let columns = response::columns(&buffer.bytes[super::HEADER_BYTES..]);
+                let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
+                ast.for_columns(&names)
+            });
+            let decisions = classifications.as_ref().zip(model);
+            if decisions.is_some() || ast.is_some() {
                 cache
-                    .put_classified(
+                    .put_contexts(
                         &selected.target,
                         &selected.backend_login,
                         query_id,
                         buffer,
-                        results,
-                        model,
+                        decisions,
+                        ast.as_ref()
+                            .map(|ast| (ast, ast_settings.namespace.as_str())),
                     )
                     .await;
             } else {

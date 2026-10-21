@@ -37,6 +37,8 @@ pub enum ConfigError {
     InvalidComputeTopology,
     #[error("cache requires positive row, byte-budget, and TTL limits")]
     InvalidCache,
+    #[error("AST metadata and raw result cache namespaces must differ")]
+    InvalidCacheNamespaces,
     #[error("application context dataset limits or names are invalid")]
     InvalidApplicationContexts,
     #[error(

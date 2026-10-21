@@ -13,6 +13,7 @@ Omit `data_contexts.decision_model` to disable classification:
 ```yaml
 data_contexts:
   decision_model:
+    namespace: "yasp:decision_cache"
     endpoint: http://127.0.0.1:8001/v1/systemone
     sample_size: 5
     timeout_ms: 2000
@@ -25,12 +26,11 @@ data_contexts:
       phone: "Do these values contain telephone numbers?"
 ```
 
-AST parsing with a preset dictionary is a planned second source under
-`data_contexts`; it has no accepted configuration yet. Future result-processing
-hooks will receive both model classification and AST dictionary context as named
-data contexts. These describe output data independently of application context
-and authenticated identity. AST context generation and result hooks are not
-implemented in this stage.
+The optional [AST lineage context](ast-lineage.md), enabled with
+`data_contexts.ast.enabled`, is a separate source describing output constituents.
+It performs no dictionary matching or classification. Future result-processing
+hooks can receive model classification and AST lineage independently of application
+context and authenticated identity. Result hooks and masking remain planned.
 
 The host resolves header values from environment variables or `.env`, using its
 normal secret precedence. Missing secrets, invalid HTTP headers/endpoints, empty
@@ -111,8 +111,15 @@ Raw results keep their existing keys and unmodified values. Classified entries u
 a versioned header with an association ID. Column JSON sidecars are stored at:
 
 ```text
-yasp:decision_cache:<escaped-target>_<escaped-login>:<query-id>:<ordinal>:<escaped-column-name>
+<decision-model-namespace>:<escaped-target>_<escaped-login>:<query-id>:<ordinal>:<escaped-column-name>
 ```
+
+`data_contexts.decision_model.namespace` selects the prefix and defaults to
+`yasp:decision_cache`. It must be nonempty and contain no NUL. There is no separate
+Redis URL: storage uses `cache.url_env` and its connection/TLS settings. Changing
+the namespace changes metadata lookup; existing keys expire on their original TTL.
+A raw cache hit with no metadata in the selected namespace follows the existing
+unavailable-result policy until that raw entry expires or is cleared.
 
 Percent signs, colons, and underscores in components are escaped. Sidecars include
 version, association, configuration fingerprint, column identity, and an available

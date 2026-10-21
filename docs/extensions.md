@@ -10,7 +10,8 @@ execution receives authenticated identity and bounded services; source driver an
 frontend password/TLS objects remain in their adapters.
 
 Hosts must construct a shared [schema catalog](catalog.md), attach it with
-`GatewayConfig::with_catalog`, and retain its `Arc<Snapshot>` for later AST binding.
+`GatewayConfig::with_catalog`. AST analysis borrows its current snapshot only
+while resolving constituents; callers do not retain a generation across execution.
 Catalog source identity and refresh settings belong to the host; core owns bounded
 loading, atomic publication, expiry and frontend response handling. Schema coordinates
 are facts, not an authorization or masking decision.
@@ -71,8 +72,13 @@ dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
 Context uses cooperative async I/O; its deadline cannot interrupt blocking Rust.
 See [binding examples](../hooks/README.md).
 
-Input options run before tokenization and parsing. The callback must be cheap and
-nonblocking. Repository hosts can bind `hooks::builtin::input_options::metabase`
+Input options run before tokenization and parsing. An explicit callback takes
+precedence over `AstSettings::dialect`. Without a callback, that optional setting
+selects the native data grammar after frontend setup/catalog compatibility handling;
+lineage uses the same parsed tree and dialect. It also applies when lineage is
+disabled. With neither setting, the frontend dialect is the default. The callback
+must be cheap and nonblocking. Repository hosts can bind
+`hooks::builtin::input_options::metabase`
 with their logical database's native dialect, or `metabase_with_default` with an
 optional unmarked-data dialect. `InputOptions::native_after_compatibility` preserves
 frontend setup/catalog handling before using the configured native grammar for data.
@@ -141,7 +147,12 @@ hooks:
 Files/functions are registered before listener startup. Every trusted synchronous
 function receives `function(request, params)` with fresh copied JSON-compatible
 objects. Selection/eligibility requests contain `authenticated_user`, `client_id`,
-`query_id`, original `sql`, and `context`. Context input also includes
+`query_id`, original `sql`, `query_ast`, `data_contexts`, and `context`.
+`query_ast` uses sqlparser 0.63 Serde syntax; `data_contexts.ast` contains optional
+local output lineage. Rust requests borrow the same `DataContexts` alongside their
+existing `ParsedQuery`. Python receives fresh copies, so callback mutations cannot
+change later hooks. AST lineage performs no dictionary lookup or classification.
+See [AST lineage](ast-lineage.md). Context input also includes
 `frontend_database` and has no derived context yet. Selection returns exactly
 a dictionary with optional `target`, `backend_login`, and `compute_type` keys,
 or `None` to deny; context returns a dictionary
@@ -174,8 +185,8 @@ probability/confidence outcomes through `decision_model` and
 `GatewayConfig::with_decision_model`. It does not invoke result callbacks or apply masks.
 The YAML host configures it under `data_contexts.decision_model`. Future
 result-processing hooks will receive named data contexts from model classification
-and AST parsing with a preset dictionary. The AST source and hook request contract
-remain planned.
+and the current AST lineage source. Dictionary matching and result-hook contracts
+remain separate future work; lineage performs no classification.
 
 Query rewrites, result callbacks, lifecycle hooks, and engine policy/masking
 have no active runtime contracts or accepted configuration yet. This is
@@ -185,9 +196,10 @@ the intended direction, not the current [query pipeline](architecture.md#query-f
 flowchart TD
     Context[Application context] --> Rewrite[Optional query rewrite]
     Rewrite --> Validate[Revalidate SQL and binds]
-    Validate --> Route[Role selection and configured bounds]
+    Validate --> Lineage[Recompute lineage for rewritten SQL]
+    Lineage --> Route[Role selection and configured bounds]
     Route --> Source[Load source result from cache or backend]
-    Source --> DataContexts[Data contexts: model classification and planned AST dictionary]
+    Source --> DataContexts[Data contexts: model classification and AST lineage]
     DataContexts --> Transform[Optional result transformations with data contexts]
     Transform --> Mask[Mandatory policy and masking]
     Mask --> Check[Validate schema, types, rows and bytes]

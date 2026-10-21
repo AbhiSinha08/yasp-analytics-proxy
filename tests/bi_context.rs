@@ -117,6 +117,7 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
         let derived = context
             .derive(
                 ContextRequest {
+                    data_contexts: &yasp::lineage::DataContexts::EMPTY,
                     authenticated_user: "bi-service",
                     frontend_database: "analytics",
                     client_id: 1,
@@ -142,6 +143,7 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
         }
         let selected = selector
             .select(&SelectionRequest {
+                data_contexts: &yasp::lineage::DataContexts::EMPTY,
                 authenticated_user: "bi-service",
                 client_id: 1,
                 query_id,

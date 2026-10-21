@@ -62,7 +62,14 @@ impl<'backend> QuerySession<'_, 'backend> {
                     frontend_dialect: dialect,
                 })
             })
-            .unwrap_or(InputOptions::frontend(dialect));
+            .unwrap_or_else(|| {
+                self.source
+                    .ast
+                    .dialect
+                    .map_or(InputOptions::frontend(dialect), |native| {
+                        InputOptions::native_after_compatibility(dialect, native)
+                    })
+            });
         // A generated query cannot opt into a different backend grammar.
         if !options.native && options.dialect != dialect {
             return Err(protocol_error(
@@ -186,6 +193,8 @@ impl<'backend> QuerySession<'_, 'backend> {
                 profile: self.source.profile,
                 cache: self.source.cache.as_deref(),
                 decision_model: self.source.decision_model.as_deref(),
+                ast: &self.source.ast,
+                catalog: &self.source.catalog,
                 context_hook: self.source.context_hook.as_deref(),
                 datasets: self.source.datasets.as_ref(),
                 stopped: self.source.stopped.clone(),

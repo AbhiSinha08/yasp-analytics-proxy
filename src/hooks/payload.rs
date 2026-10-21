@@ -28,6 +28,14 @@ pub(crate) fn payload_size(value: &Value, limit: usize) -> Result<usize, Payload
         Ok(())
     }
     check_depth(value, 0)?;
+    serialized_size(value, limit)
+}
+
+/// Count typed payloads without first allocating an encoded copy.
+pub(crate) fn serialized_size(
+    value: &impl serde::Serialize,
+    limit: usize,
+) -> Result<usize, PayloadError> {
     let mut count = Counter { bytes: 0, limit };
     count.json(value)?;
     Ok(count.bytes)

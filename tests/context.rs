@@ -15,6 +15,7 @@ use yasp::{
 
 fn request(query: &ParsedQuery, client_id: u64) -> ContextRequest<'_> {
     ContextRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         frontend_database: "analytics",
         client_id,

@@ -86,7 +86,8 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
         required("YASP_GATEWAY_DATABASE", "YASP_GATEWAY_DATABASE")?,
     )?
     .with_settings(file.gateway.clone())?
-    .with_schema_discovery(file.discovery_backend()?);
+    .with_schema_discovery(file.discovery_backend()?)
+    .with_ast_context(file.data_contexts.ast.clone());
     let gateway = if let Some(hook) = &file.hooks.input_options {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]

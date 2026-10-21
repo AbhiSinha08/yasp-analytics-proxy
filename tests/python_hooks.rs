@@ -55,6 +55,7 @@ async fn wait_file(path: &Path) {
 
 fn context_request(query: &ParsedQuery) -> ContextRequest<'_> {
     ContextRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         frontend_database: "analytics",
         client_id: 1,
@@ -331,6 +332,7 @@ def eligible(request, params):
     assert_eq!(derived["sql"], query.sql());
     assert_eq!(derived["query_id"], query.query_id());
     let downstream = SelectionRequest {
+        data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         client_id: 1,
         query_id: query.query_id(),

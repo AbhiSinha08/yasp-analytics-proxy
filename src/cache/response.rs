@@ -67,8 +67,7 @@ impl<S: Sink<ResultEvent> + Unpin> Sink<ResultEvent> for CaptureSink<'_, S> {
                 PgWireBackendMessage::CommandComplete(m) => Some(m.message_length() + 1),
                 _ => None,
             };
-            if size
-                .is_none_or(|size| size > this.max_entry_bytes.saturating_sub(buffer.bytes.len()))
+            if size.is_none_or(|size| !buffer.prepare(size, this.max_entry_bytes))
                 || message.encode(&mut buffer.bytes).is_err()
             {
                 this.buffer = None;

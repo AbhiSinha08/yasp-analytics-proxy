@@ -9,7 +9,7 @@ Construct `Catalog::postgres` or feature-gated `Catalog::snowflake`, then attach
 `Arc` with `GatewayConfig::with_catalog`. The YAML host constructs either provider
 from `schema_discovery`; a Snowflake-only host needs no PostgreSQL discovery binding.
 `Backends::catalog` exposes the same configured-source construction to library hosts.
-One handle can serve both frontend listeners and later AST consumers.
+One handle serves frontend listeners and optional AST lineage analysis.
 
 ## Scope and source facts
 
@@ -141,8 +141,10 @@ application may require a client dialect correction.
 
 ## AST lineage and masking
 
-The catalog provides qualified coordinates, keys, views and native types for future
-AST binding. A binder must pin a generation and resolve wildcards, aliases, joins,
-CTEs, subqueries, expressions, ambiguity and view boundaries. Coordinates alone do
-not establish base-column lineage. Dynamic masking and its policy/cache behavior
-remain separate planned work.
+The optional [AST lineage context](ast-lineage.md) reads the currently
+available catalog during local analysis and releases it before hooks or execution.
+It resolves output constituents and native JSON paths using stored columns/types;
+missing facts remain explicit unknowns. Views and generated columns are source
+boundaries. No schema generations are retained in lineage contexts, and no
+per-query source metadata lookup occurs. Dictionary classification, dynamic masking,
+and their policies remain separate work.

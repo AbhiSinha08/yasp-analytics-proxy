@@ -31,6 +31,8 @@ pub(crate) struct QueryContext<'a> {
     pub profile: FrontendProfile,
     pub cache: Option<&'a RedisCache>,
     pub decision_model: Option<&'a crate::decision_model::DecisionModel>,
+    pub ast: &'a crate::lineage::AstSettings,
+    pub catalog: &'a crate::catalog::Catalog,
     pub context_hook: Option<&'a ContextHook>,
     pub datasets: Option<&'a DatasetReader>,
     pub stopped: watch::Receiver<bool>,
@@ -110,12 +112,28 @@ impl<'backend> QuerySession<'_, 'backend> {
         }
 
         // Ordinary queries derive context and select a route even on cache hits.
-        let context = self.derive_context(query, &mut cancel).await?;
+        if cancel.try_recv().ok().flatten().is_some() {
+            return Err(ExecutionError::cancelled());
+        }
+        let data_contexts = crate::lineage::DataContexts {
+            ast: self.source.ast.enabled.then(|| {
+                let snapshot = self.source.catalog.snapshot().ok();
+                crate::lineage::AstDataContext::analyze(
+                    query,
+                    snapshot.as_deref(),
+                    self.settings.max_context_bytes,
+                )
+            }),
+        };
+        let context = self
+            .derive_context(query, &data_contexts, &mut cancel)
+            .await?;
         let query_id = query.query_id();
         let client_id = self.client_id;
         let authenticated_user = self.source.username;
         let frontend_database = self.source.database;
         let request = SelectionRequest {
+            data_contexts: &data_contexts,
             authenticated_user,
             client_id,
             query_id,
@@ -191,7 +209,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             },
             frontend_database,
             self.source.cache,
-            self.source.decision_model,
+            (self.source.ast, self.source.decision_model),
             output,
             cancel,
         )
@@ -202,6 +220,7 @@ impl<'backend> QuerySession<'_, 'backend> {
     async fn derive_context(
         &self,
         query: &ParsedQuery,
+        data_contexts: &crate::lineage::DataContexts,
         cancel: &mut oneshot::Receiver<()>,
     ) -> ExecutionResult<Map<String, Value>> {
         let Some(hook) = &self.source.context_hook else {
@@ -209,6 +228,7 @@ impl<'backend> QuerySession<'_, 'backend> {
         };
         let mut stopped = self.source.stopped.clone();
         let request = ContextRequest {
+            data_contexts,
             authenticated_user: self.source.username,
             frontend_database: self.source.database,
             client_id: self.client_id,

@@ -160,9 +160,14 @@ cache:
   #     excluded_sql_fragments: [pg_stat_activity, clock_timestamp]
 
 # Optional output data context; omitting decision_model disables classification.
-# See docs/decision-model.md. AST dictionary context is planned for this group.
+# See docs/decision-model.md and docs/ast-lineage.md.
 # data_contexts:
+#   ast:
+#     enabled: true # Local output lineage; no dictionary lookup or classification.
+#     dialect: postgresql # Optional data-query grammar when no input_options hook is set.
+#     namespace: "yasp:ast_cache" # Uses the result cache Redis connection and TTL.
 #   decision_model:
+#     namespace: "yasp:decision_cache" # Uses the result cache Redis connection and TTL.
 #     endpoint: http://127.0.0.1:8001/v1/systemone
 #     sample_size: 5
 #     timeout_ms: 2000
@@ -174,9 +179,8 @@ cache:
 #       phone: "Do these values contain telephone numbers?"
 
 hooks:
-  # Optional compiled pre-parse hint resolver. Missing/MBQL/malformed remarks
-  # retain the frontend dialect. The repository YAML host configures PostgreSQL
-  # backends; Snowflake bindings currently require a custom library host.
+  # Optional compiled pre-parse hint resolver; takes precedence over ast.dialect.
+  # Missing/MBQL/malformed remarks retain the frontend dialect.
   # input_options:
   #   type: rust
   #   callback: builtin.input_options.metabase

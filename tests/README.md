@@ -153,3 +153,20 @@ certificates. The ordinary Redis URL is used for administrative inspection and m
 ACL user creation/deletion and killing that test user's connections. Tests use
 these privileges only for their own temporary users and namespaces.
 Prefer `python3 scripts/test.py -- --test tls` to provision these fixtures.
+
+## AST lineage
+
+`lineage.rs` runs the offline PostgreSQL/Snowflake/Redshift corpus in
+`fixtures/lineage.json`, with manually reviewed source expectations and provenance
+links for adapted dbt, TICKIT, Snowflake, and Google Analytics query shapes.
+`lineage_gateway.rs` covers current-catalog analysis before hooks, Redis association
+and TTL, mixed model metadata, transactions, and schema refresh on cache hits.
+`lineage_python.rs` checks the raw AST and independent plain JSON lineage payloads.
+`lineage_snowflake.rs` covers the configured SQL API host and both frontend profiles.
+`fixtures/lineage-future.json` documents native BigQuery/Databricks cases for future
+adapters; these are not placeholder passing tests or provider acceptance claims.
+
+```sh
+python3 scripts/test.py -- --test lineage --test lineage_gateway
+python3 scripts/test.py -- --test lineage_python --features python
+```

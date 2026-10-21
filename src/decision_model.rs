@@ -15,6 +15,8 @@ pub(crate) const PREFIX_BYTES: usize = 256 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct DecisionModelSettings {
     pub endpoint: String,
+    #[serde(default = "namespace")]
+    pub namespace: String,
     #[serde(default = "sample_size")]
     pub sample_size: usize,
     #[serde(default = "timeout_ms")]
@@ -25,6 +27,9 @@ pub struct DecisionModelSettings {
     pub headers_env: BTreeMap<String, String>,
     pub questions: BTreeMap<String, String>,
 }
+fn namespace() -> String {
+    "yasp:decision_cache".into()
+}
 fn sample_size() -> usize {
     5
 }
@@ -34,6 +39,11 @@ fn timeout_ms() -> u32 {
 
 impl DecisionModelSettings {
     pub fn validate(&self) -> Result<(), crate::config::ConfigError> {
+        if self.namespace.trim().is_empty() || self.namespace.contains('\0') {
+            return Err(crate::config::ConfigError::InvalidValue(
+                "data_contexts.decision_model.namespace",
+            ));
+        }
         let valid = reqwest::Url::parse(&self.endpoint).is_ok_and(|url| {
             matches!(url.scheme(), "http" | "https")
                 && url.host_str().is_some()

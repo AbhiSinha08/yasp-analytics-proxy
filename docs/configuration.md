@@ -485,8 +485,10 @@ misses. Invalid URL/configuration fails startup. `cache.tls` accepts optional
 `ca_file`, `cert_file`, and `key_file`; see [TLS setup](tls.md).
 
 The byte setting is an aggregate in-process budget, separate from Redis storage.
-The internal serialized-entry guard is one third of it; each active cached query
-reserves three times that guard for buffered, Redis, and response copies. A result
+The internal serialized-entry guard is one third of it. Concurrent queries start
+with small buffers and acquire more budget before growth, Redis reads, and metadata
+publication, reserving three copies of their accounted bytes. A query does not
+reserve the entire entry ceiling while waiting for source execution or inference. A result
 that exceeds row/byte limits streams fully without caching. Configure Redis memory
 and eviction separately.
 
@@ -578,12 +580,51 @@ runner](../tests/README.md) owns disposable Docker fixtures and temporary keys;
 ## Result classification
 
 The optional `data_contexts.decision_model` block configures the System 1 endpoint,
-questions, non-null sample count (default 5), query-wide inference timeout
+questions, Redis metadata `namespace` (default `yasp:decision_cache`),
+non-null sample count (default 5), query-wide inference timeout
 (default 2,000 ms), environment-based HTTP headers, and `fail_on_error`
 (default false). Omitting the block disables classification. See
 [result classification](decision-model.md) for the complete configuration,
 failure behavior, bounded sampling, library API, and decision-cache layout.
-`data_contexts` groups context about output data. AST parsing with a preset
-dictionary is a planned second source in this group. Future result-processing
-hooks will have access to both sources; AST context and result hooks are not
-implemented yet.
+`data_contexts` groups context about output data. Optional AST lineage is
+configured independently of the model below. Dictionary classification, result
+processing hooks, and masking remain separate future capabilities.
+
+## AST lineage data context
+
+```yaml
+data_contexts:
+  ast:
+    enabled: true
+    dialect: snowflake # Optional; omit to retain the frontend grammar.
+    namespace: "yasp:ast_cache"
+```
+
+`enabled` defaults to `false`. This source describes each output column's source
+constituents and JSON paths; it does not classify them or consult application
+dictionaries. It works independently of the decision model and Redis result cache.
+Analysis uses the current in-memory catalog before context, selection, and cache
+eligibility hooks, including on raw cache hits and within transactions. Missing
+facts remain explicit unknowns. `gateway.max_context_bytes` bounds encoded lineage;
+parser depth/token bounds and internal traversal/column budgets also apply.
+
+`dialect` accepts `postgresql`, `snowflake`, or `redshift`. Without a
+`hooks.input_options` callback, it selects the grammar for all ordinary data SQL
+before parsing, validation, lineage, and routing. Recognized frontend setup/catalog
+requests retain their compatibility handlers. An explicit input-options callback
+takes precedence. Omitting `dialect` retains the frontend default.
+
+The dialect setting applies even when `enabled` is false; `enabled` controls only
+lineage generation. This option performs no SQL translation and selects no target,
+login, or compute. Configure a dialect compatible with the routed backend.
+
+`namespace` defaults to `yasp:ast_cache`. Both AST and decision-model namespace
+values must be nonempty and contain no NUL. The AST namespace must differ from
+`cache.namespace` when both are enabled. Both metadata sources use the result cache
+Redis connection, URL/TLS settings, atomic publication, and TTL.
+
+Library hosts call `GatewayConfig::with_ast_context(AstSettings { enabled: true,
+dialect: Some(SqlDialect::Snowflake), ..Default::default() })`, using the types from `yasp::lineage` and
+`yasp::query`.
+See [AST lineage](ast-lineage.md) for supported constructs, hook payloads,
+unknown output shape, cache association, and dialect boundaries.

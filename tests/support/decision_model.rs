@@ -109,6 +109,7 @@ impl MockModel {
     pub fn settings(&self, fail_on_error: bool) -> DecisionModelSettings {
         DecisionModelSettings {
             endpoint: self.endpoint.clone(),
+            namespace: "yasp:decision_cache".into(),
             sample_size: 5,
             timeout_ms: 2000,
             fail_on_error,

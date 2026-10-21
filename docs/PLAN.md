@@ -39,7 +39,7 @@ introduce only the contracts needed by the current phase.
 | Policy                       | Supply the configured role-selection policy, validate callback decisions, and apply configured result masks.                           | Database access controls remain authoritative; masking preserves the result schema.                                                                               |
 | Extensions                   | Invoke application-supplied context derivation and policy/query/result/lifecycle hooks.                                                | Contracts belong to the library; organization implementations live outside core engine code.                                                                      |
 | Result cache                 | Store source results for a limited time, then apply current engine processing.                                                         | The Redis key uses the namespace, configured target/login names, and normalized SQL hash; the entry scope validates backend, identity, and fixed session context. |
-| Schema catalog               | Store source definitions in bounded immutable generations and refresh them periodically.                                               | Source identity, exact names and native types are shared by frontend metadata and future AST binders; schema facts do not authorize access or apply masks.        |
+| Schema catalog               | Store source definitions in bounded immutable generations and refresh them periodically.                                               | Source identity, exact names and native types are shared by frontend metadata and AST lineage; schema facts do not authorize access or apply masks.               |
 | Configuration and operations | Validate settings, resolve secrets, enforce limits, and report health and performance.                                                 | Shared configuration names the client protocol and each target's engine explicitly.                                                                               |
 
 The gateway passes execution requests to the backend boundary rather than opening
@@ -397,9 +397,10 @@ organization RBAC policy.
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
 - Python backend selection receives a bounded dictionary of authenticated frontend
-  user, client/query IDs, original SQL, and derived context, with application-owned params. Return a
-  configured target/login dictionary or None to deny. It receives no credentials or
-  Rust AST. Typed binds and result batches require later contracts; keep driver
+  user, client/query IDs, original SQL, parser JSON AST, output data contexts, and
+  derived application context, with application-owned params. Return a configured
+  target/login dictionary or None to deny. It receives no credentials or Rust
+  driver objects. Typed binds and result batches require later contracts; keep driver
   objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
 - Optional before_query callbacks may propose SQL rewrites; revalidate them and
   preserve parameter positions/types. Application code owns policy interpretation.
@@ -548,9 +549,11 @@ not a prerequisite for each backend.
 ### Execution milestones
 
 The shared [schema catalog](catalog.md) supplies qualified relation/column
-coordinates and native types through periodically refreshed generations. Future
-AST lineage must pin a generation and resolve aliases, joins, CTEs and expressions
-before dynamic masking. Metadata snapshots alone do not establish result lineage.
+coordinates and native types through periodically refreshed generations. Optional
+AST lineage resolves output constituents and native paths from the currently
+available catalog, releasing it before hooks and execution. Missing metadata remains
+explicit uncertainty. Dictionary classification and dynamic masking remain separate
+stages; metadata snapshots alone do not establish output lineage.
 
 1. **Mask PostgreSQL results first.** Prove a deterministic policy with fixture
    classifications, then integrate the selected model with measured accuracy,
@@ -581,9 +584,10 @@ See [result classification](decision-model.md). Masking and general result hooks
 remain planned; the following requirements describe their intended integration.
 
 - Group output context sources under `data_contexts`. The active `decision_model`
-  source supplies bounded classification outcomes. Add AST parsing with a preset
-  dictionary as a second source in a later stage, and expose both named contexts
-  to result-processing hooks and masking policy when those stages are implemented.
+  source supplies bounded classification outcomes; `ast` supplies static output
+  constituents without dictionary matching. Expose both named contexts to future
+  result-processing hooks and masking policy. Decide dictionary matching placement
+  when that capability is implemented.
 - The application supplies the classification endpoint and questions; the shared
   REST client requires no provider SDK. The future masking policy combines its
   outcomes with context and the

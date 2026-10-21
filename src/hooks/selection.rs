@@ -14,6 +14,7 @@ use thiserror::Error;
 
 /// Query and authenticated identity supplied to a backend selector.
 pub struct SelectionRequest<'a> {
+    pub data_contexts: &'a crate::lineage::DataContexts,
     pub authenticated_user: &'a str,
     pub client_id: u64,
     pub query_id: &'a str,
@@ -122,6 +123,7 @@ impl RoutedSelector {
                 .map_or((None, None), |(reader, guard)| (Some(reader), Some(guard)))
         };
         let scoped = SelectionRequest {
+            data_contexts: request.data_contexts,
             authenticated_user: request.authenticated_user,
             client_id: request.client_id,
             query_id: request.query_id,
@@ -214,6 +216,8 @@ pub(super) fn request_payload(request: &SelectionRequest<'_>) -> Value {
         "client_id": request.client_id,
         "query_id": request.query_id,
         "sql": request.query.sql(),
+        "query_ast": request.query.serialized_ast(),
+        "data_contexts": request.data_contexts,
         "context": request.context,
     })
 }
@@ -230,6 +234,7 @@ pub(super) fn request_payload(request: &SelectionRequest<'_>) -> Value {
 /// );
 /// let query = ParsedQuery::parse("SELECT 1").unwrap();
 /// let selected = selector(&SelectionRequest {
+///     data_contexts: &yasp::lineage::DataContexts::EMPTY,
 ///     authenticated_user: "analytics", client_id: 1, query_id: query.query_id(), query: &query,
 ///     context: &serde_json::Map::new(),
 ///     datasets: None, async_hook_timeout_ms: 2000,

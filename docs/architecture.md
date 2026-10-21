@@ -17,7 +17,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery)               | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                                   |
 | Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                              | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                                                                    |
-| Shared schema catalog           | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. AST lineage remains future work.                                                  |
+| Shared schema catalog           | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. The current snapshot also supplies local output lineage.                          |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)                           | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                        |
 | Backend capacity                | [backend/budget.rs](../src/backend/budget.rs)                                                                  | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation.                                                                            |
 | PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)                | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                                                                  |
@@ -99,7 +99,8 @@ flowchart TD
     Descriptor -->|no| Metadata{Classified PostgreSQL or captured Redshift metadata?}
     Metadata -->|yes| UnsupportedMetadata[Reject unsupported metadata with 0A000]
     Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
-    DatasetRead --> Context[Derive optional bounded context]
+    DatasetRead --> Lineage[Compute optional AST lineage from current catalog]
+    Lineage --> Context[Derive optional bounded application context]
     Context --> Route[Resolve target, login, and optional compute type]
     Route --> Affinity[Validate selected adapter input]
     Affinity --> Explicit{Explicit transaction?}
@@ -123,7 +124,7 @@ flowchart TD
     Stream --> Cleanup[Rollback, discard state, verify idle]
     Cleanup --> Complete[Send success completion]
     Complete --> Cacheable{Caching allowed and capture complete?}
-    Cacheable -->|yes| Store[Atomically write raw cache entry and optional decision sidecars]
+    Cacheable -->|yes| Store[Atomically write raw result and optional lineage and decision sidecars]
     Cacheable -->|no| Ready
     Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
     TxControl --> Ready
@@ -136,7 +137,14 @@ flowchart TD
 ```
 
 `ParsedQuery` keeps original SQL, typed input options, and an immutable statement
-tree. A host resolver may select a native grammar before tokenization and parsing;
+tree. Optional `data_contexts.ast.enabled` computes local output lineage against
+the currently available catalog before application context and routing hooks.
+Known constituents survive missing metadata alongside explicit unknowns; no
+dictionary classification or enforcement occurs. Python query hooks also receive
+the sqlparser 0.63 JSON AST. See [AST lineage](ast-lineage.md). Without
+an input-options resolver, optional `data_contexts.ast.dialect` selects the native
+data-query grammar after frontend setup/catalog compatibility handling. An explicit
+resolver takes precedence and may select a grammar before tokenization and parsing;
 unknown/missing Metabase remarks retain the listener's grammar unless an explicit native-data default is configured. Native SQL always
 uses ordinary context and routing and never borrows discovery access. PostgreSQL
 source affinity is enforced before cache or pool acquisition. Frontend fingerprints
@@ -376,6 +384,6 @@ No masking or result modification runs. See [result classification](decision-mod
 for bounds, failure defaults, library registration, and the processing flow.
 
 The YAML host groups output context sources under `data_contexts`, with the active
-classifier configured at `data_contexts.decision_model`. AST parsing with a preset
-dictionary is a planned second source. Future result-processing hooks will receive
-both named contexts; their runtime contract remains planned.
+classifier configured at `data_contexts.decision_model` and local lineage at
+`data_contexts.ast`. Dictionary matching and future result-processing hooks remain
+separate capabilities; no classification is inferred from lineage alone.
