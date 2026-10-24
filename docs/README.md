@@ -18,6 +18,7 @@ for PostgreSQL and Redis.
 | [Multi-engine compatibility](multi-engine.md)                      | Frontend profiles, Snowflake execution and metadata, SQL API execution limits, and remaining compatibility work. |
 | [Shared schema catalog](catalog.md)                                | Stored schema generations, periodic refresh, frontend metadata handlers, and current AST lineage inputs.         |
 | [AST output lineage](ast-lineage.md)                               | Implemented PostgreSQL, Snowflake, and Redshift lineage, hook access, uncertainty handling, and cache metadata.  |
+| [Result processing](result-processing.md)                        | Bounded Rust/Python text edits, NULL replacement, filtering, cache replay, and resource bounds.                 |
 | [Result classification](decision-model.md)                         | Optional System 1 REST classification, bounded samples, failures, and Redis decision sidecars.                   |
 | [Plan](PLAN.md)                                                    | Product direction, phase boundaries, and planned capabilities.                                                   |
 | [Source access and compute routing](source-access-routing-plan.md) | Partial selector decisions, compute types, overflow, shared budgets, and future queuing.                         |
@@ -25,7 +26,7 @@ for PostgreSQL and Redis.
 Architecture and configuration describe implemented behavior. The plan and the
 explicitly marked future sections in the extension guide describe the intended
 end state. Extended protocol, binary results, general query
-rewrites, result hooks, engine RBAC interpretation, and management UI remain
+rewrites, engine RBAC interpretation, mandatory masking, and management UI remain
 future capabilities.
 
 The [development environments](../dev/README.md) cover local BI tools, the

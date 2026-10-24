@@ -12,6 +12,59 @@ use yasp::{
 };
 
 #[tokio::test]
+async fn sql_context_switch_controls_wire_payload_limits_and_cache_identity() {
+    let mock = MockModel::new();
+    let full = mock.model(false);
+    let mut settings = mock.settings(false);
+    settings.include_sql = false;
+    let compact = DecisionModel::new(settings, BTreeMap::new()).unwrap();
+    assert_ne!(full.fingerprint(), compact.fingerprint());
+    let column = ColumnIdentity {
+        ordinal: 0,
+        name: "customer_identity".into(),
+        data_type: "pgwire:25:-1".into(),
+    };
+    let samples = vec!["demo.user.0057@example.test — Finley Patel".into()];
+    let long_sql = format!("SELECT email FROM users /* {} */", "padding".repeat(10_000));
+    for (model, sql, include_sql) in [
+        (full.as_ref(), "SELECT email FROM users", true),
+        (&compact, long_sql.as_str(), false),
+    ] {
+        assert!(matches!(
+            model
+                .classify(ColumnRequest {
+                    sql,
+                    column: &column,
+                    samples: &samples,
+                })
+                .await,
+            ClassificationOutcome::Available { .. }
+        ));
+        let requests = mock.requests.lock().unwrap();
+        let state = &requests.last().unwrap()["state"];
+        assert_eq!(state.get("sql"), include_sql.then(|| json!(sql)).as_ref());
+        assert_eq!(state["column"], serde_json::to_value(&column).unwrap());
+        assert_eq!(state["samples"], json!(samples));
+    }
+    let before = mock.count();
+    assert_eq!(
+        compact
+            .classify(ColumnRequest {
+                sql: &long_sql,
+                column: &column,
+                samples: &["x".repeat(65_536)],
+            })
+            .await,
+        ClassificationOutcome::Unavailable
+    );
+    assert_eq!(
+        mock.count(),
+        before,
+        "sample payload limits still apply without SQL"
+    );
+}
+
+#[tokio::test]
 async fn http_contract_rejects_invalid_and_truncated_answers() {
     let mock = MockModel::new();
     let model = mock.model(false);

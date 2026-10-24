@@ -140,7 +140,11 @@ Hook references use `type`, `callback`, and an optional JSON-compatible `params`
 mapping. Python also requires `path`. Compiled string names are shorthand with
 empty params. The repository host registers the passthrough selector, the built-in
 SQL-fragment cache eligibility callback, and Python references when the feature is
-enabled. Rust context providers and other Rust names require a consuming host that
+enabled. The host also accepts `hooks.context` references to the existing Rust
+extractors `builtin.extractors.metabase_rs`, `builtin.extractors.metabase_pg`, and
+`builtin.extractors.redash`. They accept no params and return raw remark metadata;
+application callbacks resolve user/account policy from datasets. Other Rust names
+require a consuming host that
 registers them. Names and application params are resolved before serving clients;
 organization-specific params stay outside the engine. See [extensions](extensions.md).
 
@@ -155,7 +159,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `max_sql_bytes`         | 1,048,576        | SQL input size.                                                                         |
 | `max_context_bytes`     | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
 | `context_timeout_ms`    | 2,000            | Query-context derivation wait; failure supplies empty context.                          |
-| `async_hook_timeout_ms` | 2,000            | Async Rust selection and cache-eligibility wait.                                        |
+| `async_hook_timeout_ms` | 2,000            | Async Rust selection, cache-eligibility, and result-hook wait.                                        |
 | `query_timeout_ms`      | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
 | `read_timeout_ms`       | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
 | `write_timeout_ms`      | 60,000           | Each frontend response write.                                                           |
@@ -189,6 +193,17 @@ and selection. PostgreSQL rejects a mismatched explicit native dialect after sel
 Snowflake forwards accepted data SQL unchanged, including MBQL; backend SQL errors
 are returned to the client. Native hints never select
 the discovery identity. An omitted resolver preserves the listener's input grammar.
+
+## Result processing
+
+`hooks.process_result` is optional and uses the existing Rust/Python reference form.
+The supplied `builtin.process_result.uppercase` requires a `column` string param.
+`result_processing` defaults to `max_rows_per_batch: 256`,
+`target_batch_bytes: 262144`, and `max_buffered_bytes_total: 33554432`. Limits must
+be positive and fit the aggregate budget; batches also flush within 2 ms.
+A larger singleton row must fit existing frame, aggregate, and Python payload bounds.
+See [result processing](result-processing.md) for native batch APIs, failure behavior,
+raw-cache contracts, and examples. Engine-enforced masking remains planned.
 
 ## Shared application datasets
 
@@ -581,14 +596,15 @@ runner](../tests/README.md) owns disposable Docker fixtures and temporary keys;
 
 The optional `data_contexts.decision_model` block configures the System 1 endpoint,
 questions, Redis metadata `namespace` (default `yasp:decision_cache`),
-non-null sample count (default 5), query-wide inference timeout
-(default 2,000 ms), environment-based HTTP headers, and `fail_on_error`
-(default false). Omitting the block disables classification. See
+non-null sample count (default 5), SQL inclusion (`include_sql`, default true),
+query-wide inference timeout (default 2,000 ms), environment-based HTTP headers, and `fail_on_error`
+(default false). Set `include_sql: false` to omit SQL from model requests while
+preserving column metadata and samples. Omitting the block disables classification. See
 [result classification](decision-model.md) for the complete configuration,
 failure behavior, bounded sampling, library API, and decision-cache layout.
 `data_contexts` groups context about output data. Optional AST lineage is
-configured independently of the model below. Dictionary classification, result
-processing hooks, and masking remain separate future capabilities.
+configured independently of the model below. Dictionary classification and
+engine-enforced masking remain separate future capabilities.
 
 ## AST lineage data context
 

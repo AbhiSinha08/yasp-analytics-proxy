@@ -28,6 +28,7 @@ fn optional_data_contexts_validate_nested_decision_model_configuration() {
     config.validate().unwrap();
     let model = config.data_contexts.decision_model.as_ref().unwrap();
     assert_eq!(model.sample_size, 5);
+    assert!(model.include_sql);
     assert_eq!(model.questions["email"], "Detect email addresses");
 
     let value = serde_json::to_value(&config).unwrap();
@@ -38,6 +39,18 @@ fn optional_data_contexts_validate_nested_decision_model_configuration() {
     let mut custom = value.clone();
     custom["data_contexts"]["ast"] = serde_json::json!({"enabled":true,"namespace":"custom:ast"});
     custom["data_contexts"]["decision_model"]["namespace"] = "custom:decisions".into();
+    custom["data_contexts"]["decision_model"]["include_sql"] = false.into();
+    assert!(
+        !serde_json::from_value::<FileConfig>(custom.clone())
+            .unwrap()
+            .data_contexts
+            .decision_model
+            .unwrap()
+            .include_sql
+    );
+    let mut wrong_type = custom.clone();
+    wrong_type["data_contexts"]["decision_model"]["include_sql"] = "false".into();
+    assert!(serde_json::from_value::<FileConfig>(wrong_type).is_err());
     serde_json::from_value::<FileConfig>(custom.clone())
         .unwrap()
         .validate()

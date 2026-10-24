@@ -12,6 +12,7 @@ pub struct GatewayConfig {
     pub(crate) cache: Option<std::sync::Arc<crate::cache::RedisCache>>,
     pub(crate) decision_model: Option<std::sync::Arc<crate::decision_model::DecisionModel>>,
     pub(crate) ast: crate::lineage::AstSettings,
+    pub(crate) result_processing: Option<std::sync::Arc<crate::hooks::result::ResultProcessing>>,
     pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
     pub(crate) input_options: Option<std::sync::Arc<crate::hooks::InputOptionsResolver>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
@@ -41,6 +42,7 @@ impl GatewayConfig {
             decision_model: None,
             ast: crate::lineage::AstSettings::default(),
             context_hook: None,
+            result_processing: None,
             input_options: None,
             schema_discovery: None,
             schema_discovery_compute: None,
@@ -119,6 +121,18 @@ impl GatewayConfig {
     pub fn with_context_hook(mut self, hook: impl Into<crate::hooks::ContextHook>) -> Self {
         self.context_hook = Some(std::sync::Arc::new(hook.into()));
         self
+    }
+
+    /// Process bounded source batches on cache hits and misses alike.
+    pub fn with_result_hook(
+        mut self,
+        hook: impl Into<crate::hooks::ResultHook>,
+        settings: super::ResultProcessingSettings,
+    ) -> Result<Self, ConfigError> {
+        self.result_processing = Some(std::sync::Arc::new(
+            crate::hooks::result::ResultProcessing::new(hook.into(), settings)?,
+        ));
+        Ok(self)
     }
 
     pub fn with_datasets(mut self, reader: crate::datasets::DatasetReader) -> Self {

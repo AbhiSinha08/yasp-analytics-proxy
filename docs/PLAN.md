@@ -85,18 +85,19 @@ as application resources and registered before serving queries. Engine invocatio
 uses those registrations; it does not search for organization code inside src/.
 
 ```text
-Planned result pipeline; post-cache processing is not implemented yet
+Result pipeline; query rewrites, engine RBAC, and mandatory masks remain planned
 Organization application
   -> supply configuration and policy data
   -> register context derivation and Rust/Python hooks
   -> construct core engine
   -> authenticate request and expose available metadata
   -> derive organization context
-  -> run query rewrite and role-selection hooks
+  -> run role selection (query rewrite remains planned)
   -> look up the source-result cache
   -> on hit: load the cached source result
   -> on miss: execute the source query and cache its result
-  -> apply engine RBAC, result hooks, mandatory masks, and validation
+  -> classify bounded raw samples and run optional result hooks and validation
+  -> apply future engine RBAC and mandatory masks
   -> return the processed result
 ```
 
@@ -120,7 +121,7 @@ The runtime supports a bounded PostgreSQL simple-query subset over independently
 configured source-role routing, optional query context, shared application datasets,
 separate metadata discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
 access. It preserves native text values and metadata with verified pool cleanup.
-Prepared statements, general query/result/lifecycle hooks, engine RBAC
+Prepared statements, query/lifecycle hooks, engine RBAC
 interpretation, masking, and management UI remain planned. Bounded read-only,
 read-committed client transactions pin one physical backend until commit/rollback
 and bypass result caching.
@@ -165,7 +166,7 @@ when a component's implementation needs separate responsibilities.
 The current milestone derives optional application context and selects configured
 target/login pairs with typed Rust or external Python callbacks. Verification of
 trusted BI metadata and application-owned RBAC policy remain planned work.
-PostgreSQL logins enforce source access; result callbacks are planned.
+PostgreSQL logins enforce source access; optional bounded result callbacks apply presentation rules.
 
 One BI connection configuration may use multiple transport sessions through the BI
 client's pool. Neither a separate BI connection nor separate proxy credentials are
@@ -344,8 +345,8 @@ Python selection uses the dedicated bounded runtime described below.
 
 ### Source RBAC and result processing
 
-RBAC interpretation and result processing in this section are planned. The current
-engine validates configured target/login selections and can pass optional derived
+Engine RBAC interpretation and mandatory masking in this section are planned. Optional bounded
+result processing is implemented. The current engine validates configured target/login selections and can pass optional derived
 context to callbacks; it does not authenticate BI viewer identity or interpret
 organization RBAC policy.
 
@@ -391,8 +392,8 @@ organization RBAC policy.
   configuration, import, and registration errors fail startup. Python retains its
   existing single-worker reservations after a timed-out invocation.
 - Context does not partition cache keys, change cache scope, or add a cache bypass.
-  Source-role permissions remain the active database authorization boundary; host
-  policy and result processing remain future work.
+  Source-role permissions remain the active database authorization boundary.
+  Engine policy remains future work; result processing runs on loaded raw results.
 - Future session lifecycle integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
@@ -400,21 +401,22 @@ organization RBAC policy.
   user, client/query IDs, original SQL, parser JSON AST, output data contexts, and
   derived application context, with application-owned params. Return a configured
   target/login dictionary or None to deny. It receives no credentials or Rust
-  driver objects. Typed binds and result batches require later contracts; keep driver
-  objects internal. Rust selectors inspect the borrowed tree through `query.statement()`.
+  driver objects. Typed binds require later contracts. Result hooks use native batches;
+  driver objects stay internal. Rust selectors inspect the borrowed tree through `query.statement()`.
 - Optional before_query callbacks may propose SQL rewrites; revalidate them and
   preserve parameter positions/types. Application code owns policy interpretation.
 - Run selection before cache lookup, including on hits. It must not open connections
   itself. The Rust backend component handles reuse or creation using the decision.
-- Result callbacks preserve column schema and row ordering. Rust callbacks are
+- Result callbacks preserve column schema and retained-row ordering; they may filter rows. Rust callbacks are
   compiled into the binary.
-- Apply optional transformations before mandatory classification/masking; no later
-  extension may restore raw data. Validate types, row counts, and byte limits after
-  each result callback. Hook logging must not expose raw query/result values.
+- Classification describes raw values before result callbacks run. Future mandatory
+  masks must follow optional transformations, with no later extension restoring raw
+  data. Validate types, row counts, and byte limits after each result callback.
+  Hook logging must not expose raw query/result values.
 - Register application-provided Rust hooks and external Python file/function references
   at startup. The feature-gated `hooks::python` platform exposes reusable registration
   and asynchronous invocation of trusted synchronous callbacks; backend selection
-  and context derivation use the runtime. Query/result/lifecycle integration remains planned.
+  and context derivation use the runtime. Result integration uses native bounded batches; query/lifecycle integration remains planned.
   Python examples live under hooks/examples and are not embedded in the binary.
   One dedicated worker runs registration and invocation outside Tokio. Python 3.12
   CPU work shares the global interpreter lock (GIL).
@@ -511,8 +513,8 @@ claims. Production readiness requires separate operational and security validati
 
 ### Remaining Phase 1 order
 
-Next validate client context and compatibility. General result processing remains
-a later milestone. Validate the result cache with the intended BI client before enabling
+Next validate client context and compatibility. Bounded result processing is
+implemented. Validate the result cache with the intended BI client before enabling
 it in that deployment. Add basic
 prepared statements and portals, broader `SET` and transaction features, suspended portals,
 and binary results after those slices. Treat this order as a working sequence; promote
@@ -580,13 +582,12 @@ stages; metadata snapshots alone do not establish output lineage.
 
 Optional REST column classification is implemented across backends, using one
 bounded prefix, typed probabilities/confidence, and cache-associated decisions.
-See [result classification](decision-model.md). Masking and general result hooks
-remain planned; the following requirements describe their intended integration.
+See [result classification](decision-model.md) and [result processing](result-processing.md).
+Engine-enforced masking remains planned; the following requirements describe its intended integration.
 
 - Group output context sources under `data_contexts`. The active `decision_model`
   source supplies bounded classification outcomes; `ast` supplies static output
-  constituents without dictionary matching. Expose both named contexts to future
-  result-processing hooks and masking policy. Decide dictionary matching placement
+  constituents without dictionary matching. Expose both named contexts to result-processing hooks and future masking policy. Decide dictionary matching placement
   when that capability is implemented.
 - The application supplies the classification endpoint and questions; the shared
   REST client requires no provider SDK. The future masking policy combines its

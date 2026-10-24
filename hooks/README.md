@@ -65,8 +65,27 @@ Python. Redash saved-query IDs are numbers; its unsaved-query marker is the stri
 `adhoc`. Both formats require a numeric user ID and the remaining observed remark
 fields. The example hook tries these helpers, converts numeric user IDs to dataset
 keys, and obtains its routing labels from `params.workload` and `params.report_kind`.
-The local demo maps Metabase user `1` to `finance`; its selector maps that department
-to `primary/restricted`. Metabase Admin status does not imply a source database role.
+The host registers the existing compiled extractors directly as context hooks:
+
+```yaml
+hooks:
+  context:
+    type: rust
+    callback: builtin.extractors.metabase_rs
+```
+
+Use `builtin.extractors.metabase_pg` for PostgreSQL remarks or
+`builtin.extractors.redash` for Redash. These callbacks accept no params, need no
+Python runtime or datasets, and return the extractor's raw metadata mapping with
+numeric `user_id`. Missing/malformed remarks produce empty context. Each extractor
+accepts only its own observed format; all three local Redshift configs use
+`metabase_rs`.
+
+[examples/rbac.py](examples/rbac.py) resolves the extracted user ID against `users`
+to obtain the account for routing and AST/model email masks. Account policy stays
+in the application callback. The local datasets map user `1` to the admin account
+and user `2` to the limited account. Metabase Admin status alone does not imply a
+source database role.
 Existing `yasp-test` comments retain their explicit workload/report labels.
 The Redshift remark has been observed through the gateway with Metabase v0.64.2.8.
 These comments are untrusted hints, never
@@ -157,9 +176,20 @@ expand supported SQL or configured limits; errors bypass caching. For Python, us
 `callback: cache_eligibility` with the same params. The runtime is shared with other
 callbacks. Context and selection still run before an eligible cache hit.
 
+## Result processing
+
+`hooks.process_result` registers one optional Rust or Python callback. Chunks contain
+all columns; callbacks can edit text, set SQL NULL, and filter rows while keeping
+schema and order. `builtin.process_result.uppercase` accepts `params: {column: name}`.
+The library exposes `bind_process_result` and `GatewayConfig::with_result_hook`.
+Python uses `function(request, batch, params)` with a native lazy batch.
+Raw cache hits are processed again with current application context and existing
+AST/model outcomes.
+See [result processing](../docs/result-processing.md) for API, bounds, and examples.
+
 ## Planned hooks and masking
 
-Query rewrites, result processing, lifecycle hooks, and dynamic masking are future
+Query rewrites, lifecycle hooks, and engine-enforced masking are future
 stages. Their commented example settings are not accepted runtime configuration.
 See [planned stage ordering](../docs/extensions.md#planned-query-and-result-stages)
 and the [phase plan](../docs/PLAN.md) before implementing another contract.

@@ -170,6 +170,7 @@ cache:
 #     namespace: "yasp:decision_cache" # Uses the result cache Redis connection and TTL.
 #     endpoint: http://127.0.0.1:8001/v1/systemone
 #     sample_size: 5
+#     include_sql: true # Set false to send only column metadata and samples.
 #     timeout_ms: 2000
 #     fail_on_error: false
 #     headers_env:
@@ -213,34 +214,30 @@ hooks:
   # Optional context provider runs after validation, before selection/cache checks.
   # Errors produce an empty context; they do not deny the query.
   # context:
-  #   type: python
-  #   path: ../hooks/examples/context.py
-  #   callback: derive_context
-  #   params: {workload: reporting, report_kind: dashboard}
+  #   type: rust
+  #   callback: builtin.extractors.metabase_pg
+  # For Metabase Redshift remarks use builtin.extractors.metabase_rs.
 
-  # Application-specific selector example: context and role policy remain host-owned.
+  # Application selector resolves the extracted user ID against the users dataset.
   # Replace select_backend above after validating metadata and implementing the policy.
   # select_backend:
   #   type: python
-  #   path: ../hooks/examples/role_selector.py
+  #   path: ../hooks/examples/rbac.py
   #   callback: select_backend
   #   params:
-  #     target_by_workload: {realtime: primary, reporting: warehouse_analytics}
-  #     login_by_department:
-  #       finance: {primary: restricted, warehouse_analytics: restricted}
-  #       operations: {primary: analyst, warehouse_analytics: analyst}
-  #     type_by_report: {realtime: null, dashboard: small, monthly_export: large}
+  #     target: primary
+  #     login_by_account: {admin: restricted, limited: analyst}
 
-  # Future ordered result callbacks; stage contracts are not implemented yet.
-  # result_processing:
-  #   enabled: false
-  #   callbacks:
-  #     - type: python
-  #       path: ../hooks/examples/passthrough.py
-  #       callback: after_result
-  #       params: {}
-  #   result_batch_rows: 256
-  #   result_batch_max_bytes: 1048576
+  # Optional bounded processing on source reads and raw cache hits.
+  # process_result:
+  #   type: rust
+  #   callback: builtin.process_result.uppercase
+  #   params: {column: customer_name}
+
+# result_processing:
+#   max_rows_per_batch: 256
+#   target_batch_bytes: 262144
+#   max_buffered_bytes_total: 33554432
 
 application_contexts:
   # The URL and optional tls settings are independent of the result cache.

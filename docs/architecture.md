@@ -15,7 +15,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Shared pgwire frontend          | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                                    | Listener/shutdown and authentication in `server`/`session`; bounded parsing in `query`; profile response and error encoding in `result`.                                                                    |
 | Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Ordered validation/discovery/context/routing stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                      |
 | SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery)               | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                                   |
-| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
+| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, result-processing, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                              | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                                                                    |
 | Shared schema catalog           | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. The current snapshot also supplies local output lineage.                          |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)                           | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                        |
@@ -108,7 +108,7 @@ flowchart TD
     Explicit -->|no| Eligible{Shared cache enabled and query eligible?}
     Eligible -->|yes| Lookup[Reserve budget and validate cached response]
     Lookup -->|hit| Decisions[Load matching cached decisions without inference]
-    Decisions --> Replay[Replay unchanged response if classification setting allows]
+    Decisions --> Replay[Replay raw response through optional result hook]
     Lookup -->|miss or no budget| Allocate[Acquire source capacity]
     Eligible -->|no| Allocate
     Allocate --> Engine{Selected engine}
@@ -121,6 +121,7 @@ flowchart TD
     Stream -.-> Classify[Optional shared bounded prefix classification before data rows]
     NativeRows -.-> Classify
     PinnedExecute -.-> Classify
+    Classify -.-> ResultHook[Optional bounded result hook and validation before client output]
     Stream --> Cleanup[Rollback, discard state, verify idle]
     Cleanup --> Complete[Send success completion]
     Complete --> Cacheable{Caching allowed and capture complete?}
@@ -380,10 +381,11 @@ one bounded prefix and classifying each column. Backend execution and cleanup
 remain adapter-owned. Transactions use the same stage without Redis. The cache
 captures raw frames before this gate, associates complete raw entries with
 bounded column sidecars, and loads those sidecars on hits without inference.
-No masking or result modification runs. See [result classification](decision-model.md)
+Optional result callbacks run after classification on misses and raw cache replay.
+No dynamic masking runs. See [result processing](result-processing.md) and [result classification](decision-model.md)
 for bounds, failure defaults, library registration, and the processing flow.
 
 The YAML host groups output context sources under `data_contexts`, with the active
 classifier configured at `data_contexts.decision_model` and local lineage at
-`data_contexts.ast`. Dictionary matching and future result-processing hooks remain
+`data_contexts.ast`. Dictionary matching and dynamic masking remain
 separate capabilities; no classification is inferred from lineage alone.

@@ -158,6 +158,26 @@ fn worker_loop(
                 return Err(PythonHookError::TimedOut);
             }
             match job.operation {
+                Operation::ProcessResult {
+                    id,
+                    request,
+                    batch,
+                    datasets,
+                    runtime,
+                } => {
+                    let _close_datasets = CloseDatasets(datasets.clone());
+                    let registered = &callbacks[id];
+                    super::result::invoke(
+                        py,
+                        &registered.function,
+                        &registered.params,
+                        &request,
+                        batch,
+                        datasets,
+                        runtime,
+                    )
+                    .map(Reply::Batch)
+                }
                 Operation::Register {
                     path,
                     callback,

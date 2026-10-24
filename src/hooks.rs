@@ -5,6 +5,7 @@ mod cache;
 mod context;
 mod input;
 pub(crate) mod payload;
+pub(crate) mod result;
 mod selection;
 
 #[path = "../hooks/builtin/mod.rs"]
@@ -19,6 +20,10 @@ pub use cache::{
 };
 pub use context::{ContextCallback, ContextError, ContextHook, ContextRequest, bind_context};
 pub use input::{InputOptionsResolver, InputRequest};
+pub use result::{
+    ResultBatch, ResultCallback, ResultColumn, ResultDataContexts, ResultHook, ResultHookError,
+    ResultProcessingSettings, ResultRequest, bind_process_result,
+};
 pub use selection::{
     AsyncBackendSelector, BackendDecision, BackendSelection, BackendSelector, RoutedSelector,
     SelectionError, SelectionRequest, bind_select_backend, bind_select_backend_async,

@@ -44,6 +44,7 @@ impl DecisionModel {
                 &settings.endpoint,
                 &settings.questions,
                 settings.sample_size,
+                settings.include_sql,
                 PREFIX_ROWS,
                 PREFIX_BYTES,
             ))
@@ -77,10 +78,13 @@ impl DecisionModel {
         .unwrap_or(ClassificationOutcome::Unavailable)
     }
     async fn request(&self, request: ColumnRequest<'_>) -> Option<ClassificationOutcome> {
+        let sql_bytes = if self.settings.include_sql {
+            request.sql.len()
+        } else {
+            0
+        };
         if request.samples.len() > self.settings.sample_size
-            || request
-                .sql
-                .len()
+            || sql_bytes
                 .saturating_add(request.column.name.len())
                 .saturating_add(request.column.data_type.len())
                 .saturating_add(request.samples.iter().map(String::len).sum::<usize>())
@@ -99,9 +103,12 @@ impl DecisionModel {
                 )
             })
             .collect();
-        let body =
-            serde_json::to_vec(&serde_json::json!({"state": request, "questions": questions}))
-                .ok()?;
+        let mut state = serde_json::json!({"column": request.column, "samples": request.samples});
+        if self.settings.include_sql {
+            state["sql"] = request.sql.into();
+        }
+        let body = serde_json::to_vec(&serde_json::json!({"state": state, "questions": questions}))
+            .ok()?;
         if body.len() > MAX_HTTP_BYTES {
             return None;
         }

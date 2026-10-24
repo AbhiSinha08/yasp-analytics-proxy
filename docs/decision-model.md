@@ -3,7 +3,7 @@
 The optional System 1 REST client classifies output columns before data rows reach
 the client. It supports every backend through shared execution. It returns
 probabilities and confidence; it does not mask values, interpret authorization,
-choose thresholds, or run result modification hooks.
+or choose thresholds. Optional result hooks apply their own edits after classification.
 
 ## Configuration
 
@@ -16,6 +16,7 @@ data_contexts:
     namespace: "yasp:decision_cache"
     endpoint: http://127.0.0.1:8001/v1/systemone
     sample_size: 5
+    include_sql: true
     timeout_ms: 2000
     fail_on_error: false
     # Optional: environment values contain the complete header, including Bearer.
@@ -28,15 +29,20 @@ data_contexts:
 
 The optional [AST lineage context](ast-lineage.md), enabled with
 `data_contexts.ast.enabled`, is a separate source describing output constituents.
-It performs no dictionary matching or classification. Future result-processing
-hooks can receive model classification and AST lineage independently of application
-context and authenticated identity. Result hooks and masking remain planned.
+It performs no dictionary matching or classification. Optional [result hooks](result-processing.md)
+receive model classification and AST lineage independently of application context
+and authenticated identity. Masks remain application-owned.
 
 The host resolves header values from environment variables or `.env`, using its
 normal secret precedence. Missing secrets, invalid HTTP headers/endpoints, empty
 questions, and invalid limits fail startup. HTTP and HTTPS are supported; redirects
 are disabled. Runtime availability is checked only when making requests. Endpoint
 URLs must not contain credentials. Use headers for authentication.
+
+`include_sql` defaults to `true`. When `false`, the gateway omits `state.sql` from
+the model HTTP request, sending only column metadata and samples. This keeps long
+queries out of a model's limited context window. It does not change source SQL,
+query IDs, or the SQL available to application hooks.
 
 `sample_size` defaults to 5 and accepts 1–100. `timeout_ms` defaults to 2,000 and
 bounds the whole inference stage, including admission and response reads. At most
@@ -94,6 +100,10 @@ Each column gets a separate `POST` containing every configured question:
 }
 ```
 
+With `include_sql: false`, `state` contains only `column` and `samples`; the `sql`
+field is absent. The model server receives the gateway's selected state without
+further projection. Truncated responses remain unavailable.
+
 SQL is formatted from the effective query's existing AST. Backend SQL and query IDs
 remain unchanged. `data_type` describes the lossless frontend text type, including
 its modifier; it is not database lineage. Dates, decimals, binary text, arrays, and
@@ -124,7 +134,9 @@ unavailable-result policy until that raw entry expires or is cleared.
 Percent signs, colons, and underscores in components are escaped. Sidecars include
 version, association, configuration fingerprint, column identity, and an available
 answer map or unavailable status. The fingerprint includes endpoint, questions,
-and sampling rules. Sidecars share the raw result's Redis connection and TTL and
+sampling rules, and `include_sql`. Changing SQL inclusion invalidates existing
+decision sidecars; raw cache hits report unavailable decisions until that entry
+expires or is cleared. Sidecars share the raw result's Redis connection and TTL and
 are published in one atomic command after successful complete execution. Their
 serialization and bounded reads count against cache reservations. Oversized or
 incomplete fills publish nothing. There is no separate classification cache TTL.
@@ -158,7 +170,8 @@ with resolved header values, then attach an `Arc` with
 `DecisionAnswer`, `ClassificationOutcome`, and `Classifications` describe the
 classification boundary. `DecisionModel::classify` is also usable directly. The
 execution stage retains query classifications alongside the result for caching;
-result-hook registration and masking contracts remain future work.
+optional [result hooks](result-processing.md) receive those raw outcomes before output.
+Engine-enforced masking remains future work.
 
 ## Development and training
 

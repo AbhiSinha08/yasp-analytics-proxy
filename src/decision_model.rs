@@ -19,6 +19,8 @@ pub struct DecisionModelSettings {
     pub namespace: String,
     #[serde(default = "sample_size")]
     pub sample_size: usize,
+    #[serde(default = "include_sql")]
+    pub include_sql: bool,
     #[serde(default = "timeout_ms")]
     pub timeout_ms: u32,
     #[serde(default)]
@@ -32,6 +34,9 @@ fn namespace() -> String {
 }
 fn sample_size() -> usize {
     5
+}
+fn include_sql() -> bool {
+    true
 }
 fn timeout_ms() -> u32 {
     2000

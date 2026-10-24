@@ -184,7 +184,7 @@ def queued(request, params):
             "the supplied loader returns a plain JSON object"
         );
         if file == "users.json" {
-            assert_eq!(value["alice"]["department"], "finance");
+            assert_eq!(value["1"]["department"], "finance");
         } else {
             assert_eq!(value["columns"][0], "crm.contacts.email");
         }

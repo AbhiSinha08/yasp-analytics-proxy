@@ -18,11 +18,15 @@ pub use settings::{
     PythonHookSettings, PythonSettings, RustHookKind, RustHookSettings, SelectorSettings,
 };
 
+pub use crate::hooks::ResultProcessingSettings;
+
 use std::io;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("invalid result processing batch or aggregate byte limits")]
+    InvalidResultProcessing,
     #[error("invalid decision model endpoint, headers, questions, or limits")]
     InvalidDecisionModel,
     #[error("invalid TLS configuration or certificate material")]

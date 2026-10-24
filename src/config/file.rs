@@ -21,6 +21,8 @@ pub struct FileConfig {
     #[serde(default)]
     pub cache: CacheSettings,
     #[serde(default)]
+    pub result_processing: super::ResultProcessingSettings,
+    #[serde(default)]
     pub data_contexts: DataContextsSettings,
     #[serde(default)]
     pub application_contexts: ApplicationContextsSettings,
@@ -233,6 +235,19 @@ impl FileConfig {
         self.gateway.validate()?;
         self.hooks.python.validate()?;
         self.cache.validate()?;
+        self.result_processing.validate()?;
+        if let Some(hook) = &self.hooks.process_result {
+            match hook {
+                SelectorSettings::Rust(name) => validate_value("hooks.process_result", name)?,
+                SelectorSettings::RustReference(hook) => {
+                    validate_value("hooks.process_result.callback", &hook.callback)?
+                }
+                SelectorSettings::Python(hook) => {
+                    validate_value("result hook path", &hook.path.to_string_lossy())?;
+                    validate_value("result callback", &hook.callback)?;
+                }
+            }
+        }
         validate_value(
             "data_contexts.ast.namespace",
             &self.data_contexts.ast.namespace,

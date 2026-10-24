@@ -17,6 +17,7 @@ pub struct DataContextsSettings {
 pub struct HooksSettings {
     pub input_options: Option<RustHookSettings>,
     pub context: Option<SelectorSettings>,
+    pub process_result: Option<SelectorSettings>,
     pub select_backend: SelectorSettings,
     pub python: PythonSettings,
 }
@@ -26,6 +27,7 @@ impl Default for HooksSettings {
         Self {
             input_options: None,
             context: None,
+            process_result: None,
             select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
             python: PythonSettings::default(),
         }

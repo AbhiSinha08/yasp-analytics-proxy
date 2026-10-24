@@ -244,13 +244,14 @@ fn configured_host_publishes_compiled_dataset_before_accepting_queries() {
             .output()
             .expect("redis-cli is installed");
         let user = Command::new("redis-cli")
-            .args(["-u", &redis, "HGET", &users_key, "alice"])
+            .args(["-u", &redis, "HGET", &users_key, "1"])
             .output()
             .expect("redis-cli is installed");
         if published.status.success()
             && String::from_utf8_lossy(&published.stdout).trim() == expected
             && user.status.success()
             && String::from_utf8_lossy(&user.stdout).contains("\"department\":\"finance\"")
+            && std::net::TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
         {
             break;
         }

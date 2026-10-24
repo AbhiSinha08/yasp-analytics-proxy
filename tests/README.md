@@ -170,3 +170,24 @@ adapters; these are not placeholder passing tests or provider acceptance claims.
 python3 scripts/test.py -- --test lineage --test lineage_gateway
 python3 scripts/test.py -- --test lineage_python --features python
 ```
+
+## Result processing
+
+`result_processing` covers Rust/Python batches, raw cache replay, current application
+context and AST/model outcomes, NULL/type fidelity, filtering/completion counts,
+byte bounds, Python retention/saturation, and cancellation/disconnect recovery.
+Snowflake feature runs add configured-host checks through the local emulator.
+
+```sh
+python3 scripts/test.py -- --test result_processing --features python
+python3 scripts/test.py -- --test result_processing --features snowflake,python
+```
+
+`metabase_rbac` starts the three local configurations against disposable PostgreSQL
+and Redis with a mocked decision endpoint. It checks source-role restrictions,
+Metabase remark identities, email masks on raw cache hits, aliases, NULLs, and
+unavailable/uncertain model failures. Run it with:
+
+```sh
+python3 scripts/test.py -- --test metabase_rbac --features python
+```

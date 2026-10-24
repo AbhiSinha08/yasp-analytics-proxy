@@ -8,13 +8,29 @@ use yasp::{
     config::{FileConfig, RustHookSettings, SelectorSettings},
     datasets::{DatasetLoader, bind_dataset_loader},
     hooks::{
-        CacheEligibility, ContextHook, RoutedSelector, bind_cache_eligibility, bind_select_backend,
-        builtin,
+        CacheEligibility, ContextError, ContextHook, ResultHook, RoutedSelector,
+        bind_cache_eligibility, bind_context, bind_select_backend, builtin,
     },
 };
 
 const EXAMPLE_DATASET_LOADER: &str = "example.datasets.email_locations";
 const JSON_FILE_DATASET_LOADER: &str = "builtin.dataset.load_json";
+
+type ContextExtractor = fn(
+    &str,
+) -> Result<
+    Option<serde_json::Map<String, serde_json::Value>>,
+    builtin::extractors::ExtractionError,
+>;
+
+fn context_extractor(name: &str) -> Option<ContextExtractor> {
+    match name {
+        "builtin.extractors.metabase_rs" => Some(builtin::extractors::metabase_rs),
+        "builtin.extractors.metabase_pg" => Some(builtin::extractors::metabase_pg),
+        "builtin.extractors.redash" => Some(builtin::extractors::redash),
+        _ => None,
+    }
+}
 
 fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
     if hook.params.len() != 1 {
@@ -44,14 +60,34 @@ pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error
         .context
         .as_ref()
         .and_then(SelectorSettings::rust_callback)
-        .is_some()
+        .is_some_and(|name| context_extractor(name).is_none())
     {
         return Err(io::Error::other("unregistered hooks.context name").into());
+    }
+    if let Some(SelectorSettings::RustReference(hook)) = &file.hooks.context
+        && !hook.params.is_empty()
+    {
+        return Err(io::Error::other("builtin context extractors accept no params").into());
     }
     #[cfg(not(feature = "python"))]
     if matches!(file.hooks.context, Some(SelectorSettings::Python(_))) {
         return Err(
             io::Error::other("Python context hook requires the python Cargo feature").into(),
+        );
+    }
+    if file
+        .hooks
+        .process_result
+        .as_ref()
+        .and_then(SelectorSettings::rust_callback)
+        .is_some_and(|name| name != "builtin.process_result.uppercase")
+    {
+        return Err(io::Error::other("unregistered hooks.process_result name").into());
+    }
+    #[cfg(not(feature = "python"))]
+    if matches!(file.hooks.process_result, Some(SelectorSettings::Python(_))) {
+        return Err(
+            io::Error::other("Python result hook requires the python Cargo feature").into(),
         );
     }
     match &file.hooks.select_backend {
@@ -124,6 +160,7 @@ pub(super) async fn load_hooks(
         RoutedSelector,
         Option<CacheEligibility>,
         Option<ContextHook>,
+        Option<ResultHook>,
         std::collections::BTreeMap<String, DatasetLoader>,
     ),
     Box<dyn std::error::Error>,
@@ -142,6 +179,7 @@ pub(super) async fn load_hooks(
     let runtime = if matches!(file.hooks.select_backend, SelectorSettings::Python(_))
         || matches!(file.cache.eligibility, Some(SelectorSettings::Python(_)))
         || matches!(file.hooks.context, Some(SelectorSettings::Python(_)))
+        || matches!(file.hooks.process_result, Some(SelectorSettings::Python(_)))
         || file
             .application_contexts
             .datasets
@@ -166,6 +204,22 @@ pub(super) async fn load_hooks(
     };
     let context = match &file.hooks.context {
         None => None,
+        Some(hook @ (SelectorSettings::Rust(_) | SelectorSettings::RustReference(_))) => {
+            let extractor = hook
+                .rust_callback()
+                .and_then(context_extractor)
+                .ok_or_else(|| io::Error::other("unregistered hooks.context name"))?;
+            Some(
+                bind_context(extractor, |request, extractor| {
+                    Box::pin(async move {
+                        extractor(request.query.sql())
+                            .map(Option::unwrap_or_default)
+                            .map_err(|_| ContextError::Failed)
+                    })
+                })
+                .into(),
+            )
+        }
         Some(SelectorSettings::Python(_hook)) => {
             #[cfg(feature = "python")]
             {
@@ -187,7 +241,6 @@ pub(super) async fn load_hooks(
                 .into());
             }
         }
-        Some(_) => return Err(io::Error::other("unregistered hooks.context name").into()),
     };
     let selector: Result<RoutedSelector, Box<dyn std::error::Error>> = match &file
         .hooks
@@ -268,6 +321,56 @@ pub(super) async fn load_hooks(
             }
         }
     };
+    let result_hook = match &file.hooks.process_result {
+        None => None,
+        Some(SelectorSettings::RustReference(hook))
+            if hook.callback == "builtin.process_result.uppercase" =>
+        {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                column: String,
+            }
+            let params: Params = serde_json::from_value(serde_json::Value::Object(
+                hook.params.clone(),
+            ))
+            .map_err(|_| io::Error::other("uppercase requires only a column string param"))?;
+            if params.column.is_empty() || params.column.contains('\0') {
+                return Err(io::Error::other("uppercase requires a nonempty column name").into());
+            }
+            Some(
+                yasp::hooks::bind_process_result(params.column, builtin::process_result::uppercase)
+                    .into(),
+            )
+        }
+        Some(SelectorSettings::Rust(_) | SelectorSettings::RustReference(_)) => {
+            return Err(io::Error::other(
+                "unregistered or missing params for hooks.process_result",
+            )
+            .into());
+        }
+        Some(SelectorSettings::Python(_hook)) => {
+            #[cfg(feature = "python")]
+            {
+                Some(
+                    register_python(
+                        runtime.as_ref().expect("Python result hook has a runtime"),
+                        base,
+                        _hook,
+                    )
+                    .await?
+                    .into(),
+                )
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                return Err(io::Error::other(
+                    "Python result hook requires the python Cargo feature",
+                )
+                .into());
+            }
+        }
+    };
     let mut loaders = std::collections::BTreeMap::new();
     for (name, dataset) in &file.application_contexts.datasets {
         let loader = match &dataset.loader {
@@ -317,7 +420,7 @@ pub(super) async fn load_hooks(
         };
         loaders.insert(name.clone(), loader);
     }
-    Ok((selector, eligibility, context, loaders))
+    Ok((selector, eligibility, context, result_hook, loaders))
 }
 
 #[cfg(feature = "python")]
@@ -334,6 +437,73 @@ async fn register_python(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn builtin_context_extractors_run_without_python_or_datasets() {
+        let base = serde_json::json!({
+            "version": 1,
+            "targets": {"primary": {
+                "engine": "postgresql", "host": "localhost", "port": 5432,
+                "database": "analytics", "tls": {"mode": "disable"},
+                "logins": {"reader": {"username": "reader", "password_env": "READER_PASSWORD"}}
+            }}
+        });
+        for (callback, sql) in [
+            (
+                "builtin.extractors.metabase_rs",
+                "-- /* partner: \"metabase\", {\"dashboard_id\":null,\"chart_id\":null,\"optional_user_id\":1,\"optional_account_id\":null,\"filter_values\":{}} */ Metabase:: userID: 2 queryType: native queryHash: rs\nSELECT 1",
+            ),
+            (
+                "builtin.extractors.metabase_pg",
+                "-- Metabase:: userID: 2 queryType: native queryHash: pg\nSELECT 1",
+            ),
+            (
+                "builtin.extractors.redash",
+                "/* user_id: 2, query_id: adhoc, Job ID: job, Query Hash: hash, Scheduled: False */ SELECT 1",
+            ),
+        ] {
+            let mut value = base.clone();
+            value["hooks"] = serde_json::json!({"context": {"type": "rust", "callback": callback}});
+            let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
+            validate_names(&config).unwrap();
+            let (_, _, context, _, _) = load_hooks(
+                &config,
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"),
+            )
+            .await
+            .unwrap();
+            let context = context.unwrap();
+            for sql in [sql, "SELECT 1"] {
+                let query = yasp::query::ParsedQuery::parse(sql).unwrap();
+                let extracted = context
+                    .derive(
+                        yasp::hooks::ContextRequest {
+                            data_contexts: &yasp::lineage::DataContexts::EMPTY,
+                            authenticated_user: "bi",
+                            frontend_database: "analytics",
+                            client_id: 1,
+                            query_id: query.query_id(),
+                            query: &query,
+                            datasets: None,
+                        },
+                        std::time::Duration::from_secs(1),
+                        4096,
+                    )
+                    .await;
+                if sql == "SELECT 1" {
+                    assert!(extracted.is_empty());
+                } else {
+                    assert_eq!(extracted["user_id"], 2);
+                    assert!(!extracted.contains_key("account"));
+                }
+            }
+            value["hooks"]["context"]["params"] = serde_json::json!({"unused": true});
+            assert!(validate_names(&serde_json::from_value(value.clone()).unwrap()).is_err());
+            value["hooks"]["context"] =
+                serde_json::json!({"type": "rust", "callback": "unknown.extractor"});
+            assert!(validate_names(&serde_json::from_value(value).unwrap()).is_err());
+        }
+    }
 
     #[test]
     fn dataset_loaders_must_be_registered_by_the_host() {

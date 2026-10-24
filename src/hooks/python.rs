@@ -6,6 +6,7 @@
 mod conversion;
 mod datasets;
 mod interpreter;
+pub(crate) mod result;
 
 use crate::{
     config::PythonSettings,
@@ -109,6 +110,13 @@ pub struct PythonCallback {
 }
 
 enum Operation {
+    ProcessResult {
+        id: usize,
+        request: Arc<result::PreparedRequest>,
+        batch: crate::hooks::ResultBatch,
+        datasets: Option<DatasetReader>,
+        runtime: Handle,
+    },
     Register {
         path: PathBuf,
         callback: String,
@@ -125,6 +133,7 @@ enum Operation {
 }
 
 enum Reply {
+    Batch(crate::hooks::ResultBatch),
     Registered(usize),
     Value(Value),
 }
@@ -282,7 +291,7 @@ impl PythonRuntime {
                 input_limit: self.0.settings.max_payload_bytes,
                 timeout: self.timeout(),
             }),
-            Reply::Value(_) => unreachable!("registration returns a handle"),
+            _ => unreachable!("registration returns a handle"),
         }
     }
 
@@ -349,7 +358,7 @@ impl PythonRuntime {
                 input_limit: self.0.loader_input_limit,
                 timeout,
             }),
-            Reply::Value(_) => unreachable!("loader registration returns a handle"),
+            _ => unreachable!("loader registration returns a handle"),
         }
     }
 
@@ -482,7 +491,7 @@ impl PythonCallback {
             .await?;
         match result {
             Reply::Value(value) => Ok(value),
-            Reply::Registered(_) => unreachable!("invocation returns a value"),
+            _ => unreachable!("invocation returns a value"),
         }
     }
 }

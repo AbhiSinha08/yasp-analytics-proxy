@@ -102,8 +102,8 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
             Some("1"),
         ),
         (
-            "/* yasp-test user=alice workload=reporting report=dashboard */ SELECT 1",
-            Some("alice"),
+            "/* yasp-test user=1 workload=reporting report=dashboard */ SELECT 1",
+            Some("1"),
         ),
         (
             "-- Metabase:: userID: 999 queryType: native queryHash: abc\nSELECT 1",

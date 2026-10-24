@@ -1,0 +1,98 @@
+version: 1
+
+gateway:
+  protocol: redshift
+  listen: "127.0.0.1:6432"
+  max_sessions: 32
+  max_message_bytes: 8388608
+  max_sql_bytes: 1048576
+  query_timeout_ms: 60000
+  read_timeout_ms: 600000
+  write_timeout_ms: 60000
+  startup_timeout_ms: 120000
+  shutdown_timeout_ms: 10000
+  tls:
+    mode: enable
+    cert_file: local-tls/server.crt
+    key_file: local-tls/server.key
+
+targets:
+  primary:
+    engine: postgresql
+    host: localhost
+    port: 5432
+    database: development
+    tls:
+      mode: disable
+    logins:
+      restricted:
+        username: local
+        password_env: YASP_PRIMARY_RESTRICTED_PASSWORD
+
+schema_discovery:
+  target: primary
+  backend_login: restricted
+  catalog:
+    schemas: [public]
+
+cache:
+  enabled: true
+  url_env: YASP_REDIS_URL
+  ttl_seconds: 120
+  namespace: "yasp-ast:cache"
+  max_rows_per_query: 10000
+  max_buffered_bytes_total: 268400000
+
+data_contexts:
+  ast:
+    enabled: true
+    dialect: postgresql
+    namespace: "yasp-ast:ast_cache"
+
+application_contexts:
+  url_env: YASP_REDIS_URL
+  namespace: "yasp-ast:datasets"
+  datasets:
+    users:
+      refresh_interval_seconds: 0
+      loader:
+        type: rust
+        callback: builtin.dataset.load_json
+        params:
+          file: hooks/examples/users.json
+    pii_access:
+      refresh_interval_seconds: 0
+      loader:
+        type: rust
+        callback: builtin.dataset.load_json
+        params:
+          file: hooks/examples/pii_access.json
+    email_columns:
+      refresh_interval_seconds: 0
+      loader:
+        type: rust
+        callback: builtin.dataset.load_json
+        params:
+          file: hooks/examples/email_columns.json
+
+hooks:
+  input_options:
+    type: rust
+    callback: builtin.input_options.metabase
+    params:
+      native_dialect: postgresql
+      unmarked_data_dialect: postgresql
+  context:
+    type: rust
+    callback: builtin.extractors.metabase_rs
+  # Both accounts read with local; the result hook applies email permissions.
+  process_result:
+    type: python
+    path: ../hooks/examples/rbac.py
+    callback: mask_email_from_ast
+  python:
+    search_paths: []
+    queue_capacity: 32
+    queue_max_bytes: 4194304
+    max_payload_bytes: 2097152
+    execution_timeout_ms: 5000

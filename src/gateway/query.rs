@@ -196,6 +196,7 @@ impl<'backend> QuerySession<'_, 'backend> {
                 ast: &self.source.ast,
                 catalog: &self.source.catalog,
                 context_hook: self.source.context_hook.as_deref(),
+                result_processing: self.source.result_processing.as_deref(),
                 datasets: self.source.datasets.as_ref(),
                 stopped: self.source.stopped.clone(),
             },

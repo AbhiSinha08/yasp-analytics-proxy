@@ -69,6 +69,12 @@ Rust state/functions must meet the binder's `Send + Sync + 'static` requirements
 Synchronous selection and eligibility must be fast and nonblocking.
 Use `bind_select_backend_async` or `bind_cache_eligibility_async` for asynchronous
 dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
+The supplied host can bind `hooks.context` directly to
+`builtin.extractors.metabase_rs`, `builtin.extractors.metabase_pg`, or
+`builtin.extractors.redash` without Python. These existing extractors return raw
+remark metadata, including numeric user IDs. Application callbacks own dataset
+lookups and account policy.
+
 Context uses cooperative async I/O; its deadline cannot interrupt blocking Rust.
 See [binding examples](../hooks/README.md).
 
@@ -90,6 +96,16 @@ or cache lookup. PostgreSQL enforces explicit native source affinity; Snowflake
 forwards read-only data SQL without a dialect gate or translation. All backends and
 frontend/dialect combinations use the shared cache path when enabled; adapter
 validation still runs before a hit can replay.
+
+## Result processing
+
+Use `bind_process_result(state, f)` and `GatewayConfig::with_result_hook` for bounded
+async Rust callbacks, or a registered Python callback with the native batch object.
+The result request includes immutable identity, selected target/login, application
+context, scoped dataset access, and raw output AST/model data contexts. The callback
+may edit text, set NULL, and filter rows while preserving schema and retained-row
+order. Failures deny the affected query; no raw fallback runs. The same processing
+stage runs after raw cache capture and on replay. See [the contract and examples](result-processing.md).
 
 ## Owning shared datasets
 
@@ -130,7 +146,7 @@ fields and lookup results are copied JSON values.
 
 Enable the `python` feature and create one `PythonRuntime` per process before
 serving. Clone it for additional registrations. The repository host shares one
-runtime among context, selection, and eligibility and resolves references in
+runtime among context, selection, eligibility, and result processing and resolves references in
 [host/hooks.rs](../src/host/hooks.rs).
 
 ```yaml
@@ -182,13 +198,12 @@ use the optional reader. See the runnable [dataset examples](../hooks/README.md#
 
 Optional [REST column classification](decision-model.md) exposes typed requests and
 probability/confidence outcomes through `decision_model` and
-`GatewayConfig::with_decision_model`. It does not invoke result callbacks or apply masks.
-The YAML host configures it under `data_contexts.decision_model`. Future
-result-processing hooks will receive named data contexts from model classification
-and the current AST lineage source. Dictionary matching and result-hook contracts
-remain separate future work; lineage performs no classification.
+`GatewayConfig::with_decision_model`. It supplies raw outcomes to optional result callbacks and does not apply masks.
+The YAML host configures it under `data_contexts.decision_model`. Result hooks receive
+named model outcomes and AST lineage. Dictionary matching remains future work;
+lineage performs no classification.
 
-Query rewrites, result callbacks, lifecycle hooks, and engine policy/masking
+Query rewrites, lifecycle hooks, and engine policy/masking
 have no active runtime contracts or accepted configuration yet. This is
 the intended direction, not the current [query pipeline](architecture.md#query-flow):
 

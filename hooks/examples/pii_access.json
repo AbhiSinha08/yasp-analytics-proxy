@@ -1,0 +1,10 @@
+{
+  "admin": {
+    "email": true,
+    "phone": true
+  },
+  "limited": {
+    "email": false,
+    "phone": false
+  }
+}

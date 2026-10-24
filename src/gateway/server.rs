@@ -70,6 +70,7 @@ pub(super) async fn serve_sessions(
     drop(config.password);
     let cache = config.cache;
     let context_hook = config.context_hook;
+    let result_processing = config.result_processing;
     let datasets = config.datasets;
     let (stopping, stopped) = watch::channel(false);
     let source = Arc::new(Credentials {
@@ -81,6 +82,7 @@ pub(super) async fn serve_sessions(
         decision_model: config.decision_model,
         ast: config.ast,
         context_hook: context_hook.clone(),
+        result_processing: result_processing.clone(),
         datasets,
         stopped,
         server_version,
@@ -146,6 +148,9 @@ pub(super) async fn serve_sessions(
     if let Some(hook) = &context_hook {
         hook.shutdown();
     }
+    if let Some(processing) = &result_processing {
+        processing.shutdown();
+    }
     execution.stop_hooks();
     if timeout(
         Duration::from_millis(u64::from(settings.shutdown_timeout_ms)),
@@ -174,6 +179,7 @@ pub(super) struct Credentials {
     pub(super) cache: Option<Arc<RedisCache>>,
     pub(super) decision_model: Option<Arc<crate::decision_model::DecisionModel>>,
     pub(super) ast: crate::lineage::AstSettings,
+    pub(super) result_processing: Option<Arc<crate::hooks::result::ResultProcessing>>,
     pub(super) context_hook: Option<Arc<ContextHook>>,
     pub(super) datasets: Option<DatasetReader>,
     pub(super) stopped: watch::Receiver<bool>,

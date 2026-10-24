@@ -111,6 +111,7 @@ impl MockModel {
             endpoint: self.endpoint.clone(),
             namespace: "yasp:decision_cache".into(),
             sample_size: 5,
+            include_sql: true,
             timeout_ms: 2000,
             fail_on_error,
             headers_env: BTreeMap::new(),

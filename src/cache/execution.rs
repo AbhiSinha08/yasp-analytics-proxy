@@ -10,6 +10,7 @@ use crate::backend::{
 use futures::{Sink, channel::oneshot};
 use sha2::{Digest, Sha256};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute<S>(
     route: &Route<'_>,
     request: ExecutionRequest<'_, '_>,
@@ -19,6 +20,7 @@ pub(crate) async fn execute<S>(
         &crate::lineage::AstSettings,
         Option<&crate::decision_model::DecisionModel>,
     ),
+    processing: Option<crate::execution::processing::ProcessingRequest<'_, '_>>,
     output: &mut S,
     mut cancel: oneshot::Receiver<()>,
 ) -> ExecutionResult<()>
@@ -63,7 +65,7 @@ where
                                 ),
                         ))
                 {
-                    if let Some(model) = model {
+                    let cached = if let Some(model) = model {
                         let columns = response::columns(&entry.bytes);
                         let results = tokio::select! {
                             biased;
@@ -71,9 +73,49 @@ where
                             result = cache.classifications(&selected.target, &selected.backend_login, query_id, entry, &columns, model) => result,
                         };
                         model.check(&results, columns.len())?;
-                    }
+                        Some(results)
+                    } else {
+                        None
+                    };
                     tracing::debug!(query_id, client_id, target = %selected.target,
                         backend_login = %selected.backend_login, "query served from cache");
+                    if processing.is_some() {
+                        let (mut sender, receiver) = crate::execution::classification::channel(
+                            processing.map(|p| p.platform.budget.clone()),
+                        );
+                        let (source_cancel, mut backend_cancel) = oneshot::channel();
+                        let settings = crate::execution::classification::source_settings(
+                            request.settings,
+                            model,
+                            true,
+                        );
+                        let source = async move {
+                            response::replay(
+                                entry,
+                                &mut sender,
+                                settings.write_timeout(),
+                                &mut backend_cancel,
+                            )
+                            .await
+                        };
+                        crate::execution::classification::run(
+                            source,
+                            receiver,
+                            output,
+                            crate::execution::classification::StreamOptions {
+                                model,
+                                cached,
+                                processing,
+                            },
+                            request.selection.query,
+                            cancel,
+                            source_cancel,
+                            request.settings.write_timeout(),
+                        )
+                        .await?
+                        .0?;
+                        return Ok(());
+                    }
                     return response::replay(
                         entry,
                         output,
@@ -94,11 +136,17 @@ where
             );
         }
     }
-    let (completed_source, mut buffer, classifications) = if let Some(model) = model {
-        let (mut sender, receiver) = crate::execution::classification::channel();
+    let (completed_source, mut buffer, classifications) = if model.is_some() || processing.is_some()
+    {
+        let (mut sender, receiver) = crate::execution::classification::channel(
+            processing.map(|p| p.platform.budget.clone()),
+        );
         let (source_cancel, backend_cancel) = oneshot::channel();
-        let source_settings =
-            crate::execution::classification::source_settings(request.settings, model);
+        let source_settings = crate::execution::classification::source_settings(
+            request.settings,
+            model,
+            processing.is_some(),
+        );
         let source = async move {
             let mut capture = CaptureSink::new(&mut sender, buffer, cache);
             let result = route
@@ -117,14 +165,18 @@ where
             source,
             receiver,
             output,
-            model,
+            crate::execution::classification::StreamOptions {
+                model,
+                cached: None,
+                processing,
+            },
             request.selection.query,
             cancel,
             source_cancel,
             request.settings.write_timeout(),
         )
         .await?;
-        (result?, buffer, Some(classifications))
+        (result?, buffer, model.map(|_| classifications))
     } else {
         let mut capture = CaptureSink::new(output, buffer, cache);
         let result = route.execute(request, &mut capture, cancel).await?;

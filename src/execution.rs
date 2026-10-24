@@ -2,6 +2,7 @@
 //! representation, session SQL, admission, and cleanup belong to backend adapters.
 
 pub(crate) mod classification;
+pub(crate) mod processing;
 mod transaction;
 pub(crate) use transaction::{Transaction, TransactionStatus};
 
@@ -34,6 +35,7 @@ pub(crate) struct QueryContext<'a> {
     pub ast: &'a crate::lineage::AstSettings,
     pub catalog: &'a crate::catalog::Catalog,
     pub context_hook: Option<&'a ContextHook>,
+    pub result_processing: Option<&'a crate::hooks::result::ResultProcessing>,
     pub datasets: Option<&'a DatasetReader>,
     pub stopped: watch::Receiver<bool>,
 }
@@ -149,11 +151,24 @@ impl<'backend> QuerySession<'_, 'backend> {
             result = execution.select(&request) => result?,
         };
         route.validate_input(query)?;
+        let processing =
+            self.source
+                .result_processing
+                .map(|platform| processing::ProcessingRequest {
+                    platform,
+                    selection: &request,
+                    database: frontend_database,
+                    route: route.selection(),
+                    settings: self.settings,
+                });
         if self.transaction.active() {
-            if let Some(model) = self.source.decision_model {
-                let (sender, receiver) = classification::channel();
+            let model = self.source.decision_model;
+            if model.is_some() || processing.is_some() {
+                let (sender, receiver) =
+                    classification::channel(processing.map(|p| p.platform.budget.clone()));
                 let (source_cancel, backend_cancel) = oneshot::channel();
-                let source_settings = classification::source_settings(self.settings, model);
+                let source_settings =
+                    classification::source_settings(self.settings, model, processing.is_some());
                 let source = async {
                     let mut sender = sender;
                     self.transaction
@@ -174,7 +189,11 @@ impl<'backend> QuerySession<'_, 'backend> {
                     source,
                     receiver,
                     output,
-                    model,
+                    classification::StreamOptions {
+                        model,
+                        cached: None,
+                        processing,
+                    },
                     query,
                     cancel,
                     source_cancel,
@@ -210,6 +229,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             frontend_database,
             self.source.cache,
             (self.source.ast, self.source.decision_model),
+            processing,
             output,
             cancel,
         )

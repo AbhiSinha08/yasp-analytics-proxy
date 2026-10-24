@@ -6,7 +6,133 @@ use pgwire::{
 };
 
 pub(crate) struct Response(PgWireBackendMessage);
+
+/// The frontend adapter retains native row framing behind an opaque batch value.
+pub(crate) struct ResultRow(pgwire::messages::data::DataRow);
+impl ResultRow {
+    pub(crate) fn column_count(&self) -> usize {
+        self.0.field_count.max(0) as usize
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.0.data.capacity()
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.0.data.len() + 7
+    }
+    pub(crate) fn value(&self, range: std::ops::Range<usize>) -> &[u8] {
+        &self.0.data[range]
+    }
+    pub(crate) fn fields(
+        &self,
+    ) -> Result<Vec<Option<std::ops::Range<usize>>>, crate::hooks::ResultHookError> {
+        use crate::hooks::ResultHookError;
+        let mut position = 0;
+        let mut fields = Vec::with_capacity(self.column_count());
+        for _ in 0..self.column_count() {
+            let length = self
+                .0
+                .data
+                .get(position..position + 4)
+                .ok_or(ResultHookError::InvalidOutput)?;
+            let length = i32::from_be_bytes(length.try_into().unwrap());
+            position += 4;
+            if length == -1 {
+                fields.push(None);
+                continue;
+            }
+            let length = usize::try_from(length).map_err(|_| ResultHookError::InvalidOutput)?;
+            let end = position
+                .checked_add(length)
+                .filter(|n| *n <= self.0.data.len())
+                .ok_or(ResultHookError::InvalidOutput)?;
+            fields.push(Some(position..end));
+            position = end;
+        }
+        if position != self.0.data.len() || self.0.field_count < 0 {
+            return Err(ResultHookError::InvalidOutput);
+        }
+        Ok(fields)
+    }
+    pub(crate) fn into_response(self) -> Response {
+        Response(PgWireBackendMessage::DataRow(self.0))
+    }
+}
+
+pub(crate) enum ProcessingEvent {
+    Columns(Vec<crate::hooks::ResultColumn>, Response),
+    Row(ResultRow),
+    Complete,
+    Other(Response),
+}
+pub(crate) fn processing_event(response: Response) -> ProcessingEvent {
+    match response.0 {
+        PgWireBackendMessage::RowDescription(description) => {
+            let columns = description
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(ordinal, field)| crate::hooks::ResultColumn {
+                    ordinal,
+                    name: field.name.clone(),
+                    data_type: format!("pgwire:{}:{}", field.type_id, field.type_modifier),
+                    text: field.format_code == 0 && matches!(field.type_id, 25 | 1042 | 1043),
+                    max_chars: matches!(field.type_id, 1042 | 1043)
+                        .then(|| {
+                            field
+                                .type_modifier
+                                .checked_sub(4)
+                                .and_then(|n| usize::try_from(n).ok())
+                        })
+                        .flatten(),
+                })
+                .collect();
+            ProcessingEvent::Columns(
+                columns,
+                Response(PgWireBackendMessage::RowDescription(description)),
+            )
+        }
+        PgWireBackendMessage::DataRow(row) => ProcessingEvent::Row(ResultRow(row)),
+        PgWireBackendMessage::CommandComplete(_) => ProcessingEvent::Complete,
+        message => ProcessingEvent::Other(Response(message)),
+    }
+}
+pub(crate) fn result_row<'a>(
+    values: impl Iterator<Item = Option<&'a [u8]>> + Clone,
+    count: usize,
+) -> Response {
+    use bytes::BufMut;
+    let bytes = values.clone().map(|v| 4 + v.map_or(0, <[u8]>::len)).sum();
+    let mut data = bytes::BytesMut::with_capacity(bytes);
+    for value in values {
+        if let Some(value) = value {
+            data.put_i32(value.len() as i32);
+            data.extend_from_slice(value);
+        } else {
+            data.put_i32(-1);
+        }
+    }
+    Response(PgWireBackendMessage::DataRow(
+        pgwire::messages::data::DataRow::new(data, count as i16),
+    ))
+}
 impl Response {
+    pub(crate) fn buffer_bytes(&self) -> usize {
+        use pgwire::messages::Message;
+        128 + match self.message() {
+            PgWireBackendMessage::DataRow(row) => row.data.capacity(),
+            PgWireBackendMessage::RowDescription(columns) => {
+                columns.fields.capacity()
+                    * std::mem::size_of::<pgwire::messages::data::FieldDescription>()
+                    + columns
+                        .fields
+                        .iter()
+                        .map(|field| field.name.capacity())
+                        .sum::<usize>()
+            }
+            PgWireBackendMessage::NoticeResponse(notice) => notice.message_length() * 8,
+            _ => 256,
+        }
+    }
     pub(crate) fn from_message(message: PgWireBackendMessage) -> Self {
         Self(message)
     }

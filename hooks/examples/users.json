@@ -1,5 +1,10 @@
 {
-  "1": {"department": "finance"},
-  "alice": {"department": "finance", "email": "alice@example.test"},
-  "bob": {"department": "operations", "email": "bob@example.test"}
+  "1": {
+    "account": "admin",
+    "department": "finance"
+  },
+  "2": {
+    "account": "limited",
+    "department": "operations"
+  }
 }

@@ -1,0 +1,11 @@
+{
+  "\"development\".\"public\".\"users\".\"email\"": {
+    "tag": "email"
+  },
+  "\"development\".\"public\".\"orders\".\"buyer_email\"": {
+    "tag": "email"
+  },
+  "\"development\".\"public\".\"support_tickets\".\"requester_email\"": {
+    "tag": "email"
+  }
+}

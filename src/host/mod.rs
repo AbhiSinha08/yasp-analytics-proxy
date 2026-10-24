@@ -27,7 +27,8 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let (selector, eligibility, context, loaders) = load_hooks(&host.file, &path).await?;
+        let (selector, eligibility, context, result_hook, loaders) =
+            load_hooks(&host.file, &path).await?;
         let datasets = match &host.application_contexts_url {
             Some(url) => {
                 Some(Datasets::start(host.file.application_contexts.clone(), url, loaders).await?)
@@ -51,6 +52,11 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let gateway = if let Some(context) = context {
                 gateway.with_context_hook(context)
+            } else {
+                gateway
+            };
+            let gateway = if let Some(hook) = result_hook {
+                gateway.with_result_hook(hook, host.file.result_processing.clone())?
             } else {
                 gateway
             };
