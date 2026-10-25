@@ -81,14 +81,16 @@ flowchart TD
     Metadata -->|no| Control{Recognized frontend setup or transaction control?}
     Control -->|yes| Local[Update frontend state or retained transaction]
     Control -->|no| Context[Derive bounded query context and incoming dialect]
-    Context --> Parse[Parse once in returned dialect and validate read-only SQL]
-    Parse --> Lineage[Compute optional lineage from current catalog]
+    Context --> Parse[Parse incoming SQL in returned dialect]
+    Parse --> Modify[Optional application SQL replacement; reparse into new AST]
+    Modify --> Validate[Validate effective read-only SQL; generate query ID]
+    Validate --> Lineage[Compute effective-query lineage from current catalog]
     Lineage --> Select[Authorize target, login, and optional compute type]
     Select --> Tx{Explicit transaction?}
     Tx -->|yes| Pinned[Validate affinity; execute on pinned source without cache]
     Tx -->|no| Cache{Eligible valid raw cache hit?}
     Cache -->|hit| Replay[Replay raw results and associated data contexts]
-    Cache -->|miss| Execute[Acquire capacity; execute unchanged SQL; capture bounded raw results]
+    Cache -->|miss| Execute[Acquire capacity; execute effective SQL; capture bounded raw results]
     Execute --> Cleanup[Verified source cleanup; publish only complete raw cache entries]
     Execute --> Process[Classify and process bounded source batches]
     Pinned --> Process
@@ -99,21 +101,24 @@ flowchart TD
 ```
 
 
-`ParsedQuery` keeps original SQL, its incoming dialect, and an immutable AST.
+`ParsedQuery` keeps SQL, its incoming dialect, and an immutable AST.
 Metadata recognition uses the gateway grammar before query context, regardless of
 any native remark. Frontend setup, fingerprints, and transaction controls bypass
 context. Ordinary queries derive context exactly once, including cache hits, then
-parse using its dialect (or the gateway default). Hook errors reject the query.
-The raw context request has no AST, lineage, or final query ID; downstream selection,
-eligibility, and result hooks receive the parsed AST and `query_context` values.
+parse using its dialect (or the gateway default). Optional `hooks.modify_query`
+receives this SQL, AST, query context, and datasets, without lineage or a query ID.
+Replacement SQL is reparsed into a new immutable query and validated before its
+ID is generated. Hook errors reject the query without executing original SQL.
+Downstream selection, eligibility, and result hooks receive effective SQL, its
+AST, and the original `query_context` values.
 
 Optional `data_contexts.ast.enabled` computes lineage from the current catalog after
-query context and before routing. Missing facts remain explicit unknowns. Parsing
+query modification and before routing. Missing facts remain explicit unknowns. Parsing
 has byte, 4,096-token, and recursion bounds; Unicode escaped identifiers remain
 unsupported. Source grants and read-only transactions remain necessary.
 
-Current execution forwards accepted SQL unchanged. The planned application modifier
-runs after parsing and revalidates its output. Future target-specific translation
+Current execution forwards validated effective SQL. See [query modification](query-modification.md)
+for the callback contract and application examples. Future target-specific translation
 runs after selection whenever the incoming dialect differs from the target's;
 revalidate effective SQL, recompute lineage and query ID before cache eligibility.
 See [SQL translation](multi-engine.md#planned-sql-translation).

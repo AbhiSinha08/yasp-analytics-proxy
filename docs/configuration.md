@@ -155,10 +155,10 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `listen`                   | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
 | `max_sessions`             | 32               | Normal frontend session capacity.                                                       |
 | `max_message_bytes`        | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
-| `max_sql_bytes`            | 1,048,576        | SQL input size.                                                                         |
+| `max_sql_bytes`            | 1,048,576        | Incoming and replacement SQL size.                                                      |
 | `max_context_bytes`        | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
 | `query_context_timeout_ms` | 2,000            | Query-context derivation wait; failure rejects the query.                               |
-| `async_hook_timeout_ms`    | 2,000            | Async Rust selection, cache-eligibility, and result-hook wait.                          |
+| `async_hook_timeout_ms`    | 2,000            | Query modification, async selection/eligibility, and result-hook wait.                  |
 | `query_timeout_ms`         | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
 | `read_timeout_ms`          | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
 | `write_timeout_ms`         | 60,000           | Each frontend response write.                                                           |
@@ -225,9 +225,36 @@ the same `dialect`/`values` output contract. Successful empty output `{}` uses d
 errors do not silently fall back. Downstream hooks read application values through
 `request.query_context` in Rust or `request["query_context"]` in Python.
 
-Current execution forwards accepted data SQL unchanged. Planned translation uses
+Current execution forwards validated effective SQL after optional modification. Planned translation uses
 the returned incoming dialect and selected target dialect; see
 [SQL translation](multi-engine.md#planned-sql-translation).
+
+## Query modification
+
+`hooks.modify_query` is optional. It runs after query context and parsing, before
+query IDs, lineage, selection, and cache eligibility. Rust receives an immutable
+AST; Python receives `query_ast`. Both receive query context and scoped datasets,
+without lineage or `data_contexts`. Return replacement SQL or no change.
+
+```yaml
+hooks:
+  modify_query:
+    type: rust
+    callback: example.modify_query.rename_table
+    params:
+      from: public.orders
+      to: reporting.orders_v2
+```
+
+The host compiles the Rust table-rename example; no Python feature is required.
+`from` and `to` must be qualified SQL names, and matching incoming tables require
+explicit aliases. Application-owned Python references remain available with
+`--features python`; their paths resolve relative to YAML. Other custom Rust names
+require registration in the consuming host using
+`GatewayConfig::with_query_modification_hook`; the repository host rejects unknown
+names. Replacement SQL is bounded and reparsed in the resolved dialect into a new
+AST. Failures reject without fallback. `gateway.async_hook_timeout_ms` and existing
+Python payload/queue limits apply. See [query modification](query-modification.md).
 
 ## Result processing
 
@@ -655,15 +682,15 @@ data_contexts:
 `enabled` defaults to `false`. This source describes each output column's source
 constituents and JSON paths; it does not classify them or consult application
 dictionaries. It works independently of the decision model and Redis result cache.
-Analysis uses the current in-memory catalog after query context and before selection and cache
+Analysis uses the effective query and current in-memory catalog after query modification and before selection and cache
 eligibility hooks, including on raw cache hits and within transactions. Missing
 facts remain explicit unknowns. `gateway.max_context_bytes` bounds encoded lineage;
 parser depth/token bounds and internal traversal/column budgets also apply.
 
 The query-context output selects the parsing dialect before lineage analysis.
 `enabled` controls only lineage generation. Lineage settings do not select a grammar,
-target, login, or compute. Analysis runs after query context and before selection
-and cache eligibility, using the same immutable parsed tree.
+target, login, or compute. Analysis runs after query modification and before selection
+and cache eligibility, using the effective immutable parsed tree.
 
 `namespace` defaults to `yasp:ast_cache`. Both AST and decision-model namespace
 values must be nonempty and contain no NUL. The AST namespace must differ from

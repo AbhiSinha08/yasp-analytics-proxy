@@ -11,6 +11,34 @@ fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
 const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
 
 #[test]
+fn query_modification_references_validate_before_startup() {
+    let config = make_config("builtin.select_backend.passthrough", ONE_TARGET, "  {}");
+    assert!(config.hooks.modify_query.is_none());
+    let base = serde_json::to_value(config).unwrap();
+    for reference in [
+        serde_json::json!("app.rewrite"),
+        serde_json::json!({"type":"rust","callback":"app.rewrite","params":{"table":"orders"}}),
+        serde_json::json!({"type":"python","path":"rewrite.py","callback":"modify","params":{}}),
+    ] {
+        let mut value = base.clone();
+        value["hooks"]["modify_query"] = reference;
+        let config: FileConfig = serde_json::from_value(value).unwrap();
+        config.validate().unwrap();
+    }
+    for reference in [
+        serde_json::json!(""),
+        serde_json::json!({"type":"rust","callback":" "}),
+        serde_json::json!({"type":"python","path":"","callback":"modify"}),
+        serde_json::json!({"type":"python","path":"rewrite.py","callback":""}),
+    ] {
+        let mut value = base.clone();
+        value["hooks"]["modify_query"] = reference;
+        let config: FileConfig = serde_json::from_value(value).unwrap();
+        assert!(config.validate().is_err());
+    }
+}
+
+#[test]
 fn optional_data_contexts_validate_nested_decision_model_configuration() {
     let yaml = format!(
         "version: 1\nschema_discovery: {{catalog: {{schemas: [public]}}}}\ntargets:\n{ONE_TARGET}\n"

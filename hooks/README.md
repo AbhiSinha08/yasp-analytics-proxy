@@ -44,7 +44,7 @@ hooks:
 Both languages use `type`, `callback`, and application-owned `params`; Python also
 requires `path`. The built-in passthrough accepts optional `target`, `backend_login`, and
 `compute_type` keys. Empty params infer only unambiguous choices. Compiled string names are shorthand.
-The repository host registers only its documented built-ins and Python references;
+The repository host registers its documented built-ins, compiled examples, and Python references;
 custom Rust names/typed params are mapped by the consuming application at startup.
 See [runtime configuration](../docs/configuration.md#routing-and-pools).
 
@@ -119,10 +119,29 @@ authenticated identity. See the
 [BI metadata notes](../docs/extensions.md#observed-sql-context-from-local-bi-traffic)
 for supported versions and observed formats.
 
+## Query modification
+
+`bind_modify_query(state, f)` binds an async Rust callback returning optional
+replacement SQL. Attach it with `GatewayConfig::with_query_modification_hook`.
+Python uses `modify_query(request, params)` returning a SQL string or `None`,
+configured under `hooks.modify_query` using the existing reference format.
+
+The request supplies original SQL and its parsed AST, resolved dialect, query
+context, identity, and scoped datasets. It contains no lineage or query ID.
+YASP reparses replacement SQL into a new AST before downstream lineage, routing,
+caching, or execution. Errors reject without executing the original query.
+
+[examples/query_modifier.rs](examples/query_modifier.rs) demonstrates a compiled
+table rename for qualified names with explicit aliases. The repository host
+registers it as `example.modify_query.rename_table` with required `from` and `to`
+qualified-name params; [example configuration](../config/example.yml) shows the
+reference. See [query modification](../docs/query-modification.md)
+for configuration, filtered subqueries, and additional application use cases.
+
 ## Shared datasets
 
 The host can load application JSON datasets at startup and pass a bounded reader to
-context, selection, and eligibility callbacks. A Python callback uses ordinary values:
+context, modification, selection, and eligibility callbacks. A Python callback uses ordinary values:
 
 ```python
 user = request["datasets"].get("users", user_id)
@@ -215,7 +234,7 @@ See [result processing](../docs/result-processing.md) for API, bounds, and examp
 
 ## Planned hooks and masking
 
-Query rewrites, lifecycle hooks, and engine-enforced masking are future
+Lifecycle hooks and engine-enforced masking are future
 stages. Their commented example settings are not accepted runtime configuration.
 See [planned stage ordering](../docs/extensions.md#planned-query-and-result-stages)
 and the [phase plan](../docs/PLAN.md) before implementing another contract.

@@ -8,13 +8,15 @@ use yasp::{
     config::{FileConfig, RustHookSettings, SelectorSettings},
     datasets::{DatasetLoader, bind_dataset_loader},
     hooks::{
-        CacheEligibility, QueryContextHook, ResultHook, RoutedSelector, bind_cache_eligibility,
-        bind_query_context, bind_select_backend, builtin,
+        CacheEligibility, QueryContextHook, QueryModificationHook, ResultHook, RoutedSelector,
+        bind_cache_eligibility, bind_modify_query, bind_query_context, bind_select_backend,
+        builtin,
     },
 };
 
 const EXAMPLE_DATASET_LOADER: &str = "example.datasets.email_locations";
 const JSON_FILE_DATASET_LOADER: &str = "builtin.dataset.load_json";
+const EXAMPLE_QUERY_MODIFIER: &str = "example.modify_query.rename_table";
 
 #[derive(Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -58,6 +60,46 @@ fn builtin_query_context(
     }
 }
 
+fn example_query_modification(
+    hook: &SelectorSettings,
+) -> Result<QueryModificationHook, Box<dyn std::error::Error>> {
+    use sqlparser::{
+        ast::ObjectName, dialect::PostgreSqlDialect, parser::Parser, tokenizer::Token,
+    };
+    if hook.rust_callback() != Some(EXAMPLE_QUERY_MODIFIER) {
+        return Err(io::Error::other("unregistered hooks.modify_query name").into());
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Params {
+        from: String,
+        to: String,
+    }
+    let SelectorSettings::RustReference(hook) = hook else {
+        return Err(io::Error::other("table rename requires from and to params").into());
+    };
+    let params: Params = serde_json::from_value(serde_json::Value::Object(hook.params.clone()))?;
+    fn table_name(sql: &str) -> Result<ObjectName, Box<dyn std::error::Error>> {
+        let mut parser = Parser::new(&PostgreSqlDialect {}).try_with_sql(sql)?;
+        let name = parser.parse_object_name(false)?;
+        if name.0.len() < 2
+            || name.0.iter().any(|part| part.as_ident().is_none())
+            || parser.peek_token().token != Token::EOF
+        {
+            return Err(io::Error::other("table rename requires qualified table names").into());
+        }
+        Ok(name)
+    }
+    Ok(bind_modify_query(
+        super::query_modifier_example::TableRename {
+            from: table_name(&params.from)?,
+            to: table_name(&params.to)?,
+        },
+        super::query_modifier_example::rename_table,
+    )
+    .into())
+}
+
 fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
     if hook.params.len() != 1 {
         return Err(io::Error::other(
@@ -72,6 +114,17 @@ fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
 }
 
 pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(hook) = &file.hooks.modify_query
+        && hook.rust_callback().is_some()
+    {
+        example_query_modification(hook)?;
+    }
+    #[cfg(not(feature = "python"))]
+    if matches!(file.hooks.modify_query, Some(SelectorSettings::Python(_))) {
+        return Err(
+            io::Error::other("Python modification hook requires the python Cargo feature").into(),
+        );
+    }
     if let Some(hook) = &file.hooks.query_context
         && hook.rust_callback().is_some()
     {
@@ -168,6 +221,7 @@ pub(super) async fn load_hooks(
         RoutedSelector,
         Option<CacheEligibility>,
         Option<QueryContextHook>,
+        Option<QueryModificationHook>,
         Option<ResultHook>,
         std::collections::BTreeMap<String, DatasetLoader>,
     ),
@@ -187,6 +241,7 @@ pub(super) async fn load_hooks(
     let runtime = if matches!(file.hooks.select_backend, SelectorSettings::Python(_))
         || matches!(file.cache.eligibility, Some(SelectorSettings::Python(_)))
         || matches!(file.hooks.query_context, Some(SelectorSettings::Python(_)))
+        || matches!(file.hooks.modify_query, Some(SelectorSettings::Python(_)))
         || matches!(file.hooks.process_result, Some(SelectorSettings::Python(_)))
         || file
             .application_contexts
@@ -232,6 +287,35 @@ pub(super) async fn load_hooks(
             {
                 return Err(io::Error::other(
                     "Python context hook requires the python Cargo feature",
+                )
+                .into());
+            }
+        }
+    };
+    let modification = match &file.hooks.modify_query {
+        None => None,
+        Some(hook @ (SelectorSettings::Rust(_) | SelectorSettings::RustReference(_))) => {
+            Some(example_query_modification(hook)?)
+        }
+        Some(SelectorSettings::Python(_hook)) => {
+            #[cfg(feature = "python")]
+            {
+                Some(
+                    register_python(
+                        runtime
+                            .as_ref()
+                            .expect("Python modification hook has a runtime"),
+                        base,
+                        _hook,
+                    )
+                    .await?
+                    .into(),
+                )
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                return Err(io::Error::other(
+                    "Python modification hook requires the python Cargo feature",
                 )
                 .into());
             }
@@ -415,7 +499,14 @@ pub(super) async fn load_hooks(
         };
         loaders.insert(name.clone(), loader);
     }
-    Ok((selector, eligibility, context, result_hook, loaders))
+    Ok((
+        selector,
+        eligibility,
+        context,
+        modification,
+        result_hook,
+        loaders,
+    ))
 }
 
 #[cfg(feature = "python")]
@@ -432,6 +523,97 @@ async fn register_python(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn compiled_table_rename_loads_from_configuration_without_python() {
+        let mut config: FileConfig =
+            serde_saphyr::from_str(include_str!("../../config/example.yml")).unwrap();
+        config.hooks.modify_query = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "rust", "callback": "example.modify_query.rename_table",
+                "params": {"from": "public.orders", "to": "reporting.orders_v2"}
+            }))
+            .unwrap(),
+        );
+        validate_names(&config).unwrap();
+        let (_, _, _, modifier, _, _) = load_hooks(
+            &config,
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"),
+        )
+        .await
+        .unwrap();
+        let parsed =
+            yasp::query::ParsedQuery::parse("SELECT o.id FROM public.orders AS o").unwrap();
+        let context = serde_json::Map::new();
+        let output = modifier
+            .unwrap()
+            .modify(
+                yasp::hooks::QueryModificationRequest {
+                    authenticated_user: "bi",
+                    frontend_database: "analytics",
+                    client_id: 1,
+                    sql: parsed.sql(),
+                    statement: parsed.statement(),
+                    dialect: parsed.dialect(),
+                    gateway_dialect: parsed.dialect(),
+                    default_target_dialect: None,
+                    query_context: &context,
+                    datasets: None,
+                },
+                std::time::Duration::from_secs(1),
+                4096,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.as_deref(),
+            Some("SELECT o.id FROM reporting.orders_v2 AS o")
+        );
+        for params in [
+            serde_json::json!({}),
+            serde_json::json!({"from":"orders","to":"reporting.orders_v2"}),
+            serde_json::json!({"from":"public.orders AS o","to":"reporting.orders_v2"}),
+            serde_json::json!({"from":"public.orders","to":"reporting.orders_v2; SELECT 1"}),
+            serde_json::json!({"from":"public.orders","to":"reporting.orders_v2","extra":true}),
+        ] {
+            config.hooks.modify_query = Some(
+                serde_json::from_value(serde_json::json!({
+                    "type":"rust", "callback":"example.modify_query.rename_table", "params":params,
+                }))
+                .unwrap(),
+            );
+            assert!(validate_names(&config).is_err());
+        }
+    }
+
+    #[test]
+    fn modification_requires_host_registration_and_python_feature() {
+        let base: FileConfig =
+            serde_saphyr::from_str(include_str!("../../config/example.yml")).unwrap();
+        let mut value = serde_json::to_value(base).unwrap();
+        value["hooks"]["modify_query"] =
+            serde_json::json!({"type":"rust","callback":"app.rewrite"});
+        let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
+        config.validate().unwrap();
+        assert!(
+            validate_names(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("unregistered hooks.modify_query")
+        );
+        #[cfg(not(feature = "python"))]
+        {
+            value["hooks"]["modify_query"] =
+                serde_json::json!({"type":"python","path":"rewrite.py","callback":"modify"});
+            let config: FileConfig = serde_json::from_value(value).unwrap();
+            assert!(
+                validate_names(&config)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires the python Cargo feature")
+            );
+        }
+    }
 
     #[tokio::test]
     async fn builtin_context_extractors_run_without_python_or_datasets() {
@@ -462,7 +644,7 @@ mod tests {
                 serde_json::json!({"query_context": {"type": "rust", "callback": callback}});
             let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
             validate_names(&config).unwrap();
-            let (_, _, context, _, _) = load_hooks(
+            let (_, _, context, _, _, _) = load_hooks(
                 &config,
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yml"),
             )

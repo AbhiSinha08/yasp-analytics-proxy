@@ -14,6 +14,7 @@ pub struct GatewayConfig {
     pub(crate) ast: crate::lineage::AstSettings,
     pub(crate) result_processing: Option<std::sync::Arc<crate::hooks::result::ResultProcessing>>,
     pub(crate) query_context_hook: Option<std::sync::Arc<crate::hooks::QueryContextHook>>,
+    pub(crate) query_modification_hook: Option<std::sync::Arc<crate::hooks::QueryModificationHook>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
     pub(crate) schema_discovery_compute: Option<String>,
     pub(crate) datasets: Option<crate::datasets::DatasetReader>,
@@ -41,6 +42,7 @@ impl GatewayConfig {
             decision_model: None,
             ast: crate::lineage::AstSettings::default(),
             query_context_hook: None,
+            query_modification_hook: None,
             result_processing: None,
             schema_discovery: None,
             schema_discovery_compute: None,
@@ -109,6 +111,15 @@ impl GatewayConfig {
         hook: impl Into<crate::hooks::QueryContextHook>,
     ) -> Self {
         self.query_context_hook = Some(std::sync::Arc::new(hook.into()));
+        self
+    }
+
+    /// Replace SQL after context extraction, before query IDs, lineage, and routing.
+    pub fn with_query_modification_hook(
+        mut self,
+        hook: impl Into<crate::hooks::QueryModificationHook>,
+    ) -> Self {
+        self.query_modification_hook = Some(std::sync::Arc::new(hook.into()));
         self
     }
 

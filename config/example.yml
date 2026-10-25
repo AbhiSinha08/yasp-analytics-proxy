@@ -185,6 +185,14 @@ hooks:
   #   callback: builtin.query_context.metabase
   #   params: {} # Optional native_dialect for mixed target dialects.
 
+  # Optional SQL replacement after context and parsing.
+  # modify_query:
+  #   type: rust
+  #   callback: example.modify_query.rename_table
+  #   params:
+  #     from: public.orders
+  #     to: reporting.orders_v2
+
   select_backend:
     type: rust
     callback: builtin.select_backend.passthrough

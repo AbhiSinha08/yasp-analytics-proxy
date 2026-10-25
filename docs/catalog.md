@@ -143,7 +143,8 @@ application may require a client dialect correction.
 ## AST lineage and masking
 
 The optional [AST lineage context](ast-lineage.md) reads the currently
-available catalog during local analysis and releases it before hooks or execution.
+available catalog during local analysis after query modification and releases it
+before selection, result hooks, or execution.
 It resolves output constituents and native JSON paths using stored columns/types;
 missing facts remain explicit unknowns. Views and generated columns are source
 boundaries. No schema generations are retained in lineage contexts, and no

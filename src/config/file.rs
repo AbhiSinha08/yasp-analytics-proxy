@@ -277,6 +277,18 @@ impl FileConfig {
                 }
             }
         }
+        if let Some(hook) = &self.hooks.modify_query {
+            match hook {
+                SelectorSettings::Rust(name) => validate_value("hooks.modify_query", name)?,
+                SelectorSettings::RustReference(hook) => {
+                    validate_value("hooks.modify_query.callback", &hook.callback)?
+                }
+                SelectorSettings::Python(hook) => {
+                    validate_value("modification hook path", &hook.path.to_string_lossy())?;
+                    validate_value("modification callback", &hook.callback)?;
+                }
+            }
+        }
         match &self.hooks.select_backend {
             SelectorSettings::Rust(name) => validate_value("hooks.select_backend", name)?,
             SelectorSettings::RustReference(hook) => {

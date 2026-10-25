@@ -110,18 +110,21 @@ shapes retain uncertainty.
 ```mermaid
 flowchart LR
     SQL[Ordinary data query] --> Context[Query context and incoming dialect]
-    Context --> Parse[Parse and validate]
-    Parse --> Analyze[Analyze with current catalog]
+    Context --> Parse[Parse incoming SQL]
+    Parse --> Modify[Optional SQL modification; reparse and validate]
+    Modify --> Analyze[Analyze effective AST with current catalog]
     Catalog[Available catalog] --> Analyze
     Analyze --> Select[Backend selection]
     Select --> Cache[Cache eligibility and execution]
 ```
 
-Analysis is local and happens before later hooks that receive a query.
-Rust hooks borrow the parsed query and `DataContexts`; Python hooks receive
+Analysis is local and runs after query modification, before selection, eligibility,
+and result hooks. Those Rust hooks borrow the effective query and `DataContexts`; Python hooks receive
 `query_ast` and `data_contexts`. The AST JSON follows `sqlparser`'s Serde format,
 so its shape depends on the parser version. The query-context callback runs before
 ordinary SQL parsing and does not receive an AST or lineage.
+The modification callback receives the incoming AST without lineage or data
+contexts; replacements get a new AST before this analysis runs.
 
 If a reference cannot be resolved, its source is represented as unknown. Missing
 catalog facts do not make an otherwise executable query fail. Analysis has depth,

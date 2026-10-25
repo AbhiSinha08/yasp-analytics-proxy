@@ -85,14 +85,16 @@ as application resources and registered before serving queries. Engine invocatio
 uses those registrations; it does not search for organization code inside src/.
 
 ```text
-Result pipeline; query rewrites, engine RBAC, and mandatory masks remain planned
+Result pipeline; engine RBAC and mandatory masks remain planned
 Organization application
   -> supply configuration and policy data
   -> register context derivation and Rust/Python hooks
   -> construct core engine
   -> authenticate request and expose available metadata
   -> derive organization context
-  -> run role selection (query rewrite remains planned)
+  -> parse and optionally modify SQL; validate the effective query
+  -> generate its ID and analyze optional lineage
+  -> run role selection
   -> look up the source-result cache
   -> on hit: load the cached source result
   -> on miss: execute the source query and cache its result
@@ -121,7 +123,7 @@ The runtime supports a bounded PostgreSQL simple-query subset over independently
 configured source-role routing, optional query context, shared application datasets,
 separate metadata discovery, cancellation, and an opt-in Redis result cache. PostgreSQL enforces source
 access. It preserves native text values and metadata with verified pool cleanup.
-Prepared statements, query/lifecycle hooks, engine RBAC
+Prepared statements, lifecycle hooks, engine RBAC
 interpretation, masking, and management UI remain planned. Bounded read-only,
 read-committed client transactions pin one physical backend until commit/rollback
 and bypass result caching.
@@ -371,7 +373,8 @@ organization RBAC policy.
 - `bind_query_context(state, f)` binds an async Rust callback returning
   `QueryContextOutput { dialect, values }` or `QueryContextError`. Python callbacks
   return the equivalent envelope. Metadata/setup recognition precedes invocation;
-  AST and lineage are available only in downstream hooks after parsing.
+  The modification hook receives the parsed AST afterward; lineage belongs to
+  downstream data contexts after modification.
 - Derive query context before parsing ordinary SQL, including on cache hits.
   The defaults are a 2-second wait, 65,536 encoded output bytes, and nesting 64.
   Errors, invalid output, timeout, and saturation deny the query; cancellation
@@ -384,13 +387,16 @@ organization RBAC policy.
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
 - Python backend selection receives a bounded dictionary of authenticated frontend
-  user, client/query IDs, original SQL, parser JSON AST, output data contexts, and
+  user, client/query IDs, effective SQL, parser JSON AST, output data contexts, and
   derived application context, with application-owned params. Return a configured
   target/login dictionary or None to deny. It receives no credentials or Rust
   driver objects. Typed binds require later contracts. Result hooks use native batches;
   driver objects stay internal. Rust selectors inspect the borrowed tree through `query.statement()`.
-- Optional before_query callbacks may propose SQL rewrites; revalidate them and
-  preserve parameter positions/types. Application code owns policy interpretation.
+- Optional `hooks.modify_query` callbacks receive original SQL, its AST, context,
+  and datasets without lineage or a query ID. They return replacement SQL or no
+  change. Reparse and validate replacements before generating IDs, analyzing
+  lineage, selecting a backend, or checking cache eligibility. Application code
+  owns transformation rules; see [query modification](query-modification.md).
 - Run selection before cache lookup, including on hits. It must not open connections
   itself. The Rust backend component handles reuse or creation using the decision.
 - Result callbacks preserve column schema and retained-row ordering; they may filter rows. Rust callbacks are
@@ -402,7 +408,8 @@ organization RBAC policy.
 - Register application-provided Rust hooks and external Python file/function references
   at startup. The feature-gated `hooks::python` platform exposes reusable registration
   and asynchronous invocation of trusted synchronous callbacks; backend selection
-  and context derivation use the runtime. Result integration uses native bounded batches; query/lifecycle integration remains planned.
+  context derivation, and query modification use the runtime. Result integration
+  uses native bounded batches; lifecycle integration remains planned.
   Python examples live under hooks/examples and are not embedded in the binary.
   One dedicated worker runs registration and invocation outside Tokio. Python 3.12
   CPU work shares the global interpreter lock (GIL).
@@ -542,7 +549,8 @@ not a prerequisite for each backend.
 The shared [schema catalog](catalog.md) supplies qualified relation/column
 coordinates and native types through periodically refreshed generations. Optional
 AST lineage resolves output constituents and native paths from the currently
-available catalog, releasing it before hooks and execution. Missing metadata remains
+available catalog after query modification, releasing it before selection/result
+hooks and execution. Missing metadata remains
 explicit uncertainty. Dictionary classification and dynamic masking remain separate
 stages; metadata snapshots alone do not establish output lineage.
 

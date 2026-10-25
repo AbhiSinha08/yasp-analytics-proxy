@@ -16,6 +16,7 @@ pub struct DataContextsSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {
     pub query_context: Option<SelectorSettings>,
+    pub modify_query: Option<SelectorSettings>,
     pub process_result: Option<SelectorSettings>,
     pub select_backend: SelectorSettings,
     pub python: PythonSettings,
@@ -25,6 +26,7 @@ impl Default for HooksSettings {
     fn default() -> Self {
         Self {
             query_context: None,
+            modify_query: None,
             process_result: None,
             select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
             python: PythonSettings::default(),

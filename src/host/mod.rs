@@ -6,6 +6,9 @@ mod hooks;
 #[path = "../../hooks/examples/datasets.rs"]
 mod datasets_example;
 
+#[path = "../../hooks/examples/query_modifier.rs"]
+mod query_modifier_example;
+
 use std::{env, io, path::PathBuf, sync::Arc};
 use tokio::{net::TcpListener, runtime::Runtime};
 use yasp::{backend::PostgresBackends, cache::RedisCache, datasets::Datasets, gateway, logger};
@@ -27,7 +30,7 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host = load_config(&path)?;
     logger::init_with_level(&host.log_level)?;
     Runtime::new()?.block_on(async {
-        let (selector, eligibility, context, result_hook, loaders) =
+        let (selector, eligibility, context, modification, result_hook, loaders) =
             load_hooks(&host.file, &path).await?;
         let datasets = match &host.application_contexts_url {
             Some(url) => {
@@ -52,6 +55,11 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let gateway = if let Some(context) = context {
                 gateway.with_query_context_hook(context)
+            } else {
+                gateway
+            };
+            let gateway = if let Some(hook) = modification {
+                gateway.with_query_modification_hook(hook)
             } else {
                 gateway
             };

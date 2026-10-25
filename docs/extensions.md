@@ -31,12 +31,13 @@ Query-hook names remain under [yasp::hooks](../src/hooks.rs); dataset APIs are u
 Reusable repository callbacks are under [hooks/builtin](../hooks/builtin),
 and Python examples are under [hooks/examples](../hooks/examples).
 
-| Stage             | Binding and data                                                                                                                                           | Result/failure policy                                                                                                                                                                           |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Query context     | `bind_query_context(state, f)` / `with_query_context_hook`; byte-bounded raw SQL, frontend identity, gateway and optional common target dialect, datasets. | `QueryContextOutput { dialect, values }`; errors reject the query. No AST, lineage, or final query ID is available yet.                                                                         |
-| Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context.              | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
-| Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                                    | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
-| Dataset loading   | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                                         | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
+| Stage              | Binding and data                                                                                                                                           | Result/failure policy                                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Query context      | `bind_query_context(state, f)` / `with_query_context_hook`; byte-bounded raw SQL, frontend identity, gateway and optional common target dialect, datasets. | `QueryContextOutput { dialect, values }`; errors reject the query. No AST, lineage, or final query ID is available yet.                                                                         |
+| Query modification | `bind_modify_query(state, f)` / `with_query_modification_hook`; incoming SQL and AST, dialect, identity, query context, datasets.                          | Optional replacement SQL; reparse and validate before IDs, lineage, routing, and caching. Errors reject without fallback. No lineage or data contexts in the request.                           |
+| Selection          | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context.              | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
+| Cache eligibility  | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                                    | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
+| Dataset loading    | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                                         | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
 
 Library hosts can create `backend::ConnectionBudget::new(total)` and pass it to
 `PostgresBackend::with_budget`, `PostgresBackends::with_bindings_and_budget`, or an
@@ -55,7 +56,7 @@ driver objects. Authenticated frontend identity stays separate from derived cont
 SQL comments are untrusted hints;
 BI viewer identity and role policy require an application-defined trust contract.
 
-When datasets are configured, context, selection, and eligibility requests also
+When datasets are configured, context, modification, selection, and eligibility requests also
 provide an optional `DatasetReader`. `get(name, key)` reads one field,
 `get_many(name, keys)` reads up to 64 fields, and `read(name)` reads the complete
 dataset within the same limits. Missing fields are omitted from `get_many`;
@@ -71,7 +72,7 @@ dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
 `hooks.query_context` runs once after frontend metadata/setup recognition and before
 ordinary SQL parsing, including on cache hits. Metadata recognition always uses the
 gateway profile and is independent of remarks or hook output. A recognized request
-does not invoke query context, selection, eligibility, or result processing.
+does not invoke query context, modification, selection, eligibility, or result processing.
 
 The hook returns `{"dialect": "postgresql", "values": {"user_id": 7}}`. Both fields
 are optional: the dialect defaults to the gateway and values to an empty object.
@@ -126,9 +127,30 @@ def query_context(request, params):
     return {"dialect": "postgresql", "values": {"user_id": 7}}
 ```
 
-Only selection, eligibility, and result hooks receive the parsed AST and output
-data contexts. A future translator compares the returned incoming dialect with
+Modification receives the incoming parsed AST without lineage. Selection,
+eligibility, and result hooks receive the effective AST and downstream data
+contexts. A future translator compares the returned incoming dialect with
 the selected target dialect; see [planned translation](multi-engine.md#planned-sql-translation).
+
+## Query modification
+
+`bind_modify_query(state, f)` binds an async Rust callback returning
+`Result<Option<String>, QueryModificationError>`. Python uses
+`modify_query(request, params)` returning a SQL string or `None`. Register it with
+`GatewayConfig::with_query_modification_hook` or `hooks.modify_query`.
+
+The request contains original SQL, its parsed AST (`statement` in Rust,
+`query_ast` in Python), the resolved/gateway/common target dialects, authenticated
+frontend identity/database, client ID, derived query context, and scoped datasets.
+It has no query ID, selected backend, lineage, or `data_contexts`. Replacement SQL
+is reparsed and validated in the resolved dialect; downstream lineage, selection,
+cache eligibility, and execution consume the effective query. No change preserves
+the original bytes. Failures reject the query without fallback.
+
+The hook runs once per ordinary query, including cache hits and transaction source
+queries. `gateway.async_hook_timeout_ms` and existing Python bounds apply.
+See [query modification](query-modification.md) for configuration, errors, and
+table/subquery/filter examples.
 
 ## Result processing
 
@@ -234,15 +256,15 @@ The YAML host configures it under `data_contexts.decision_model`. Result hooks r
 named model outcomes and AST lineage. Dictionary matching remains future work;
 lineage performs no classification.
 
-Query rewrites, lifecycle hooks, and engine policy/masking
-have no active runtime contracts or accepted configuration yet. This is
-the intended direction, not the current [query pipeline](architecture.md#query-flow):
+Lifecycle hooks, target-specific translation, and engine policy/masking remain
+future work. The diagram combines implemented query modification/result callbacks
+with those planned stages; see the current [query pipeline](architecture.md#query-flow):
 
 ```mermaid
 flowchart TD
-    Context[Application context] --> Rewrite[Optional query rewrite]
-    Rewrite --> Validate[Revalidate SQL and binds]
-    Validate --> Lineage[Recompute lineage for rewritten SQL]
+    Context[Application context and incoming AST] --> Rewrite[Optional query modifier]
+    Rewrite --> Validate[Reparse and validate effective SQL]
+    Validate --> Lineage[Analyze lineage for effective SQL]
     Lineage --> Route[Role selection and configured bounds]
     Route --> Translate[Translate when incoming and target dialects differ; validate effective SQL and lineage]
     Translate --> Source[Load source result from cache or backend]
@@ -262,8 +284,8 @@ immutably. No stage may replace authenticated identity, exceed configured bounds
 bypass mandatory policy, or change transaction/portal decisions already pinned for
 execution. These stage contracts remain future work.
 
-Rewrites must preserve parameter positions/types and repeat dialect/read-only
-validation. Result stages must preserve schema and ordering, use lossless native
+Future prepared-query rewrites must preserve parameter positions/types and repeat
+dialect/read-only validation. Result stages must preserve schema and ordering, use lossless native
 values, and handle NULLs and duplicate column names by ordinal/metadata. Optional
 transformations precede mandatory masks; later hooks cannot restore raw values.
 Run policy and masking on both cache hits and misses. A partially emitted result

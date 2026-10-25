@@ -4,6 +4,7 @@
 mod cache;
 pub(crate) mod payload;
 mod query_context;
+mod query_modification;
 pub(crate) mod result;
 mod selection;
 
@@ -20,6 +21,10 @@ pub use cache::{
 pub use query_context::{
     QueryContextCallback, QueryContextError, QueryContextHook, QueryContextOutput,
     QueryContextRequest, bind_query_context,
+};
+pub use query_modification::{
+    QueryModificationCallback, QueryModificationError, QueryModificationHook,
+    QueryModificationRequest, bind_modify_query,
 };
 pub use result::{
     ResultBatch, ResultCallback, ResultColumn, ResultDataContexts, ResultHook, ResultHookError,

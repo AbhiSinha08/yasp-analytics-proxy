@@ -29,8 +29,8 @@ explicit provider param; MBQL and unknown remarks use the gateway. Redash defaul
 to the gateway and supports an explicit dialect override for valid remarks.
 
 Parsing and read-only validation use that incoming dialect. Current PostgreSQL
-and Snowflake adapters forward accepted data SQL unchanged. A syntactically valid
-query may therefore fail on a different backend dialect. Query context, route
+and Snowflake adapters forward validated effective data SQL after optional application
+modification. A syntactically valid query may therefore fail on a different backend dialect. Query context, modification, route
 authorization, and result processing run on raw cache hits as well as misses.
 The cache scope includes the incoming dialect and execution revision.
 
@@ -40,7 +40,8 @@ After target/login/compute selection, compare `query_context`'s resolved incomin
 dialect with the target adapter's dialect. Equal dialects retain SQL; different
 dialects require translation within the supported subset, regardless of client
 or native/generated labels. Unsupported translations must fail explicitly.
-The application query modifier is a separate earlier stage after initial parsing.
+The [application query modifier](query-modification.md) runs after initial parsing,
+before lineage and selection, and emits SQL in the resolved incoming dialect.
 
 For a Redshift gateway and PostgreSQL target, Metabase MBQL and unmarked SQL use
 Redshift input and will require Redshift-to-PostgreSQL translation. Explicit

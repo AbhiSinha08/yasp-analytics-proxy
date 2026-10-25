@@ -3,7 +3,10 @@
 use super::{FrontendProfile, protocol_error, session::connection};
 use crate::backend::execution::Execution;
 use crate::{
-    cache::RedisCache, config::GatewayConfig, datasets::DatasetReader, hooks::QueryContextHook,
+    cache::RedisCache,
+    config::GatewayConfig,
+    datasets::DatasetReader,
+    hooks::{QueryContextHook, QueryModificationHook},
     logger,
 };
 use async_trait::async_trait;
@@ -71,6 +74,7 @@ pub(super) async fn serve_sessions(
     drop(config.password);
     let cache = config.cache;
     let query_context_hook = config.query_context_hook;
+    let query_modification_hook = config.query_modification_hook;
     let result_processing = config.result_processing;
     let datasets = config.datasets;
     let (stopping, stopped) = watch::channel(false);
@@ -83,6 +87,7 @@ pub(super) async fn serve_sessions(
         decision_model: config.decision_model,
         ast: config.ast,
         query_context_hook: query_context_hook.clone(),
+        query_modification_hook: query_modification_hook.clone(),
         result_processing: result_processing.clone(),
         datasets,
         stopped,
@@ -148,6 +153,9 @@ pub(super) async fn serve_sessions(
     if let Some(hook) = &query_context_hook {
         hook.shutdown();
     }
+    if let Some(hook) = &query_modification_hook {
+        hook.shutdown();
+    }
     if let Some(processing) = &result_processing {
         processing.shutdown();
     }
@@ -181,6 +189,7 @@ pub(super) struct Credentials {
     pub(super) ast: crate::lineage::AstSettings,
     pub(super) result_processing: Option<Arc<crate::hooks::result::ResultProcessing>>,
     pub(super) query_context_hook: Option<Arc<QueryContextHook>>,
+    pub(super) query_modification_hook: Option<Arc<QueryModificationHook>>,
     pub(super) datasets: Option<DatasetReader>,
     pub(super) stopped: watch::Receiver<bool>,
     pub(super) server_version: String,

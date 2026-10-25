@@ -1,4 +1,5 @@
-//! Ordered simple-query stages: metadata/setup, query context, parsing, routing, cache, execution.
+//! Ordered simple-query stages: metadata/setup, context, parsing, modification,
+//! effective-query validation and IDs, then shared lineage/routing/cache/execution.
 
 use super::{FrontendSocket, protocol_error, server::Credentials};
 use crate::{
@@ -7,13 +8,15 @@ use crate::{
     config::GatewaySettings,
     discovery::{SessionSettings, SetupResponse},
     execution::Transaction,
-    hooks::{QueryContextOutput, QueryContextRequest},
+    hooks::{
+        QueryContextOutput, QueryContextRequest, QueryModificationError, QueryModificationRequest,
+    },
     query::{ParsedQuery, QueryError},
 };
 use futures::{SinkExt, channel::oneshot};
 use pgwire::{
     api::ClientInfo,
-    error::PgWireResult,
+    error::{PgWireError, PgWireResult},
     messages::{
         PgWireBackendMessage,
         data::{DataRow, FieldDescription, RowDescription},
@@ -21,7 +24,7 @@ use pgwire::{
         startup::ParameterStatus,
     },
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{io, time::Duration};
 use tokio::time::timeout;
@@ -149,13 +152,17 @@ impl<'backend> QuerySession<'_, 'backend> {
             }
             Err(error) => {
                 tracing::error!(client_id = self.client_id, "query parsing failed");
-                let code = match error {
-                    QueryError::Syntax => "42601",
-                    QueryError::TooLarge | QueryError::TooComplex => "54000",
-                    _ => "0A000",
-                };
-                return Err(protocol_error("ERROR", code, &error.to_string()));
+                return Err(query_error(error));
             }
+        };
+        let query = if frontend_request {
+            query
+        } else {
+            let query = self
+                .modify_query(query, &query_context.values, &mut cancel)
+                .await?;
+            query.validate_read_only().map_err(query_error)?;
+            query
         };
         let query_id = query.query_id();
         let client_id = self.client_id;
@@ -217,6 +224,57 @@ impl<'backend> QuerySession<'_, 'backend> {
         result
     }
 
+    async fn modify_query(
+        &self,
+        query: ParsedQuery,
+        query_context: &Map<String, Value>,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> PgWireResult<ParsedQuery> {
+        if cancel.try_recv().ok().flatten().is_some() {
+            return Err(protocol_error("ERROR", "57014", "query cancelled"));
+        }
+        let Some(hook) = &self.source.query_modification_hook else {
+            return Ok(query);
+        };
+        let mut stopped = self.source.stopped.clone();
+        let request = QueryModificationRequest {
+            authenticated_user: &self.source.username,
+            frontend_database: &self.source.database,
+            client_id: self.client_id,
+            sql: query.sql(),
+            statement: query.statement(),
+            dialect: query.dialect(),
+            gateway_dialect: self.source.profile.dialect(),
+            default_target_dialect: self.execution.default_target_dialect(),
+            query_context,
+            datasets: self.source.datasets.as_ref(),
+        };
+        let replacement = tokio::select! {
+            biased;
+            _ = cancel => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+            _ = stopped.wait_for(|stopped| *stopped) => return Err(protocol_error("ERROR", "57014", "query cancelled")),
+            result = hook.modify(
+                request,
+                Duration::from_millis(u64::from(self.settings.async_hook_timeout_ms)),
+                self.settings.max_sql_bytes,
+            ) => result.map_err(|error| {
+                let code = match error {
+                    QueryModificationError::Denied => "42501",
+                    QueryModificationError::PayloadTooLarge => "54000",
+                    _ => "XX000",
+                };
+                protocol_error("ERROR", code, "query modification unavailable")
+            })?,
+        };
+        match replacement {
+            None => Ok(query),
+            Some(sql) => {
+                ParsedQuery::parse_with_dialect(&sql, self.settings.max_sql_bytes, query.dialect())
+                    .map_err(query_error)
+            }
+        }
+    }
+
     async fn derive_query_context(
         &self,
         sql: &str,
@@ -247,6 +305,15 @@ impl<'backend> QuerySession<'_, 'backend> {
             }
         }
     }
+}
+
+fn query_error(error: QueryError) -> PgWireError {
+    let code = match error {
+        QueryError::Syntax => "42601",
+        QueryError::TooLarge | QueryError::TooComplex => "54000",
+        _ => "0A000",
+    };
+    protocol_error("ERROR", code, &error.to_string())
 }
 
 async fn send_setup_response(

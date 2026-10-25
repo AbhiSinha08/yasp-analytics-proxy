@@ -96,12 +96,14 @@
 - [x] **AST Based Data Context**
   - [x] **AST hook access** — Share the existing immutable Rust AST and its bounded sqlparser JSON representation with applicable Python hooks after parsing.
   - [x] **Column binding and lineage** — Analyze the currently available catalog for PostgreSQL, Snowflake, and Redshift; resolve output constituents, stars, aliases, joins, CTEs, subqueries, functions and native JSON paths, preserving known sources alongside unknowns.
-  - [x] **Lineage cache association** — Atomically associate bounded output lineage with complete raw result fills, alone or with model decisions, using the same TTL. Current analysis is recomputed before hooks.
+  - [x] **Lineage cache association** — Atomically associate bounded output lineage with complete raw result fills, alone or with model decisions, using the same TTL. Current analysis runs after optional modification and before other hooks.
 - [x] **Backend Database Schema Caching** — Shared in-memory schema generations with bounded periodic refresh.
 - [x] **Redshift Gateway**
   - [x] **Frontend profile and authentication** — Share bounded pgwire handling, use driver-supported TLS password authentication, and advertise only supported capabilities; simple-query/TLS lifecycle and captured bundled JDBC checks pass.
   - [x] **Client compatibility acceptance** — Validate the pinned Redshift JDBC driver in simple-query mode with compression disabled, including metadata, native results, and recovery.
-- [ ] **Query Modification Hook** - Modify query after context extraction and before cache eligibility and query ID generation
+- [x] **Query Modification Hook** — Modify query after context extraction and before cache eligibility and query ID generation.
+  - [x] **Rust/Python platform** — Immutable incoming AST, query context, application state/params, and scoped datasets; no lineage or data contexts in modification requests.
+  - [x] **Shared downstream behavior** — Routing, lineage, cache identity/eligibility, transactions, and result processing consume effective SQL and AST.
 - [x] **Result processing hooks** — Bounded Rust/Python text edits, NULL replacement, and stable row filtering before client output.
   - [x] **Native batch contracts** — Lazy Python column access, scoped application/dataset context, output AST/model contexts, validation, and aggregate byte bounds.
   - [x] **Shared execution and replay** — Process source results, transactions, and raw cache hits while preserving raw cache entries and reporting emitted row counts.

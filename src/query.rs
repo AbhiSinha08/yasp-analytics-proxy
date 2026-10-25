@@ -1,4 +1,4 @@
-//! Dialect-aware query syntax and read-only inspection. Original SQL and the
+//! Dialect-aware query syntax and read-only inspection. Effective SQL and the
 //! immutable parsed tree stay together through routing, caching, and execution.
 
 mod fingerprint;
@@ -40,12 +40,12 @@ impl SqlDialect {
     }
 }
 
-/// Original SQL and its single statement. Access is immutable so the
+/// SQL and its single statement. Access is immutable so the
 /// inspected tree cannot diverge from the SQL sent to the database.
 pub struct ParsedQuery {
     sql: String,
     statement: Statement,
-    query_id: String,
+    query_id: std::sync::OnceLock<String>,
     dialect: SqlDialect,
     serialized_ast: std::sync::OnceLock<serde_json::Value>,
 }
@@ -94,7 +94,6 @@ impl ParsedQuery {
         }) {
             return Err(QueryError::Unsupported);
         }
-        let query_id = query_id(sql, &tokens);
         let mut statements = Parser::new(parser_dialect)
             .with_recursion_limit(64)
             .with_tokens_with_locations(tokens)
@@ -108,7 +107,7 @@ impl ParsedQuery {
         Ok(Self {
             sql: sql.to_owned(),
             statement: statements.remove(0),
-            query_id,
+            query_id: std::sync::OnceLock::new(),
             dialect,
             serialized_ast: std::sync::OnceLock::new(),
         })
@@ -124,11 +123,16 @@ impl ParsedQuery {
 
     /// Stable lowercase SHA-256 identifier for this query's normalized tokens.
     pub fn query_id(&self) -> &str {
-        &self.query_id
+        self.query_id.get_or_init(|| {
+            // This immutable SQL has already passed tokenization and all bounds.
+            let tokens = bounded_tokens(&self.sql, self.sql.len(), self.dialect)
+                .expect("parsed SQL remains valid for fingerprinting");
+            query_id(&self.sql, &tokens)
+        })
     }
 
-    /// Rust extensions can borrow this same tree. A future SQL rewrite must
-    /// construct a new query and validate its effective SQL before execution.
+    /// Rust extensions borrow this tree. Replacements construct a new query so
+    /// the inspected AST always describes the SQL sent to the backend.
     pub fn statement(&self) -> &Statement {
         &self.statement
     }

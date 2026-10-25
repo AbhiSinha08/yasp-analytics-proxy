@@ -1,8 +1,8 @@
-"""No-op illustration of proposed signatures; not loaded by YASP."""
+"""Query no-op and proposed result/lifecycle signatures; not loaded by default."""
 
 
-def before_query(context, sql, parameters):
-    """Leave SQL and parameter semantics unchanged."""
+def modify_query(request, params):
+    """Preserve original SQL and its AST."""
     return None
 
 
