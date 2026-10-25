@@ -1,3 +1,10 @@
+//! Trace output expressions back through table aliases, CTEs, and subqueries.
+//!
+//! The result is a set of source columns for each output position, not a list of
+//! every column read by the query. Value arguments contribute sources; predicates
+//! do not. Catalog gaps and analysis limits retain explicit unknowns rather than
+//! guessing a physical source. No source query is executed during this traversal.
+
 mod expressions;
 
 use super::{AstDataContext, ColumnLineage, LineageSource, PathSegment, dialect};

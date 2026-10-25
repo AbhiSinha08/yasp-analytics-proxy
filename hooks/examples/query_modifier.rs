@@ -14,8 +14,8 @@ pub fn rename_table<'a>(
     mapping: Arc<TableRename>,
 ) -> BoxFuture<'a, Result<Option<String>, QueryModificationError>> {
     Box::pin(async move {
-        // ponytail: qualified names and explicit aliases only; general names need
-        // application scope resolution to distinguish CTEs and column qualifiers.
+        // Qualified names avoid mistaking a CTE for a physical table. Explicit
+        // aliases keep existing column references valid after the table is renamed.
         if mapping.from.0.len() < 2 {
             return Err(QueryModificationError::Failed);
         }

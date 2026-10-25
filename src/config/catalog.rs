@@ -1,3 +1,7 @@
+//! Convert YAML catalog settings into validated runtime limits and durations.
+//! Defaults come from the catalog component so loading YAML and constructing a
+//! library host use the same bounds.
+
 use super::ConfigError;
 use crate::catalog::CatalogSettings;
 use serde::{Deserialize, Serialize};

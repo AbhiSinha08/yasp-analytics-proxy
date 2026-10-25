@@ -1,4 +1,9 @@
 //! One post-capture batch stage. Source values and cache sidecars stay raw.
+//!
+//! Collect complete rows into bounded batches, run the application's result hook,
+//! then validate and emit retained rows. A callback failure never sends that batch
+//! as raw fallback. Track the emitted count separately because filtering changes
+//! the client's completion count without changing the cached source result.
 use crate::{
     backend::result::{ExecutionError, ExecutionResult, ResultEvent},
     config::GatewaySettings,

@@ -1,3 +1,9 @@
+//! Source schema definitions stored in one immutable catalog generation.
+//!
+//! Relations and columns use names as logical coordinates so refreshed facts can
+//! be matched by discovery and lineage. Optional properties distinguish an unknown
+//! fact from a reported false/empty value; these records contain no application rows.
+
 use super::SourceIdentity;
 use std::{
     collections::{BTreeMap, BTreeSet},

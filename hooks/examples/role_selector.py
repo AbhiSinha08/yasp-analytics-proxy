@@ -2,7 +2,7 @@
 
 
 def select_backend(request, params):
-    """Show policy-based routing with a secondary route as the demo fallback."""
+    """Route by application context, using primary/analyst as the demo fallback."""
     fallback = {"target": "primary", "backend_login": "analyst"}
     # return None  # Return None to deny backend selection.
 

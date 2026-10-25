@@ -150,8 +150,8 @@ struct State {
     last_error: Option<CatalogError>,
 }
 
-/// Hosts can share this handle between listeners and later AST binders. Retaining
-/// an Arc<Snapshot> pins a generation even while the catalog refreshes.
+/// Hosts share this handle between listeners and output-lineage analysis. Retaining
+/// an `Arc<Snapshot>` keeps that immutable generation alive during catalog refresh.
 pub struct Catalog {
     source: Arc<Source>,
     settings: CatalogSettings,

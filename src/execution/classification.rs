@@ -1,4 +1,10 @@
 //! Shared bounded classification and result-processing coordinator.
+//!
+//! Hold a bounded prefix of raw rows while gathering column samples. Resolve model
+//! outcomes (or load their cache association) before optional result callbacks see
+//! those rows. A small channel and frontend write deadlines propagate backpressure
+//! to the source instead of collecting the whole result. Cancellation still waits
+//! for adapter-owned source cleanup.
 use super::processing::{ProcessingRequest, Processor};
 use crate::{
     backend::result::{ExecutionError, ExecutionResult, ResultEvent},

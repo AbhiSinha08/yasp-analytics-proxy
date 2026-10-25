@@ -1,5 +1,11 @@
 //! Ordered simple-query stages: metadata/setup, context, parsing, modification,
 //! effective-query validation and IDs, then shared lineage/routing/cache/execution.
+//!
+//! Recognized BI metadata requests read the catalog; supported setup/control SQL
+//! changes frontend state. Both bypass application data-query callbacks. Ordinary
+//! SQL first derives its incoming dialect, then builds an AST (a structured SQL
+//! tree). A replacement from the modification hook is reparsed and validated
+//! before downstream code sees it, keeping SQL, query IDs, and lineage consistent.
 
 use super::{FrontendSocket, protocol_error, server::Credentials};
 use crate::{

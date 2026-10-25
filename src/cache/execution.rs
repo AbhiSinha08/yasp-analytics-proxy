@@ -1,4 +1,9 @@
 //! Cache policy wraps ordinary execution after routing and before admission.
+//!
+//! A validated hit bypasses source connections but still runs result processing.
+//! On a miss, raw source events are captured before application edits. Publication
+//! requires complete source success and cleanup. Partial, failed, and oversized
+//! results never become reusable entries.
 use super::{
     HEADER_BYTES, MAGIC, RedisCache,
     response::{self, CaptureSink},

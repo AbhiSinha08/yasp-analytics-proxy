@@ -1,5 +1,11 @@
 //! Ordered execution policy shared by the pgwire frontend profiles. Source
 //! representation, session SQL, admission, and cleanup belong to backend adapters.
+//!
+//! Ordinary SQL arrives parsed and optionally modified by the frontend. This layer
+//! derives output lineage, asks the application for a route, and validates it even
+//! when a cached result is available. Explicit transactions retain one source route
+//! and bypass the cache; other queries enter the shared cache/execution path.
+//! Both paths apply the same optional classification and result callbacks.
 
 pub(crate) mod classification;
 pub(crate) mod processing;
@@ -38,6 +44,8 @@ pub(crate) struct ExecutionServices<'a> {
     pub datasets: Option<&'a DatasetReader>,
 }
 
+/// One client's execution state, borrowed for the current request. The separate
+/// backend lifetime lets an explicit transaction retain its source across queries.
 pub(crate) struct QuerySession<'a, 'backend> {
     pub execution: &'backend Execution,
     pub settings: &'a GatewaySettings,

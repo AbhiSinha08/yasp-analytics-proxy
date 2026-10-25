@@ -1,4 +1,10 @@
 //! Occupied source capacity across all adapters. Permits follow resource lifetime.
+//!
+//! Each allocation checks both a registry-wide total and a local group limit under
+//! one lock. A permit is an owned slot: dropping it returns capacity and wakes
+//! waiters. Adapters keep it through creation, active work, and cleanup; an idle
+//! pooled PostgreSQL connection still occupies capacity until it closes.
+//! Reclamation callbacks can close idle resources without interrupting active work.
 use std::{
     collections::HashMap,
     io,

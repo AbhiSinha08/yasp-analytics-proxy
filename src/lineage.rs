@@ -87,8 +87,7 @@ pub struct ColumnLineage {
     pub sources: Vec<LineageSource>,
 }
 
-/// No dictionary or policy decisions are stored here. Fields may be added to
-/// per-column records when another data-context capability is implemented.
+/// Static output sources and uncertainty; no dictionary or policy decisions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct AstDataContext {
     pub columns: Vec<ColumnLineage>,

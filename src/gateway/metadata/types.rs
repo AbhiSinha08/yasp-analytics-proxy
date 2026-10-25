@@ -1,3 +1,10 @@
+//! Describe source columns in the type vocabulary expected by PostgreSQL clients.
+//!
+//! OIDs are PostgreSQL type identifiers; JDBC codes describe types to Java clients.
+//! Keep native PostgreSQL identifiers when available, otherwise map the supported
+//! source subset. Unknown types fail explicitly instead of advertising guessed
+//! metadata. This module describes columns; it does not convert result values.
+
 use crate::{
     backend::result::{ExecutionError, ExecutionResult},
     catalog::Column,

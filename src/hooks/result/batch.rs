@@ -1,3 +1,10 @@
+//! Editable result batches that preserve column metadata and source row order.
+//!
+//! A row keeps its original wire bytes and indexes into them. Edits are stored
+//! separately, so reading one field does not require decoding every column.
+//! Reservations hold byte-budget permits for buffers and copies until ownership
+//! ends. Filtering removes rows; editing cannot add rows or change column types.
+
 use super::ResultHookError;
 use bytes::Bytes;
 use std::{mem::size_of, ops::Range, sync::Arc};
@@ -18,6 +25,8 @@ impl ResultColumn {
     }
 }
 
+/// Owns the batch's share of the aggregate memory budget. Dropping the semaphore
+/// permit returns its bytes, including when a callback fails or is cancelled.
 pub(crate) struct Reservation {
     budget: Arc<Semaphore>,
     permit: Option<OwnedSemaphorePermit>,

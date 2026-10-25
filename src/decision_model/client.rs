@@ -1,3 +1,10 @@
+//! Send bounded column samples to the configured classification HTTP endpoint.
+//!
+//! Requests contain all configured questions for one column. Concurrency permits
+//! remain held through response consumption; malformed, oversized, or failed
+//! responses produce an unavailable outcome. Callers decide whether uncertainty
+//! fails the query. Classification itself never edits values or grants access.
+
 use super::*;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -9,6 +16,8 @@ use tokio::sync::Semaphore;
 // through response consumption and cancellation.
 static REQUESTS: Semaphore = Semaphore::const_new(8);
 
+/// Reusable HTTP client and validated questions for raw-column classification.
+/// Its fingerprint associates cached outcomes with the model request settings.
 pub struct DecisionModel {
     settings: DecisionModelSettings,
     client: reqwest::Client,

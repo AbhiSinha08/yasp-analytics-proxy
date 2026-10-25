@@ -1,4 +1,10 @@
 //! Shared, bounded result caching for every backend and pgwire frontend.
+//!
+//! Entries contain complete raw frontend responses, before caller-specific result
+//! edits. A hit must match the source, authenticated identity, and session settings;
+//! it then passes through current result processing. Redis errors behave as misses.
+//! Buffer reservations account for serialized data and its in-process copies.
+//! Execution/capture and response validation live in the neighboring modules.
 
 mod classification;
 mod execution;
@@ -246,8 +252,8 @@ impl RedisCache {
 
     async fn command(&self, cmd: Cmd) -> Option<Value> {
         let deadline = REDIS_OPERATION_TIMEOUT;
-        // ponytail: serialize Redis commands for bounded pending payloads; allow
-        // concurrent multiplexed commands only when measured throughput needs it.
+        // Run one command at a time so pending Redis payloads stay within the
+        // reserved buffer budget, including when a request is cancelled.
         let operation = async {
             let mut state = self.connection.lock().await;
             // Taking ownership ensures cancellation/timeout closes the sole handle

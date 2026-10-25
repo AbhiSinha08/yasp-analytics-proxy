@@ -142,6 +142,9 @@ pub struct Datasets {
 }
 
 impl Datasets {
+    /// Load fresh data for every registered name before returning a serving owner.
+    /// Scheduled refreshes retain the previous published value on failure. Keep
+    /// this owner alive while serving, then call `shutdown` to stop refresh work.
     pub async fn start(
         settings: ApplicationContextsSettings,
         url: &str,
@@ -173,8 +176,8 @@ impl Datasets {
             let loaders = datasets.loaders.clone();
             let mut stop = datasets.stopped.subscribe();
             let worker = tokio::spawn(async move {
-                // ponytail: refresh datasets serially per process; add parallelism
-                // only if measured loader delays require an aggregate load budget.
+                // Serial refresh keeps only one dataset load in flight per process.
+                // Slow loaders delay other refreshes; readers keep the last good data.
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 loop {
                     tokio::select! {
