@@ -44,6 +44,19 @@ impl Backends {
         }
     }
 
+    pub(crate) fn default_target_dialect(&self) -> Option<crate::query::SqlDialect> {
+        match (
+            self.postgres
+                .as_ref()
+                .is_some_and(|pg| pg.selections().next().is_some()),
+            !self.snowflake.is_empty(),
+        ) {
+            (true, false) => Some(crate::query::SqlDialect::Postgresql),
+            (false, true) => Some(crate::query::SqlDialect::Snowflake),
+            _ => None,
+        }
+    }
+
     fn selections(&self) -> impl Iterator<Item = &BackendSelection> {
         self.postgres
             .iter()

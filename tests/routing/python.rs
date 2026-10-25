@@ -44,7 +44,7 @@ import time
 from pathlib import Path
 
 def application_route(request, params):
-    assert set(request) == {'authenticated_user', 'client_id', 'query_id', 'sql', 'context', 'query_ast', 'data_contexts'}
+    assert set(request) == {'authenticated_user', 'client_id', 'query_id', 'sql', 'query_context', 'query_ast', 'data_contexts'}
     assert 'Query' in request['query_ast']
     assert request['data_contexts'] == {}
     assert request['authenticated_user'] == params['username']

@@ -6,7 +6,7 @@ use yasp::{
         snowflake::{SnowflakeBackend, SnowflakeConfig},
     },
     config::{BackendConfig, BackendSettings, GatewayConfig},
-    hooks::{BackendSelection, bind_select_backend, builtin::input_options::metabase},
+    hooks::{BackendSelection, bind_select_backend, builtin::query_context::metabase},
     query::SqlDialect,
 };
 
@@ -64,7 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?
     .with_catalog(snapshot.clone())
     .with_schema_discovery(catalog)
-    .with_input_options(metabase(SqlDialect::Snowflake));
+    // This registry includes two target dialects; declare native input explicitly.
+    .with_query_context_hook(yasp::hooks::bind_query_context((), |request, _| {
+        Box::pin(async move { metabase(request, Some(SqlDialect::Snowflake)) })
+    }));
     let listener = tokio::net::TcpListener::bind(config.settings().listen).await?;
     let result = yasp::gateway::serve_backends(listener, config, backends, selector, async {
         let _ = tokio::signal::ctrl_c().await;

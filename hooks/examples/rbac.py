@@ -2,7 +2,7 @@
 
 
 def _account(request):
-    user_id = request.get("context", {}).get("user_id")
+    user_id = request.get("query_context", {}).get("user_id")
     if isinstance(user_id, bool) or not isinstance(user_id, (int, str)):
         return None
     user = request["datasets"].get("users", str(user_id))

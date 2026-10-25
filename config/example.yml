@@ -164,7 +164,6 @@ cache:
 # data_contexts:
 #   ast:
 #     enabled: true # Local output lineage; no dictionary lookup or classification.
-#     dialect: postgresql # Optional data-query grammar when no input_options hook is set.
 #     namespace: "yasp:ast_cache" # Uses the result cache Redis connection and TTL.
 #   decision_model:
 #     namespace: "yasp:decision_cache" # Uses the result cache Redis connection and TTL.
@@ -180,13 +179,11 @@ cache:
 #       phone: "Do these values contain telephone numbers?"
 
 hooks:
-  # Optional compiled pre-parse hint resolver; takes precedence over ast.dialect.
-  # Missing/MBQL/malformed remarks retain the frontend dialect.
-  # input_options:
+  # Optional ordinary-query provider, after metadata/setup recognition.
+  # query_context:
   #   type: rust
-  #   callback: builtin.input_options.metabase
-  #   params:
-  #     native_dialect: snowflake
+  #   callback: builtin.query_context.metabase
+  #   params: {} # Optional native_dialect for mixed target dialects.
 
   select_backend:
     type: rust
@@ -210,13 +207,6 @@ hooks:
     queue_max_bytes: 4194304
     max_payload_bytes: 2097152
     execution_timeout_ms: 2000 # Stops waiting; executing Python retains its worker.
-
-  # Optional context provider runs after validation, before selection/cache checks.
-  # Errors produce an empty context; they do not deny the query.
-  # context:
-  #   type: rust
-  #   callback: builtin.extractors.metabase_pg
-  # For Metabase Redshift remarks use builtin.extractors.metabase_rs.
 
   # Application selector resolves the extracted user ID against the users dataset.
   # Replace select_backend above after validating metadata and implementing the policy.

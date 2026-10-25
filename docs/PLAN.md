@@ -132,7 +132,7 @@ An experimental Redshift profile shares the simple-query transport. The optional
 Snowflake backend forwards native and frontend-generated data SQL unchanged through the normal YAML host, with
 bounded schema snapshots serving captured PostgreSQL/Redshift metadata requests.
 The persistent local emulator and unified client tests are documented in
-[multi-engine compatibility](multi-engine.md). Generated data-query translation,
+[multi-engine compatibility](multi-engine.md). SQL dialect translation,
 real Snowflake access isolation and complete BI exploration remain separate gates.
 
 Use the [documentation index](README.md) for verified current
@@ -188,22 +188,16 @@ An incomplete connectivity spike is not an access-controlled deployment.
 
 ### BI context and client validation
 
-The library exposes an optional context provider configured at `hooks.context`.
-For ordinary queries it receives authenticated frontend identity, frontend database, client/query IDs,
-and the immutable parsed query. The provider derives bounded plain JSON context;
-the engine invokes it once after SQL validation and before backend selection and
-cache eligibility, including on cache hits. That context is passed to downstream
-hooks and cannot replace authenticated frontend identity. Provider errors, invalid
-output, timeouts, and runtime saturation produce empty context; cancellation still
-stops the query. This contract does not establish that any BI client's metadata is
-trusted or present. Verify actual client version, authentication mode, discovery,
-query forms, background work, and missing-context behavior before claiming
-compatibility. Client-supplied SQL comments do not prove end-user identity.
-The `metabase_pg` and Redash extractors parse the observed leading PostgreSQL
-remarks for the tested client versions and expose normalized diagnostic fields.
-`metabase_rs` parses the partner remark defined by Metabase's Redshift driver;
-manual validation awaits a YASP Redshift gateway. Superset extraction is not
-builtin because its SQL mutator is deployment configured.
+The optional `hooks.query_context` provider receives byte-bounded original SQL,
+authenticated frontend identity/database, client ID, gateway dialect, optional
+common target dialect, and datasets after metadata/setup recognition. It returns
+optional incoming `dialect` and application `values` before ordinary SQL parsing.
+The engine invokes it once per ordinary query, including cache hits. Errors,
+invalid output, timeouts, and runtime saturation reject the query; cancellation
+stops it. Application values cannot replace authenticated identity. Metabase and
+Redash providers reuse observed remark extractors; Superset/custom integrations
+own their formats. SQL comments remain untrusted hints. See
+[extensions](extensions.md) and [planned translation](multi-engine.md#planned-sql-translation).
 
 ### Gateway and query processing
 
@@ -374,26 +368,18 @@ organization RBAC policy.
 
 ### Hooks
 
-- The optional context hook receives a borrowed `ContextRequest` with authenticated
-  user, frontend database, client/query IDs, and `ParsedQuery`. `bind_context(state, f)`
-  binds an async Rust closure and returns owned JSON object data or `ContextError`.
-  Context configuration uses `type`, `callback`, and `params`; Python references also
-  name a file `path` and call `function(request, params)`, returning a dictionary or
-  `None`. `hooks::builtin::extractors` exposes `metabase_pg`, `metabase_rs`, and
-  `redash` parsers, plus the unimplemented Superset placeholder. Python
-  `yasp_extractors` exposes the same names and raises `NotImplementedError` for
-  Superset.
-- Derive context once for ordinary queries after SQL validation and before backend selection and cache
-  eligibility, also on cache hits. Downstream selection sees context as nested plain
-  immutable data; Python receives a copy. Context cannot replace frontend identity.
-  The defaults are a 2-second context wait, 65,536 encoded bytes, and nesting 64.
-  Runtime errors, invalid output, timeout, and saturation supply empty context and
-  do not deny the query. Cancellation returns `57014` and stops the query. Startup
-  configuration, import, and registration errors fail startup. Python retains its
-  existing single-worker reservations after a timed-out invocation.
-- Context does not partition cache keys, change cache scope, or add a cache bypass.
-  Source-role permissions remain the active database authorization boundary.
-  Engine policy remains future work; result processing runs on loaded raw results.
+- `bind_query_context(state, f)` binds an async Rust callback returning
+  `QueryContextOutput { dialect, values }` or `QueryContextError`. Python callbacks
+  return the equivalent envelope. Metadata/setup recognition precedes invocation;
+  AST and lineage are available only in downstream hooks after parsing.
+- Derive query context before parsing ordinary SQL, including on cache hits.
+  The defaults are a 2-second wait, 65,536 encoded output bytes, and nesting 64.
+  Errors, invalid output, timeout, and saturation deny the query; cancellation
+  returns `57014`. Import/registration errors fail startup. Executing timed-out
+  Python retains its worker and byte reservations until it finishes.
+- Application values do not partition raw cache keys. The resolved incoming
+  dialect and execution revision participate in cache scope. Selection and result
+  policy still run on cache hits; source grants apply when the backend executes.
 - Future session lifecycle integration may keep BI service identity, application-derived context, selected backend role,
   session ID, target, dialect, transaction state, and configuration/policy/hook generations in
   Rust-owned query context. Selected-role fields are populated after selection.
@@ -543,8 +529,11 @@ bounded JSON partitions and autocommit statements. Frontend transaction blocks
 preserve route affinity and failure states without a shared source snapshot. The
 pinned Docker emulator and focused HTTP tests cover the local compatibility contract.
 Shared execution applies one bounded result-cache path to every backend; adapters
-provide source identity and verified completion without cache opt-ins. Generated
-SQL executes unchanged after read-only checks. Broader SQL translation and real-source authentication/role/warehouse acceptance remain
+provide source identity and verified completion without cache opt-ins. Data
+SQL executes unchanged after read-only checks. Future translation compares the
+query-context incoming dialect with the selected target dialect, independent of
+native/generated labels, then validates effective SQL and refreshes lineage/query
+identity before cache lookup; see [translation](multi-engine.md#planned-sql-translation). Broader SQL translation and real-source authentication/role/warehouse acceptance remain
 separate gates. Adding a native client protocol is a separate gateway capability,
 not a prerequisite for each backend.
 

@@ -8,27 +8,53 @@ use yasp::{
     config::{FileConfig, RustHookSettings, SelectorSettings},
     datasets::{DatasetLoader, bind_dataset_loader},
     hooks::{
-        CacheEligibility, ContextError, ContextHook, ResultHook, RoutedSelector,
-        bind_cache_eligibility, bind_context, bind_select_backend, builtin,
+        CacheEligibility, QueryContextHook, ResultHook, RoutedSelector, bind_cache_eligibility,
+        bind_query_context, bind_select_backend, builtin,
     },
 };
 
 const EXAMPLE_DATASET_LOADER: &str = "example.datasets.email_locations";
 const JSON_FILE_DATASET_LOADER: &str = "builtin.dataset.load_json";
 
-type ContextExtractor = fn(
-    &str,
-) -> Result<
-    Option<serde_json::Map<String, serde_json::Value>>,
-    builtin::extractors::ExtractionError,
->;
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MetabaseParams {
+    native_dialect: Option<yasp::query::SqlDialect>,
+}
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RedashParams {
+    dialect: Option<yasp::query::SqlDialect>,
+}
 
-fn context_extractor(name: &str) -> Option<ContextExtractor> {
+fn builtin_query_context(
+    hook: &SelectorSettings,
+) -> Result<QueryContextHook, Box<dyn std::error::Error>> {
+    let name = hook
+        .rust_callback()
+        .ok_or_else(|| io::Error::other("invalid query context hook"))?;
+    let params = match hook {
+        SelectorSettings::RustReference(hook) => serde_json::Value::Object(hook.params.clone()),
+        _ => serde_json::json!({}),
+    };
     match name {
-        "builtin.extractors.metabase_rs" => Some(builtin::extractors::metabase_rs),
-        "builtin.extractors.metabase_pg" => Some(builtin::extractors::metabase_pg),
-        "builtin.extractors.redash" => Some(builtin::extractors::redash),
-        _ => None,
+        "builtin.query_context.metabase" => {
+            let params: MetabaseParams = serde_json::from_value(params)?;
+            Ok(
+                bind_query_context(params.native_dialect, |request, dialect| {
+                    Box::pin(async move { builtin::query_context::metabase(request, *dialect) })
+                })
+                .into(),
+            )
+        }
+        "builtin.query_context.redash" => {
+            let params: RedashParams = serde_json::from_value(params)?;
+            Ok(bind_query_context(params.dialect, |request, dialect| {
+                Box::pin(async move { builtin::query_context::redash(request, *dialect) })
+            })
+            .into())
+        }
+        _ => Err(io::Error::other("unregistered hooks.query_context name").into()),
     }
 }
 
@@ -46,31 +72,13 @@ fn dataset_file(hook: &RustHookSettings) -> Result<&str, io::Error> {
 }
 
 pub(super) fn validate_names(file: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
-    if file
-        .hooks
-        .input_options
-        .as_ref()
-        .is_some_and(|hook| hook.callback != "builtin.input_options.metabase")
+    if let Some(hook) = &file.hooks.query_context
+        && hook.rust_callback().is_some()
     {
-        return Err(io::Error::other("unregistered hooks.input_options name").into());
-    }
-    // The host maps names to compiled functions once, before accepting clients.
-    if file
-        .hooks
-        .context
-        .as_ref()
-        .and_then(SelectorSettings::rust_callback)
-        .is_some_and(|name| context_extractor(name).is_none())
-    {
-        return Err(io::Error::other("unregistered hooks.context name").into());
-    }
-    if let Some(SelectorSettings::RustReference(hook)) = &file.hooks.context
-        && !hook.params.is_empty()
-    {
-        return Err(io::Error::other("builtin context extractors accept no params").into());
+        builtin_query_context(hook)?;
     }
     #[cfg(not(feature = "python"))]
-    if matches!(file.hooks.context, Some(SelectorSettings::Python(_))) {
+    if matches!(file.hooks.query_context, Some(SelectorSettings::Python(_))) {
         return Err(
             io::Error::other("Python context hook requires the python Cargo feature").into(),
         );
@@ -159,7 +167,7 @@ pub(super) async fn load_hooks(
     (
         RoutedSelector,
         Option<CacheEligibility>,
-        Option<ContextHook>,
+        Option<QueryContextHook>,
         Option<ResultHook>,
         std::collections::BTreeMap<String, DatasetLoader>,
     ),
@@ -178,7 +186,7 @@ pub(super) async fn load_hooks(
     #[cfg(feature = "python")]
     let runtime = if matches!(file.hooks.select_backend, SelectorSettings::Python(_))
         || matches!(file.cache.eligibility, Some(SelectorSettings::Python(_)))
-        || matches!(file.hooks.context, Some(SelectorSettings::Python(_)))
+        || matches!(file.hooks.query_context, Some(SelectorSettings::Python(_)))
         || matches!(file.hooks.process_result, Some(SelectorSettings::Python(_)))
         || file
             .application_contexts
@@ -202,23 +210,10 @@ pub(super) async fn load_hooks(
     } else {
         None
     };
-    let context = match &file.hooks.context {
+    let context = match &file.hooks.query_context {
         None => None,
         Some(hook @ (SelectorSettings::Rust(_) | SelectorSettings::RustReference(_))) => {
-            let extractor = hook
-                .rust_callback()
-                .and_then(context_extractor)
-                .ok_or_else(|| io::Error::other("unregistered hooks.context name"))?;
-            Some(
-                bind_context(extractor, |request, extractor| {
-                    Box::pin(async move {
-                        extractor(request.query.sql())
-                            .map(Option::unwrap_or_default)
-                            .map_err(|_| ContextError::Failed)
-                    })
-                })
-                .into(),
-            )
+            Some(builtin_query_context(hook)?)
         }
         Some(SelectorSettings::Python(_hook)) => {
             #[cfg(feature = "python")]
@@ -450,20 +445,21 @@ mod tests {
         });
         for (callback, sql) in [
             (
-                "builtin.extractors.metabase_rs",
+                "builtin.query_context.metabase",
                 "-- /* partner: \"metabase\", {\"dashboard_id\":null,\"chart_id\":null,\"optional_user_id\":1,\"optional_account_id\":null,\"filter_values\":{}} */ Metabase:: userID: 2 queryType: native queryHash: rs\nSELECT 1",
             ),
             (
-                "builtin.extractors.metabase_pg",
+                "builtin.query_context.metabase",
                 "-- Metabase:: userID: 2 queryType: native queryHash: pg\nSELECT 1",
             ),
             (
-                "builtin.extractors.redash",
+                "builtin.query_context.redash",
                 "/* user_id: 2, query_id: adhoc, Job ID: job, Query Hash: hash, Scheduled: False */ SELECT 1",
             ),
         ] {
             let mut value = base.clone();
-            value["hooks"] = serde_json::json!({"context": {"type": "rust", "callback": callback}});
+            value["hooks"] =
+                serde_json::json!({"query_context": {"type": "rust", "callback": callback}});
             let config: FileConfig = serde_json::from_value(value.clone()).unwrap();
             validate_names(&config).unwrap();
             let (_, _, context, _, _) = load_hooks(
@@ -477,19 +473,23 @@ mod tests {
                 let query = yasp::query::ParsedQuery::parse(sql).unwrap();
                 let extracted = context
                     .derive(
-                        yasp::hooks::ContextRequest {
-                            data_contexts: &yasp::lineage::DataContexts::EMPTY,
+                        yasp::hooks::QueryContextRequest {
                             authenticated_user: "bi",
                             frontend_database: "analytics",
                             client_id: 1,
-                            query_id: query.query_id(),
-                            query: &query,
+
                             datasets: None,
+
+                            sql: (query).sql(),
+                            gateway_dialect: yasp::query::SqlDialect::Postgresql,
+                            default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
                         },
                         std::time::Duration::from_secs(1),
                         4096,
                     )
-                    .await;
+                    .await
+                    .unwrap()
+                    .values;
                 if sql == "SELECT 1" {
                     assert!(extracted.is_empty());
                 } else {
@@ -497,9 +497,9 @@ mod tests {
                     assert!(!extracted.contains_key("account"));
                 }
             }
-            value["hooks"]["context"]["params"] = serde_json::json!({"unused": true});
+            value["hooks"]["query_context"]["params"] = serde_json::json!({"unused": true});
             assert!(validate_names(&serde_json::from_value(value.clone()).unwrap()).is_err());
-            value["hooks"]["context"] =
+            value["hooks"]["query_context"] =
                 serde_json::json!({"type": "rust", "callback": "unknown.extractor"});
             assert!(validate_names(&serde_json::from_value(value).unwrap()).is_err());
         }

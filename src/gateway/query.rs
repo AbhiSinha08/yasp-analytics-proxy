@@ -1,4 +1,4 @@
-//! Ordered simple-query stages: setup, metadata, context, routing, cache, execution.
+//! Ordered simple-query stages: metadata/setup, query context, parsing, routing, cache, execution.
 
 use super::{FrontendSocket, protocol_error, server::Credentials};
 use crate::{
@@ -7,8 +7,8 @@ use crate::{
     config::GatewaySettings,
     discovery::{SessionSettings, SetupResponse},
     execution::Transaction,
-    hooks::InputRequest,
-    query::{InputOptions, QueryError},
+    hooks::{QueryContextOutput, QueryContextRequest},
+    query::{ParsedQuery, QueryError},
 };
 use futures::{SinkExt, channel::oneshot};
 use pgwire::{
@@ -42,7 +42,7 @@ impl<'backend> QuerySession<'_, 'backend> {
         &mut self,
         socket: &mut FrontendSocket,
         sql: &str,
-        cancel: oneshot::Receiver<()>,
+        mut cancel: oneshot::Receiver<()>,
     ) -> PgWireResult<()> {
         if sql.len() > self.settings.max_sql_bytes {
             return Err(protocol_error(
@@ -51,41 +51,13 @@ impl<'backend> QuerySession<'_, 'backend> {
                 &QueryError::TooLarge.to_string(),
             ));
         }
-        let dialect = self.source.profile.dialect();
-        let options = self
-            .source
-            .input_options
-            .as_ref()
-            .map(|resolve| {
-                resolve(InputRequest {
-                    sql,
-                    frontend_dialect: dialect,
-                })
-            })
-            .unwrap_or_else(|| {
-                self.source
-                    .ast
-                    .dialect
-                    .map_or(InputOptions::frontend(dialect), |native| {
-                        InputOptions::native_after_compatibility(dialect, native)
-                    })
-            });
-        // A generated query cannot opt into a different backend grammar.
-        if !options.native && options.dialect != dialect {
-            return Err(protocol_error(
-                "ERROR",
-                "0A000",
-                "generated SQL must use the frontend dialect",
-            ));
-        }
         let catalog = &self.source.catalog;
-        if !options.native
-            && let Some(request) = super::metadata::Request::recognize_snapshot(
-                sql,
-                self.source.profile,
-                catalog.status().source_dialect == crate::query::SqlDialect::Postgresql,
-            )
-            .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
+        if let Some(request) = super::metadata::Request::recognize_snapshot(
+            sql,
+            self.source.profile,
+            catalog.status().source_dialect == crate::query::SqlDialect::Postgresql,
+        )
+        .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
         {
             let query_id: String = Sha256::digest(sql.as_bytes())
                 .iter()
@@ -132,11 +104,35 @@ impl<'backend> QuerySession<'_, 'backend> {
             }
             return result;
         }
-        let query = match self
+        // Only frontend controls bypass context here. Ordinary data is parsed
+        // with the callback's dialect and never re-enters metadata recognition.
+        let frontend = self
             .source
             .profile
-            .parse_query(sql, self.settings.max_sql_bytes, options)
-        {
+            .parse_query(sql, self.settings.max_sql_bytes);
+        let (parsed, query_context, frontend_request) = match frontend {
+            Ok(query) if self.source.profile.is_frontend_request(&query) => {
+                (Ok(query), QueryContextOutput::default(), true)
+            }
+            Err(QueryError::Empty) => (Err(QueryError::Empty), QueryContextOutput::default(), true),
+            frontend_data => {
+                self.transaction
+                    .check()
+                    .map_err(pgwire::error::PgWireError::from)?;
+                let context = self.derive_query_context(sql, &mut cancel).await?;
+                let dialect = context.dialect.unwrap_or(self.source.profile.dialect());
+                (
+                    if dialect == self.source.profile.dialect() {
+                        frontend_data
+                    } else {
+                        ParsedQuery::parse_with_dialect(sql, self.settings.max_sql_bytes, dialect)
+                    },
+                    context,
+                    false,
+                )
+            }
+        };
+        let query = match parsed {
             Ok(query) => query,
             Err(QueryError::Empty) => {
                 timeout(
@@ -187,7 +183,7 @@ impl<'backend> QuerySession<'_, 'backend> {
             client_id: self.client_id,
             session: self.session,
             transaction: self.transaction,
-            source: crate::execution::QueryContext {
+            source: crate::execution::ExecutionServices {
                 username: &self.source.username,
                 database: &self.source.database,
                 profile: self.source.profile,
@@ -195,14 +191,18 @@ impl<'backend> QuerySession<'_, 'backend> {
                 decision_model: self.source.decision_model.as_deref(),
                 ast: &self.source.ast,
                 catalog: &self.source.catalog,
-                context_hook: self.source.context_hook.as_deref(),
                 result_processing: self.source.result_processing.as_deref(),
                 datasets: self.source.datasets.as_ref(),
-                stopped: self.source.stopped.clone(),
             },
         };
         let outcome = shared
-            .execute(&mut super::result::output(socket), &query, cancel)
+            .execute(
+                &mut super::result::output(socket),
+                &query,
+                &query_context.values,
+                frontend_request,
+                cancel,
+            )
             .await;
         let result = match outcome {
             Ok(Some(response)) => {
@@ -215,6 +215,37 @@ impl<'backend> QuerySession<'_, 'backend> {
             tracing::error!(query_id, client_id, "query failed");
         }
         result
+    }
+
+    async fn derive_query_context(
+        &self,
+        sql: &str,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> PgWireResult<QueryContextOutput> {
+        if cancel.try_recv().ok().flatten().is_some() {
+            return Err(protocol_error("ERROR", "57014", "query cancelled"));
+        }
+        let Some(hook) = &self.source.query_context_hook else {
+            return Ok(QueryContextOutput::default());
+        };
+        let mut stopped = self.source.stopped.clone();
+        let request = QueryContextRequest {
+            authenticated_user: &self.source.username,
+            frontend_database: &self.source.database,
+            client_id: self.client_id,
+            sql,
+            gateway_dialect: self.source.profile.dialect(),
+            default_target_dialect: self.execution.default_target_dialect(),
+            datasets: self.source.datasets.as_ref(),
+        };
+        tokio::select! {
+            biased;
+            _ = cancel => Err(protocol_error("ERROR", "57014", "query cancelled")),
+            _ = stopped.wait_for(|stopped| *stopped) => Err(protocol_error("ERROR", "57014", "query cancelled")),
+            result = hook.derive(request, Duration::from_millis(u64::from(self.settings.query_context_timeout_ms)), self.settings.max_context_bytes) => {
+                result.map_err(|_| protocol_error("ERROR", "XX000", "query context unavailable"))
+            }
+        }
     }
 }
 

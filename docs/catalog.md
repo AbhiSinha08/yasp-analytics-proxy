@@ -100,7 +100,8 @@ Both frontend profiles support the driver's inherited bulk foreign-key query.
 Capture slots accept designated bounded literal strings/IN lists. SQLAlchemy's
 virtual relation OID slot accepts only a bounded unsigned integer. Nested SQL,
 additional statements, changed catalog sources and nonliteral filters never match.
-Native remarks bypass metadata handling; comments never grant discovery access.
+Recognition uses the gateway grammar before query context. Native or custom
+remarks do not change metadata matching.
 
 Snapshot responses bypass application context, selection and result caching. Failed
 frontend transactions reject metadata until rollback. Previews and value scans stay

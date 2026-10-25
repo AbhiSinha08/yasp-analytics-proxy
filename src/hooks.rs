@@ -2,9 +2,8 @@
 //! failure policy; callbacks never own backend credentials or engine limits.
 
 mod cache;
-mod context;
-mod input;
 pub(crate) mod payload;
+mod query_context;
 pub(crate) mod result;
 mod selection;
 
@@ -18,8 +17,10 @@ pub use cache::{
     AsyncCacheEligibilityCallback, CacheEligibility, CacheEligibilityCallback,
     CacheEligibilityError, bind_cache_eligibility, bind_cache_eligibility_async,
 };
-pub use context::{ContextCallback, ContextError, ContextHook, ContextRequest, bind_context};
-pub use input::{InputOptionsResolver, InputRequest};
+pub use query_context::{
+    QueryContextCallback, QueryContextError, QueryContextHook, QueryContextOutput,
+    QueryContextRequest, bind_query_context,
+};
 pub use result::{
     ResultBatch, ResultCallback, ResultColumn, ResultDataContexts, ResultHook, ResultHookError,
     ResultProcessingSettings, ResultRequest, bind_process_result,

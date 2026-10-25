@@ -51,7 +51,7 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                 gateway
             };
             let gateway = if let Some(context) = context {
-                gateway.with_context_hook(context)
+                gateway.with_query_context_hook(context)
             } else {
                 gateway
             };

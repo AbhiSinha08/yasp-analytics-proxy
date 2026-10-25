@@ -11,15 +11,11 @@ the target database for lineage.
 data_contexts:
   ast:
     enabled: true
-    dialect: postgresql # Optional: postgresql, snowflake, or redshift
     namespace: "yasp:ast_cache"
 ```
 
-Lineage is disabled by default. `dialect` selects the grammar for ordinary data
-queries when no `hooks.input_options` callback is configured. That callback takes
-precedence. The setting selects how SQL is parsed; it does not translate SQL or
-choose a backend. Frontend setup and metadata handling keep their existing
-behavior.
+Lineage is disabled by default. The parsing dialect comes from query context,
+falling back to the gateway; lineage settings do not select a grammar.
 
 Library applications can configure the same setting with
 `GatewayConfig::with_ast_context(AstSettings { ... })`.
@@ -113,19 +109,19 @@ shapes retain uncertainty.
 
 ```mermaid
 flowchart LR
-    SQL[Data query] --> Parse[Parse and validate]
+    SQL[Ordinary data query] --> Context[Query context and incoming dialect]
+    Context --> Parse[Parse and validate]
     Parse --> Analyze[Analyze with current catalog]
     Catalog[Available catalog] --> Analyze
-    Analyze --> Context[Context hook]
-    Context --> Select[Backend selection]
+    Analyze --> Select[Backend selection]
     Select --> Cache[Cache eligibility and execution]
 ```
 
 Analysis is local and happens before later hooks that receive a query.
 Rust hooks borrow the parsed query and `DataContexts`; Python hooks receive
 `query_ast` and `data_contexts`. The AST JSON follows `sqlparser`'s Serde format,
-so its shape depends on the parser version. Input-options callbacks run before
-parsing and do not receive an AST.
+so its shape depends on the parser version. The query-context callback runs before
+ordinary SQL parsing and does not receive an AST or lineage.
 
 If a reference cannot be resolved, its source is represented as unknown. Missing
 catalog facts do not make an otherwise executable query fail. Analysis has depth,

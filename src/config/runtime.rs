@@ -13,8 +13,7 @@ pub struct GatewayConfig {
     pub(crate) decision_model: Option<std::sync::Arc<crate::decision_model::DecisionModel>>,
     pub(crate) ast: crate::lineage::AstSettings,
     pub(crate) result_processing: Option<std::sync::Arc<crate::hooks::result::ResultProcessing>>,
-    pub(crate) context_hook: Option<std::sync::Arc<crate::hooks::ContextHook>>,
-    pub(crate) input_options: Option<std::sync::Arc<crate::hooks::InputOptionsResolver>>,
+    pub(crate) query_context_hook: Option<std::sync::Arc<crate::hooks::QueryContextHook>>,
     pub(crate) schema_discovery: Option<crate::hooks::BackendSelection>,
     pub(crate) schema_discovery_compute: Option<String>,
     pub(crate) datasets: Option<crate::datasets::DatasetReader>,
@@ -41,9 +40,8 @@ impl GatewayConfig {
             cache: None,
             decision_model: None,
             ast: crate::lineage::AstSettings::default(),
-            context_hook: None,
+            query_context_hook: None,
             result_processing: None,
-            input_options: None,
             schema_discovery: None,
             schema_discovery_compute: None,
             datasets: None,
@@ -60,18 +58,6 @@ impl GatewayConfig {
 
     pub fn settings(&self) -> &GatewaySettings {
         &self.settings
-    }
-
-    /// Resolve the input grammar before parsing; this cannot authorize a route.
-    pub fn with_input_options(
-        mut self,
-        resolver: impl Fn(crate::hooks::InputRequest<'_>) -> crate::query::InputOptions
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.input_options = Some(std::sync::Arc::new(resolver));
-        self
     }
 
     /// The configured metadata source, before catalog construction.
@@ -111,15 +97,18 @@ impl GatewayConfig {
         self
     }
 
-    /// Configure local output lineage and the optional default data-query grammar.
+    /// Configure local output lineage.
     pub fn with_ast_context(mut self, settings: crate::lineage::AstSettings) -> Self {
         self.ast = settings;
         self
     }
 
     /// Derive application-owned context once per ordinary query before downstream hooks.
-    pub fn with_context_hook(mut self, hook: impl Into<crate::hooks::ContextHook>) -> Self {
-        self.context_hook = Some(std::sync::Arc::new(hook.into()));
+    pub fn with_query_context_hook(
+        mut self,
+        hook: impl Into<crate::hooks::QueryContextHook>,
+    ) -> Self {
+        self.query_context_hook = Some(std::sync::Arc::new(hook.into()));
         self
     }
 

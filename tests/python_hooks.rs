@@ -11,7 +11,7 @@ use tokio::time::{sleep, timeout};
 use yasp::{
     config::PythonSettings,
     hooks::{
-        CacheEligibility, ContextHook, ContextRequest, RoutedSelector, SelectionRequest,
+        CacheEligibility, QueryContextHook, QueryContextRequest, RoutedSelector, SelectionRequest,
         python::{PythonHookError as Error, PythonRuntime},
     },
     query::ParsedQuery,
@@ -53,15 +53,17 @@ async fn wait_file(path: &Path) {
     .expect("Python reaches synchronization point");
 }
 
-fn context_request(query: &ParsedQuery) -> ContextRequest<'_> {
-    ContextRequest {
-        data_contexts: &yasp::lineage::DataContexts::EMPTY,
+fn context_request(query: &ParsedQuery) -> QueryContextRequest<'_> {
+    QueryContextRequest {
         authenticated_user: "bi-service",
         frontend_database: "analytics",
         client_id: 1,
-        query_id: query.query_id(),
-        query,
+
         datasets: None,
+
+        sql: query.sql(),
+        gateway_dialect: yasp::query::SqlDialect::Postgresql,
+        default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
     }
 }
 
@@ -285,33 +287,40 @@ def context(request, params):
             pass
         else:
             raise RuntimeError('Superset extractor must remain deferred')
-        return {'extractors_verified': True}
+        return {'values': {'extractors_verified': True}}
     if 'empty' in sql:
-        return None
+        return {}
     if 'raise' in sql:
         raise RuntimeError('private identity lookup detail')
+    if 'invalid_dialect' in sql:
+        return {'dialect': 'unknown'}
+    if 'invalid_values' in sql:
+        return {'values': []}
+    if 'legacy' in sql:
+        return {'principal': {'email': 'legacy@example.test'}}
     if 'invalid' in sql:
         return []
     if 'large' in sql:
-        return {'data': 'x' * 8192}
+        return {'values': {'data': 'x' * 8192}}
     if 'deep' in sql:
         data = None
         for _ in range(65):
             data = [data]
-        return {'data': data}
+        return {'values': {'data': data}}
     if 'slow' in sql:
         time.sleep(0.1)
-    return {'principal': {'email': params['email']}, 'frontend': request['authenticated_user'],
-            'database': request['frontend_database'], 'sql': sql, 'query_id': request['query_id']}
+    assert 'query_ast' not in request and 'query_id' not in request
+    return {'values': {'principal': {'email': params['email']}, 'frontend': request['authenticated_user'],
+            'database': request['frontend_database'], 'sql': sql}}
 
 def select(request, params):
-    request['context']['principal']['email'] = 'changed by selector'
+    request['query_context']['principal']['email'] = 'changed by selector'
     return {'target': 'primary', 'backend_login': 'reader'}
 
 def eligible(request, params):
-    return request['context']['principal']['email'] == 'viewer@example.test' and request['authenticated_user'] == 'bi-service'
+    return request['query_context']['principal']['email'] == 'viewer@example.test' and request['authenticated_user'] == 'bi-service'
 "#);
-    let context: ContextHook = runtime
+    let context: QueryContextHook = runtime
         .register(
             &context_script,
             "context",
@@ -326,18 +335,19 @@ def eligible(request, params):
     let query = ParsedQuery::parse("SELECT 1 /* original SQL */").unwrap();
     let derived = context
         .derive(context_request(&query), Duration::from_secs(1), 1024)
-        .await;
+        .await
+        .unwrap()
+        .values;
     assert_eq!(derived["frontend"], "bi-service");
     assert_eq!(derived["database"], "analytics");
     assert_eq!(derived["sql"], query.sql());
-    assert_eq!(derived["query_id"], query.query_id());
     let downstream = SelectionRequest {
         data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         client_id: 1,
         query_id: query.query_id(),
         query: &query,
-        context: &derived,
+        query_context: &derived,
         datasets: None,
         async_hook_timeout_ms: 2000,
     };
@@ -364,36 +374,51 @@ def eligible(request, params):
         eligibility.eligible(&downstream).await.unwrap(),
         "Python stages receive independent context copies"
     );
-    for mode in ["empty", "helpers", "raise", "invalid", "large", "deep"] {
+    for mode in [
+        "empty",
+        "helpers",
+        "raise",
+        "invalid",
+        "invalid_dialect",
+        "invalid_values",
+        "legacy",
+        "large",
+        "deep",
+    ] {
         let query = ParsedQuery::parse(&format!("SELECT 1 /* {mode} */")).unwrap();
         let derived = context
             .derive(context_request(&query), Duration::from_secs(1), 1024)
             .await;
         if mode == "helpers" {
-            assert_eq!(derived.get("extractors_verified"), Some(&json!(true)));
-            assert_eq!(derived.len(), 1);
+            let values = derived.unwrap().values;
+            assert_eq!(values.get("extractors_verified"), Some(&json!(true)));
+            assert_eq!(values.len(), 1);
+        } else if mode == "empty" {
+            assert!(derived.unwrap().values.is_empty());
         } else {
-            assert!(derived.is_empty(), "{mode} uses the default context");
+            assert!(derived.is_err(), "{mode} must reject the query");
         }
     }
     assert!(
         context
             .derive(context_request(&query), Duration::from_secs(1), 32)
             .await
-            .is_empty()
+            .is_err()
     );
     let slow = ParsedQuery::parse("SELECT 1 /* slow */").unwrap();
     assert!(
         context
             .derive(context_request(&slow), Duration::from_millis(5), 1024)
             .await
-            .is_empty()
+            .is_err()
     );
     // The next invocation queues behind the late result, then returns its own snapshot.
     assert_eq!(
         context
             .derive(context_request(&query), Duration::from_secs(1), 1024)
-            .await,
+            .await
+            .unwrap()
+            .values,
         derived
     );
 
@@ -417,8 +442,8 @@ def eligible(request, params):
         context
             .derive(context_request(&query), Duration::from_secs(1), 1024)
             .await
-            .is_empty(),
-        "saturated context uses default permissions"
+            .is_err(),
+        "saturated context rejects the query"
     );
     assert_eq!(active.await.unwrap(), Err(Error::TimedOut));
     assert_eq!(queued.await, Err(Error::TimedOut));

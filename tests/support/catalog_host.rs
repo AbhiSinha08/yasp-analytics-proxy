@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) fn with_catalog_host(
-    input_options: Option<serde_json::Value>,
+    query_context: Option<serde_json::Value>,
     check: impl FnOnce(&TestDatabase, &dyn Fn(&str) -> Output),
 ) {
     let environment = TestEnvironment::load();
@@ -38,8 +38,8 @@ pub(super) fn with_catalog_host(
             "select_backend": {"type": "rust", "callback": "builtin.select_backend.passthrough", "params": {"target": "primary", "backend_login": "ordinary"}}
         }
     });
-    if let Some(options) = input_options {
-        config["hooks"]["input_options"] = options;
+    if let Some(options) = query_context {
+        config["hooks"]["query_context"] = options;
     }
     let path = temporary.0.join("config.json");
     fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();

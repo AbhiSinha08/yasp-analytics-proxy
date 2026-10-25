@@ -20,47 +20,40 @@ real Snowflake authentication/grant/semantic acceptance remain separate gates.
 
 ## Input and execution
 
-The host supplies typed input options before parsing. Explicit Metabase native
-remarks select the configured native dialect; explicit MBQL retains the frontend
-dialect. Missing/unknown remarks use the frontend dialect by default. The optional
-`unmarked_data_dialect` permits native data SQL after recognized setup/metadata
-handling. This is a configured choice, not dialect guessing or route selection.
-Comments never establish identity or authorization.
+Frontend metadata is recognized using the gateway dialect before query context.
+Native remarks do not override recognized metadata or exact frontend probes such
+as `SELECT pg_backend_pid()`. The context hook receives only ordinary raw SQL and
+returns its incoming dialect plus application values. Missing dialects default to
+the gateway. Metabase explicit native remarks use the common target dialect or an
+explicit provider param; MBQL and unknown remarks use the gateway. Redash defaults
+to the gateway and supports an explicit dialect override for valid remarks.
 
-For Snowflake-backed listeners, the exact frontend connection probe `SELECT 1`
-returns an integer from the compatibility handler, with a fresh catalog required.
-This satisfies JDBC BI checks that compare the value with an integer. Explicit
-native remarks bypass that handler and preserve Snowflake's numeric result type;
-queries containing table reads or other expressions use ordinary execution.
+Parsing and read-only validation use that incoming dialect. Current PostgreSQL
+and Snowflake adapters forward accepted data SQL unchanged. A syntactically valid
+query may therefore fail on a different backend dialect. Query context, route
+authorization, and result processing run on raw cache hits as well as misses.
+The cache scope includes the incoming dialect and execution revision.
 
-The exact unaliased `SELECT pg_backend_pid()` and
-`SELECT pg_catalog.pg_backend_pid()` probes return the gateway session's integer
-PID from pgwire startup on both profiles, without routing, source execution or
-result caching. Explicit native SQL and queries containing application reads or
-other expressions retain ordinary execution. Superset's SQL-based cancellation
-through `pg_cancel_backend`/`pg_stat_activity` remains outside this surface; pgwire
-cancellation still uses the session PID and secret key.
+## Planned SQL translation
 
-Original SQL and its immutable AST reach context and routing. Read-only checks apply
-before execution. PostgreSQL rejects an explicit native dialect for another engine.
-Snowflake forwards both native and frontend-generated data queries without a dialect
-gate or translation. Snowflake reports SQL errors; syntactic acceptance does not
-guarantee equivalent behavior across dialects. Metadata compatibility handling remains
-separate. Both backends use the shared result cache when `cache.enabled` is true.
-The engine owns eligibility, capture, validation and replay; adapters have no cache
-opt-in. PostgreSQL native metadata/text and converted Snowflake values remain exact.
+After target/login/compute selection, compare `query_context`'s resolved incoming
+dialect with the target adapter's dialect. Equal dialects retain SQL; different
+dialects require translation within the supported subset, regardless of client
+or native/generated labels. Unsupported translations must fail explicitly.
+The application query modifier is a separate earlier stage after initial parsing.
 
-The YAML host accepts engine-specific Snowflake targets and a Snowflake discovery
-binding with a [shared catalog](catalog.md). It needs no PostgreSQL placeholder.
-Library hosts can use `Backends::without_postgres`, register Snowflake bindings and
-call `serve_backends`; existing PostgreSQL entry points remain available. Backend
-adapters own HTTP clients, session SQL, cleanup, value conversion and errors.
+For a Redshift gateway and PostgreSQL target, Metabase MBQL and unmarked SQL use
+Redshift input and will require Redshift-to-PostgreSQL translation. Explicit
+Metabase native SQL uses PostgreSQL input and requires no dialect translation.
+Redash follows the gateway unless `params.dialect` specifies its incoming SQL.
+Superset/custom hooks declare the same input dialect without a built-in remark
+format. Metadata responses never pass through data-query translation.
 
-A Snowflake binding fixes account, principal, role, database, schema and warehouse.
-The adapter submits these coordinates on every public SQL API request with an
-RSA key-pair JWT over verified HTTPS. HTTP overrides are restricted to explicit
-numeric loopback emulator endpoints. Private keys stay in the host; no native
-shared library, driver build or driver checksum is required.
+Reparse translated SQL in the target grammar, repeat bounds/read-only validation,
+and recompute effective lineage and query identity before cache eligibility/lookup.
+Preserve original SQL separately; cache scope must include the execution/translation
+revision. Different target schemas additionally require target-scoped catalogs.
+Translation remains future work; no translation configuration or runtime is active.
 
 ## SQL API execution and values
 
@@ -128,8 +121,7 @@ creates a temporary signing key and an isolated Docker network fixture. External
 pinned images without requiring running BI applications. Missing requested
 prerequisites fail explicitly. Persistent developer data is never used by tests.
 
-Cache scope includes frontend profile, input dialect/mode, the unchanged-SQL
+Cache scope includes frontend profile, incoming dialect, the unchanged-SQL
 execution revision, actual source identity/role/warehouse, session settings and
 serialization format. Explicit transactions and metadata requests bypass the cache.
-Lineage, masking, generated-query translation, extended protocol and federation remain
-separate work.
+SQL translation, extended protocol, and federation remain separate work.

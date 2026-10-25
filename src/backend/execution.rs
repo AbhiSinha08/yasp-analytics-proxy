@@ -31,6 +31,14 @@ pub(crate) enum Execution {
 }
 
 impl Execution {
+    pub(crate) fn default_target_dialect(&self) -> Option<crate::query::SqlDialect> {
+        match self {
+            Self::Fixed(_) | Self::Routed { .. } => Some(crate::query::SqlDialect::Postgresql),
+            #[cfg(feature = "snowflake")]
+            Self::Mixed { backends, .. } => backends.default_target_dialect(),
+        }
+    }
+
     pub(crate) fn discovery(&self) -> DiscoverySource<'_> {
         let backend = match self {
             Self::Fixed(backend) => backend,

@@ -39,12 +39,9 @@ schema_discovery:
     max_rows: 10000
     max_bytes: 16777216
 hooks:
-  input_options:
+  query_context:
     type: rust
-    callback: builtin.input_options.metabase
-    params:
-      native_dialect: snowflake
-      unmarked_data_dialect: snowflake
+    callback: builtin.query_context.metabase
   select_backend:
     type: rust
     callback: builtin.select_backend.passthrough

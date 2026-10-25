@@ -43,7 +43,7 @@
   - [x] **Scheduled refresh and recovery** — Use lease/revision protection and retain prior values after refresh errors.
   - [x] **Examples and documentation** — Provide JSON, Python, and Rust loader examples plus dataset-aware context and selection examples.
 - [x] **BI client context and compatibility** — Supply application context and verify the intended clients' metadata, connections, and queries.
-  - [x] **Context hook platform** — Derives bounded application context once per validated query with async Rust or external Python callbacks.
+  - [x] **Context hook platform** — Derives bounded query context once per validated query with async Rust or external Python callbacks.
   - [x] **Context propagation** — Makes the same context available to backend selection and cache eligibility without changing authenticated frontend identity.
   - [x] **Placeholder extractors** — Provides named Metabase, Superset, and Redash helper functions that report they are not implemented.
   - [x] **Real BI metadata extractors** — Implement and validate extraction against observed client metadata; no extractor is enabled by default.

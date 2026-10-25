@@ -27,7 +27,7 @@ async fn fixed_gateway_context_lifecycle() {
     use yasp::{
         backend::PostgresBackend,
         config::{GatewayConfig, GatewaySettings},
-        hooks::{ContextError, bind_context},
+        hooks::{QueryContextError, bind_query_context},
     };
 
     struct PendingContext {
@@ -73,7 +73,7 @@ async fn fixed_gateway_context_lifecycle() {
         dropped: Arc::new(AtomicBool::new(false)),
     });
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let hook = bind_context(
+    let hook = bind_query_context(
         (
             pending.clone(),
             disconnected.clone(),
@@ -81,7 +81,7 @@ async fn fixed_gateway_context_lifecycle() {
             requests.clone(),
         ),
         |request, state| {
-            let sql = request.query.sql().to_owned();
+            let sql = request.sql.to_owned();
             let (pending, completion) = if sql.contains("context_cancel") {
                 (true, state.0.clone())
             } else if sql.contains("context_disconnect") {
@@ -103,9 +103,9 @@ async fn fixed_gateway_context_lifecycle() {
                     completion.completed.store(true, Ordering::SeqCst);
                 }
                 if sql.contains("context_failed") {
-                    Err(ContextError::Failed)
+                    Err(QueryContextError::Failed)
                 } else {
-                    Ok(serde_json::Map::new())
+                    Ok((serde_json::Map::new()).into())
                 }
             })
         },
@@ -117,12 +117,12 @@ async fn fixed_gateway_context_lifecycle() {
     )
     .expect("frontend identity is valid")
     .with_settings(GatewaySettings {
-        context_timeout_ms: 30_000,
+        query_context_timeout_ms: 30_000,
         shutdown_timeout_ms: 100,
         ..GatewaySettings::default()
     })
     .expect("test gateway limits are valid")
-    .with_context_hook(hook);
+    .with_query_context_hook(hook);
 
     let server = support::GatewayServer::fixed(gateway, backend);
     let address = server.address;
@@ -195,9 +195,16 @@ async fn fixed_gateway_context_lifecycle() {
         "11"
     );
     assert_eq!(
-        query_value(&mut client, "SELECT 12 /* context_failed */").await,
-        "12",
-        "context failure falls back to the empty context and query execution continues"
+        code(
+            client
+                .simple_query(
+                    DefaultSimpleQueryHandler::new(),
+                    "SELECT 12 /* context_failed */"
+                )
+                .await
+                .expect_err("context failure rejects query")
+        ),
+        "XX000"
     );
     assert_eq!(
         requests.lock().unwrap().as_slice(),

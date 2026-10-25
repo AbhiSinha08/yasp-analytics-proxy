@@ -20,7 +20,7 @@ use yasp::{
     backend::PostgresBackends,
     cache::RedisCache,
     config::{BackendSettings, GatewayConfig},
-    hooks::{BackendSelection, bind_cache_eligibility, bind_context, bind_select_backend},
+    hooks::{BackendSelection, bind_cache_eligibility, bind_query_context, bind_select_backend},
 };
 
 #[path = "cache/support.rs"]

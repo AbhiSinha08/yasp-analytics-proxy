@@ -140,32 +140,31 @@ Hook references use `type`, `callback`, and an optional JSON-compatible `params`
 mapping. Python also requires `path`. Compiled string names are shorthand with
 empty params. The repository host registers the passthrough selector, the built-in
 SQL-fragment cache eligibility callback, and Python references when the feature is
-enabled. The host also accepts `hooks.context` references to the existing Rust
-extractors `builtin.extractors.metabase_rs`, `builtin.extractors.metabase_pg`, and
-`builtin.extractors.redash`. They accept no params and return raw remark metadata;
-application callbacks resolve user/account policy from datasets. Other Rust names
+enabled. The host registers `builtin.query_context.metabase` and
+`builtin.query_context.redash`; their params are optional. Application callbacks
+resolve user/account policy from datasets. Other Rust names
 require a consuming host that
 registers them. Names and application params are resolved before serving clients;
 organization-specific params stay outside the engine. See [extensions](extensions.md).
 
 ## Gateway defaults and limits
 
-| Setting under `gateway` | Default          | Meaning                                                                                 |
-| ----------------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `protocol`              | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS).           |
-| `listen`                | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
-| `max_sessions`          | 32               | Normal frontend session capacity.                                                       |
-| `max_message_bytes`     | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
-| `max_sql_bytes`         | 1,048,576        | SQL input size.                                                                         |
-| `max_context_bytes`     | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
-| `context_timeout_ms`    | 2,000            | Query-context derivation wait; failure supplies empty context.                          |
-| `async_hook_timeout_ms` | 2,000            | Async Rust selection, cache-eligibility, and result-hook wait.                                        |
-| `query_timeout_ms`      | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
-| `read_timeout_ms`       | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
-| `write_timeout_ms`      | 60,000           | Each frontend response write.                                                           |
-| `startup_timeout_ms`    | 120,000          | Complete TLS negotiation and startup/authentication exchange.                           |
-| `shutdown_timeout_ms`   | 10,000           | Session drain after listener shutdown.                                                  |
-| `tls.mode`              | `disable`        | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`.     |
+| Setting under `gateway`    | Default          | Meaning                                                                                 |
+| -------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `protocol`                 | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS).           |
+| `listen`                   | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
+| `max_sessions`             | 32               | Normal frontend session capacity.                                                       |
+| `max_message_bytes`        | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
+| `max_sql_bytes`            | 1,048,576        | SQL input size.                                                                         |
+| `max_context_bytes`        | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
+| `query_context_timeout_ms` | 2,000            | Query-context derivation wait; failure rejects the query.                               |
+| `async_hook_timeout_ms`    | 2,000            | Async Rust selection, cache-eligibility, and result-hook wait.                          |
+| `query_timeout_ms`         | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
+| `read_timeout_ms`          | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
+| `write_timeout_ms`         | 60,000           | Each frontend response write.                                                           |
+| `startup_timeout_ms`       | 120,000          | Complete TLS negotiation and startup/authentication exchange.                           |
+| `shutdown_timeout_ms`      | 10,000           | Session drain after listener shutdown.                                                  |
+| `tls.mode`                 | `disable`        | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`.     |
 
 Session, SQL, context, and timeout limits must be positive. Frontend frames must be
 between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
@@ -181,18 +180,54 @@ The YAML host supports PostgreSQL and optional Snowflake backends. Captured JDBC
 and BI metadata queries have focused coverage; full query-builder compatibility remains
 unvalidated. See [multi-engine support](multi-engine.md).
 
-`hooks.input_options` optionally registers the compiled
-`builtin.input_options.metabase` resolver with a required `native_dialect` param
-(`postgresql`, `redshift`, or `snowflake`). Only a valid leading Metabase remark
-whose `queryType` is `native` selects that dialect. MBQL, absent, malformed, and
-unknown remarks retain the listener's dialect by default. Optional
-`unmarked_data_dialect` selects a native data default after recognized frontend
-setup/metadata handling; explicit MBQL still uses the frontend dialect. Input is
-byte-bounded before this callback. Data SQL still runs read-only validation, context,
-and selection. PostgreSQL rejects a mismatched explicit native dialect after selection.
-Snowflake forwards accepted data SQL unchanged, including MBQL; backend SQL errors
-are returned to the client. Native hints never select
-the discovery identity. An omitted resolver preserves the listener's input grammar.
+`hooks.query_context` runs once after frontend metadata/setup recognition and before
+ordinary SQL parsing, including on cache hits. Metadata recognition always uses the
+gateway profile and is independent of remarks or hook output. A recognized request
+does not invoke query context, selection, eligibility, or result processing.
+
+The hook returns `{"dialect": "postgresql", "values": {"user_id": 7}}`. Both fields
+are optional: the dialect defaults to the gateway and values to an empty object.
+Supported dialects are `postgresql`, `redshift`, and `snowflake`. The dialect is the
+grammar of incoming SQL; it selects no target, login, or compute. Hook failures,
+invalid output, size/nesting violations, and timeouts reject the query with `XX000`;
+cancellation reports `57014`. Authenticated identity remains engine-owned.
+
+```yaml
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.metabase
+```
+
+Params are optional. Metabase MBQL/UI exploration and absent/malformed/unknown
+remarks use the gateway dialect. Explicit native remarks use `params.native_dialect`
+when supplied, otherwise the common dialect of configured targets. Multiple logins
+and compute instances do not affect inference. Mixed target dialects require an
+explicit native dialect or a custom hook; inference never uses the discovery target.
+
+`builtin.query_context.redash` extracts saved, `adhoc`, and scheduled query remarks.
+Redash has no native/generated or dialect field, so its default is the gateway.
+Optional `params.dialect` overrides the dialect for a valid Redash remark; missing
+or malformed remarks retain the gateway default.
+
+```yaml
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.redash
+    params:
+      dialect: postgresql # Optional: Redash SQL written for PostgreSQL.
+```
+
+Superset remark formats and any other custom BI metadata belong to application
+hooks. No default Superset parser is registered. Custom Rust/Python providers use
+the same `dialect`/`values` output contract. Successful empty output `{}` uses defaults;
+errors do not silently fall back. Downstream hooks read application values through
+`request.query_context` in Rust or `request["query_context"]` in Python.
+
+Current execution forwards accepted data SQL unchanged. Planned translation uses
+the returned incoming dialect and selected target dialect; see
+[SQL translation](multi-engine.md#planned-sql-translation).
 
 ## Result processing
 
@@ -424,8 +459,9 @@ The captured Redash schema queries use the configured PostgreSQL or Snowflake
 catalog snapshot. Refresh Redash's cached schema after restarting YASP with
 catalog support. Saved query remarks contain a numeric `query_id`; new queries
 contain `query_id: adhoc`. Both retain their numeric `user_id` for the example
-context hook. A missing or invalid user remark still takes the configured fallback
-route. Comments do not authenticate the BI user.
+query-context hook. Missing or malformed remarks use the gateway dialect and
+empty application values; the application selector decides whether to deny or use
+a fallback route. Comments do not authenticate the BI user.
 
 `SET application_name` accepts at most 63 UTF-8 bytes. `SET search_path`
 accepts at most 1,024 bytes and 16 entries; an explicit `pg_catalog` must be first.
@@ -619,20 +655,15 @@ data_contexts:
 `enabled` defaults to `false`. This source describes each output column's source
 constituents and JSON paths; it does not classify them or consult application
 dictionaries. It works independently of the decision model and Redis result cache.
-Analysis uses the current in-memory catalog before context, selection, and cache
+Analysis uses the current in-memory catalog after query context and before selection and cache
 eligibility hooks, including on raw cache hits and within transactions. Missing
 facts remain explicit unknowns. `gateway.max_context_bytes` bounds encoded lineage;
 parser depth/token bounds and internal traversal/column budgets also apply.
 
-`dialect` accepts `postgresql`, `snowflake`, or `redshift`. Without a
-`hooks.input_options` callback, it selects the grammar for all ordinary data SQL
-before parsing, validation, lineage, and routing. Recognized frontend setup/catalog
-requests retain their compatibility handlers. An explicit input-options callback
-takes precedence. Omitting `dialect` retains the frontend default.
-
-The dialect setting applies even when `enabled` is false; `enabled` controls only
-lineage generation. This option performs no SQL translation and selects no target,
-login, or compute. Configure a dialect compatible with the routed backend.
+The query-context output selects the parsing dialect before lineage analysis.
+`enabled` controls only lineage generation. Lineage settings do not select a grammar,
+target, login, or compute. Analysis runs after query context and before selection
+and cache eligibility, using the same immutable parsed tree.
 
 `namespace` defaults to `yasp:ast_cache`. Both AST and decision-model namespace
 values must be nonempty and contain no NUL. The AST namespace must differ from

@@ -48,38 +48,64 @@ The repository host registers only its documented built-ins and Python reference
 custom Rust names/typed params are mapped by the consuming application at startup.
 See [runtime configuration](../docs/configuration.md#routing-and-pools).
 
-## Context derivation
+## Query context
 
-`bind_context(state, f)` binds an async provider returning an owned JSON mapping;
-attach it with `GatewayConfig::with_context_hook`. Context runs once per ordinary
-validated query before selection and eligibility, including hits. Discovery/setup
-bypass application hooks. Failures use an empty mapping; cancellation stops the query.
-Derived data cannot replace authenticated frontend identity.
+`bind_query_context(state, f)` returns bounded `QueryContextOutput { dialect, values }`;
+attach it with `GatewayConfig::with_query_context_hook`. It runs after gateway
+metadata/setup recognition and before ordinary SQL parsing. Errors reject the query.
+The request has raw SQL, frontend identity, client ID, gateway/common target dialects,
+and optional datasets; AST and lineage belong to downstream hooks.
 
-[examples/context.py](examples/context.py) is the Python scaffold. `metabase_pg`
-and Redash parse the observed leading PostgreSQL comments; `metabase_rs` parses
-the Redshift partner remark emitted by Metabase's Redshift driver. They return
-normalized JSON mappings or `None`; Python `yasp_extractors` exposes the same
-named helpers. Superset remains unimplemented and raises `NotImplementedError` in
-Python. Redash saved-query IDs are numbers; its unsaved-query marker is the string
-`adhoc`. Both formats require a numeric user ID and the remaining observed remark
-fields. The example hook tries these helpers, converts numeric user IDs to dataset
-keys, and obtains its routing labels from `params.workload` and `params.report_kind`.
-The host registers the existing compiled extractors directly as context hooks:
+`hooks.query_context` runs once after frontend metadata/setup recognition and before
+ordinary SQL parsing, including on cache hits. Metadata recognition always uses the
+gateway profile and is independent of remarks or hook output. A recognized request
+does not invoke query context, selection, eligibility, or result processing.
+
+The hook returns `{"dialect": "postgresql", "values": {"user_id": 7}}`. Both fields
+are optional: the dialect defaults to the gateway and values to an empty object.
+Supported dialects are `postgresql`, `redshift`, and `snowflake`. The dialect is the
+grammar of incoming SQL; it selects no target, login, or compute. Hook failures,
+invalid output, size/nesting violations, and timeouts reject the query with `XX000`;
+cancellation reports `57014`. Authenticated identity remains engine-owned.
 
 ```yaml
 hooks:
-  context:
+  query_context:
     type: rust
-    callback: builtin.extractors.metabase_rs
+    callback: builtin.query_context.metabase
 ```
 
-Use `builtin.extractors.metabase_pg` for PostgreSQL remarks or
-`builtin.extractors.redash` for Redash. These callbacks accept no params, need no
-Python runtime or datasets, and return the extractor's raw metadata mapping with
-numeric `user_id`. Missing/malformed remarks produce empty context. Each extractor
-accepts only its own observed format; all three local Redshift configs use
-`metabase_rs`.
+Params are optional. Metabase MBQL/UI exploration and absent/malformed/unknown
+remarks use the gateway dialect. Explicit native remarks use `params.native_dialect`
+when supplied, otherwise the common dialect of configured targets. Multiple logins
+and compute instances do not affect inference. Mixed target dialects require an
+explicit native dialect or a custom hook; inference never uses the discovery target.
+
+`builtin.query_context.redash` extracts saved, `adhoc`, and scheduled query remarks.
+Redash has no native/generated or dialect field, so its default is the gateway.
+Optional `params.dialect` overrides the dialect for a valid Redash remark; missing
+or malformed remarks retain the gateway default.
+
+```yaml
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.redash
+    params:
+      dialect: postgresql # Optional: Redash SQL written for PostgreSQL.
+```
+
+Superset remark formats and any other custom BI metadata belong to application
+hooks. No default Superset parser is registered. Custom Rust/Python providers use
+the same `dialect`/`values` output contract. Successful empty output `{}` uses defaults;
+errors do not silently fall back. Downstream hooks read application values through
+`request.query_context` in Rust or `request["query_context"]` in Python.
+
+[examples/context.py](examples/context.py) supplies `derive_query_context`, a dataset-aware
+application example. Python `yasp_extractors.metabase_pg`, `metabase_rs`, and `redash`
+remain reusable raw remark helpers, independent of the provider envelope. Redash
+preserves numeric saved-query IDs and the string `adhoc` for unsaved queries.
+Superset/custom extensions own their remark format and return the documented envelope.
 
 [examples/rbac.py](examples/rbac.py) resolves the extracted user ID against `users`
 to obtain the account for routing and AST/model email masks. Account policy stays

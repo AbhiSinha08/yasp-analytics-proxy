@@ -18,7 +18,7 @@ use yasp::{
         DatasetError, DatasetLoadError, DatasetLoadRequest, DatasetLoader, DatasetReader, Datasets,
         bind_dataset_loader,
     },
-    hooks::{ContextHook, ContextRequest, bind_context},
+    hooks::{QueryContextHook, QueryContextRequest, bind_query_context},
     query::ParsedQuery,
 };
 
@@ -221,7 +221,7 @@ async fn reads_json_values_missing_keys_limits_and_new_redis_values() {
     // A Rust callback can retain a clone while running, but the hook scope closes it
     // as soon as the callback finishes.
     let retained = Arc::new(Mutex::new(None));
-    let hook: ContextHook = bind_context(retained.clone(), |request, state| {
+    let hook: QueryContextHook = bind_query_context(retained.clone(), |request, state| {
         Box::pin(async move {
             let scoped = request.datasets.expect("reader is attached").clone();
             assert_eq!(
@@ -229,24 +229,27 @@ async fn reads_json_values_missing_keys_limits_and_new_redis_values() {
                 Some(json!(17))
             );
             *state.lock().unwrap() = Some(scoped);
-            Ok(Map::new())
+            Ok((Map::new()).into())
         })
     })
     .into();
     let query = ParsedQuery::parse("SELECT 1").unwrap();
-    let query_id = query.query_id();
-    let context_request = ContextRequest {
-        data_contexts: &yasp::lineage::DataContexts::EMPTY,
+    let context_request = QueryContextRequest {
         authenticated_user: "frontend",
         frontend_database: "analytics",
         client_id: 1,
-        query_id,
-        query: &query,
+
         datasets: Some(&reader),
+
+        sql: (query).sql(),
+        gateway_dialect: yasp::query::SqlDialect::Postgresql,
+        default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
     };
     assert_eq!(
         hook.derive(context_request, Duration::from_secs(1), 65_536)
-            .await,
+            .await
+            .unwrap()
+            .values,
         Map::new()
     );
     let retained = retained.lock().unwrap().take().unwrap();

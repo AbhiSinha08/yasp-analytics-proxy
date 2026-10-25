@@ -28,11 +28,9 @@ fn configured_snowflake_lineage_is_shared_by_both_frontend_profiles() {
         snowflake_host::with_config(
             profile,
             |config| {
-                config["data_contexts"] = json!({"ast":{"enabled":true,"dialect":"snowflake","namespace":ast_namespace.name}});
-                config["hooks"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("input_options");
+                config["data_contexts"] =
+                    json!({"ast":{"enabled":true,"namespace":ast_namespace.name}});
+
                 config["cache"] = json!({"enabled":true,"url_env":"YASP_TEST_REDIS_URL","namespace":namespace.name,"ttl_seconds":30,"max_rows_per_query":100,"max_buffered_bytes_total":196608});
             },
             |_, _, query| {
@@ -51,15 +49,17 @@ fn configured_snowflake_lineage_is_shared_by_both_frontend_profiles() {
                     "frontend catalog without input options",
                 );
                 let sql = format!(
-                    "SELECT u.EMAIL AS \"contact\", SUM(o.AMOUNT) AS \"amount\", '{}' AS \"marker\" FROM USERS u JOIN ORDERS o ON u.ID=o.USER_ID GROUP BY u.EMAIL QUALIFY ROW_NUMBER() OVER(ORDER BY u.EMAIL)=1",
+                    "SELECT u.EMAIL AS \"contact\", SUM(o.AMOUNT) AS \"amount\", '{}' AS \"marker\" FROM USERS u JOIN ORDERS o ON u.ID=o.USER_ID GROUP BY u.EMAIL",
                     namespace.name
                 );
+                let sql =
+                    format!("-- Metabase:: userID: 7 queryType: native queryHash: lineage\n{sql}");
                 let first = query(&sql);
                 assert_success(&first, "Snowflake lineage fill");
-                let id = yasp::query::ParsedQuery::parse_with_options(
+                let id = yasp::query::ParsedQuery::parse_with_dialect(
                     &sql,
                     1_048_576,
-                    yasp::query::InputOptions::native(yasp::query::SqlDialect::Snowflake),
+                    yasp::query::SqlDialect::Snowflake,
                 )
                 .unwrap()
                 .query_id()

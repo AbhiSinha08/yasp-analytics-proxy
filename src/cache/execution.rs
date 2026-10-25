@@ -222,12 +222,12 @@ where
 }
 
 fn scope(request: &ExecutionRequest<'_, '_>, database: &str, source: [u8; 32]) -> [u8; 32] {
-    let input = request.selection.query.input_options();
+    let dialect = request.selection.query.dialect();
     let mut hash = Sha256::new();
     for value in [
-        "pgwire:text:v2:unchanged-sql:v1",
+        "pgwire:text:v2:query-context-dialect:v2",
         &request.settings.protocol,
-        &format!("{:?}:{}", input.dialect, input.native),
+        &format!("{dialect:?}"),
         request.selection.authenticated_user,
         database,
         &request.session.search_path,

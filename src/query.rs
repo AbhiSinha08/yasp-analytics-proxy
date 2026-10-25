@@ -1,5 +1,5 @@
 //! Dialect-aware query syntax and read-only inspection. Original SQL and the
-//! immutable parsed tree stay together through context, routing, and execution.
+//! immutable parsed tree stay together through routing, caching, and execution.
 
 mod fingerprint;
 mod read_only;
@@ -40,49 +40,13 @@ impl SqlDialect {
     }
 }
 
-/// Input grammar and native-query classification never grant discovery access.
-#[derive(Clone, Copy, Debug)]
-pub struct InputOptions {
-    pub dialect: SqlDialect,
-    pub native: bool,
-    pub(crate) native_after_compatibility: Option<SqlDialect>,
-}
-
-impl InputOptions {
-    pub fn frontend(dialect: SqlDialect) -> Self {
-        Self {
-            dialect,
-            native: false,
-            native_after_compatibility: None,
-        }
-    }
-
-    pub fn native(dialect: SqlDialect) -> Self {
-        Self {
-            dialect,
-            native: true,
-            native_after_compatibility: None,
-        }
-    }
-
-    /// An explicit host default for unmarked data SQL. Recognized frontend
-    /// setup/catalog requests still use their compatibility grammar and handlers.
-    pub fn native_after_compatibility(frontend: SqlDialect, native: SqlDialect) -> Self {
-        Self {
-            dialect: frontend,
-            native: false,
-            native_after_compatibility: Some(native),
-        }
-    }
-}
-
 /// Original SQL and its single statement. Access is immutable so the
 /// inspected tree cannot diverge from the SQL sent to the database.
 pub struct ParsedQuery {
     sql: String,
     statement: Statement,
     query_id: String,
-    options: InputOptions,
+    dialect: SqlDialect,
     serialized_ast: std::sync::OnceLock<serde_json::Value>,
 }
 
@@ -108,20 +72,16 @@ impl ParsedQuery {
     }
 
     pub(crate) fn parse_with_limit(sql: &str, max_sql_bytes: usize) -> Result<Self, QueryError> {
-        Self::parse_with_options(
-            sql,
-            max_sql_bytes,
-            InputOptions::frontend(SqlDialect::Postgresql),
-        )
+        Self::parse_with_dialect(sql, max_sql_bytes, SqlDialect::Postgresql)
     }
 
-    pub fn parse_with_options(
+    pub fn parse_with_dialect(
         sql: &str,
         max_sql_bytes: usize,
-        options: InputOptions,
+        dialect: SqlDialect,
     ) -> Result<Self, QueryError> {
-        let dialect = options.dialect.parser();
-        let tokens = bounded_tokens(sql, max_sql_bytes, options.dialect)?;
+        let parser_dialect = dialect.parser();
+        let tokens = bounded_tokens(sql, max_sql_bytes, dialect)?;
         // sqlparser does not decode PostgreSQL Unicode identifier escapes.
         // Reject that syntax rather than inspecting a different function name.
         if tokens.windows(3).any(|tokens| {
@@ -135,7 +95,7 @@ impl ParsedQuery {
             return Err(QueryError::Unsupported);
         }
         let query_id = query_id(sql, &tokens);
-        let mut statements = Parser::new(dialect)
+        let mut statements = Parser::new(parser_dialect)
             .with_recursion_limit(64)
             .with_tokens_with_locations(tokens)
             .parse_statements()
@@ -149,7 +109,7 @@ impl ParsedQuery {
             sql: sql.to_owned(),
             statement: statements.remove(0),
             query_id,
-            options,
+            dialect,
             serialized_ast: std::sync::OnceLock::new(),
         })
     }
@@ -158,8 +118,8 @@ impl ParsedQuery {
         &self.sql
     }
 
-    pub fn input_options(&self) -> InputOptions {
-        self.options
+    pub fn dialect(&self) -> SqlDialect {
+        self.dialect
     }
 
     /// Stable lowercase SHA-256 identifier for this query's normalized tokens.

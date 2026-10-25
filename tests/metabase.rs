@@ -10,12 +10,12 @@ use support::assert_success;
 
 #[test]
 fn redshift_metabase_scan_uses_configured_catalog_without_application_access() {
-    let input_options = serde_json::json!({
+    let query_context = serde_json::json!({
         "type": "rust",
-        "callback": "builtin.input_options.metabase",
+        "callback": "builtin.query_context.metabase",
         "params": {"native_dialect": "postgresql"}
     });
-    catalog_host::with_catalog_host(Some(input_options), |database, query| {
+    catalog_host::with_catalog_host(Some(query_context), |database, query| {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/metabase_redshift.json")).unwrap();
         for captured in fixture["queries"].as_array().unwrap() {
@@ -63,13 +63,11 @@ fn redshift_metabase_scan_uses_configured_catalog_without_application_access() {
             "ordinary reader has no application grants"
         );
         let tables = fixture["queries"][0]["sql"].as_str().unwrap();
-        assert!(
-            !query(&format!(
+        assert_success(
+            &query(&format!(
                 "-- Metabase:: userID: 1 queryType: native queryHash: abc\n{tables}"
-            ))
-            .status
-            .success(),
-            "native remarks must not borrow catalog access"
+            )),
+            "recognized gateway metadata ignores native remarks",
         );
         let application_union = format!(
             "{tables} UNION ALL SELECT full_name, 'public', 'table', NULL, true FROM public.users"
@@ -245,8 +243,8 @@ fn bundled_metabase_connection_and_metadata_accept_both_snowflake_frontends() {
         snowflake_host::with_host(profile, |identity, address, _| {
             let report = clients::run_metabase(profile, identity, address);
             assert_eq!(report["connected"], true, "{profile}: {report}");
-            // Explicit native SQL retains its source type through the same listener.
-            assert_eq!(report["native"]["jdbc_type"], 2, "{profile}: {report}");
+            // Recognized connection probes retain frontend metadata types, even with native remarks.
+            assert_eq!(report["native"]["jdbc_type"], 4, "{profile}: {report}");
             assert_eq!(report["native"]["value"], "1", "{profile}: {report}");
             let generated = report["generated"].as_array().unwrap();
             assert_eq!(generated.len(), 2, "{profile}: {report}");

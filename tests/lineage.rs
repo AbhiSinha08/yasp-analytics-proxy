@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 use yasp::{
     catalog::*,
     lineage::*,
-    query::{InputOptions, ParsedQuery, SqlDialect},
+    query::{ParsedQuery, SqlDialect},
 };
 
 #[derive(Deserialize)]
@@ -150,7 +150,7 @@ fn schema(dialect: SqlDialect) -> Snapshot {
 }
 
 fn parse(sql: &str, dialect: SqlDialect) -> ParsedQuery {
-    ParsedQuery::parse_with_options(sql, 1_048_576, InputOptions::native(dialect))
+    ParsedQuery::parse_with_dialect(sql, 1_048_576, dialect)
         .unwrap_or_else(|e| panic!("{dialect:?}: {sql}: {e}"))
 }
 
@@ -379,7 +379,6 @@ fn recursive_scopes_and_unsupported_nodes_do_not_claim_empty_lineage() {
 fn ast_context_configuration_is_optional_and_has_no_dictionary_options() {
     let settings: yasp::config::DataContextsSettings = serde_json::from_str("{}").unwrap();
     assert!(!settings.ast.enabled);
-    assert_eq!(settings.ast.dialect, None);
     let settings: yasp::config::DataContextsSettings =
         serde_json::from_str(r#"{"ast":{"enabled":true}}"#).unwrap();
     assert!(settings.ast.enabled);
@@ -388,13 +387,11 @@ fn ast_context_configuration_is_optional_and_has_no_dictionary_options() {
         SqlDialect::Snowflake,
         SqlDialect::Redshift,
     ] {
-        let settings: yasp::config::DataContextsSettings =
-            serde_json::from_value(serde_json::json!({"ast":{"dialect":dialect}})).unwrap();
-        assert_eq!(settings.ast.dialect, Some(dialect));
-        assert!(!settings.ast.enabled);
-        assert_eq!(
-            serde_json::to_value(settings).unwrap()["ast"]["dialect"],
-            serde_json::to_value(dialect).unwrap()
+        assert!(
+            serde_json::from_value::<yasp::config::DataContextsSettings>(
+                serde_json::json!({"ast":{"dialect":dialect}})
+            )
+            .is_err()
         );
     }
     assert!(

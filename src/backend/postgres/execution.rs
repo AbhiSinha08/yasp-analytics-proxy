@@ -71,14 +71,9 @@ impl BackendRoute<'_> {
 }
 
 pub(super) fn validate_input(query: &crate::query::ParsedQuery) -> PgWireResult<()> {
-    let options = query.input_options();
-    if options.native && options.dialect != crate::query::SqlDialect::Postgresql {
-        return Err(protocol_error(
-            "0A000",
-            "native SQL dialect does not match the selected PostgreSQL backend",
-        ));
-    }
-    Ok(())
+    query
+        .validate_read_only()
+        .map_err(|_| protocol_error("0A000", "only read-only queries are supported"))
 }
 
 /// Replay only the bounded frontend settings; protected text settings stay fixed.

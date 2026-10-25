@@ -72,7 +72,7 @@ let gateway = gateway.with_result_hook(
 ```
 
 `ResultRequest` supplies authenticated frontend identity/database, client/query IDs,
-original SQL and parsed query, validated target/login names, derived `context`,
+original SQL and parsed query, validated target/login names, derived `query_context`,
 invocation-scoped `datasets`, and raw output `data_contexts.ast` and
 `data_contexts.decision_model`. Source credentials never reach callbacks. AST
 entries are aligned with actual output ordinals. Disabled model classification is

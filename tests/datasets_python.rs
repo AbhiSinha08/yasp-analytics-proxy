@@ -15,8 +15,8 @@ use yasp::{
     config::{ApplicationContextsSettings, DatasetSettings, PythonSettings, SelectorSettings},
     datasets::{DatasetLoader, Datasets},
     hooks::{
-        CacheEligibility, ContextError, ContextHook, ContextRequest, RoutedSelector,
-        SelectionRequest, bind_context,
+        CacheEligibility, QueryContextError, QueryContextHook, QueryContextRequest, RoutedSelector,
+        SelectionRequest, bind_query_context,
         python::{PythonHookError, PythonRuntime},
     },
     query::ParsedQuery,
@@ -77,11 +77,11 @@ def hook(request, params):
     mode = request.get("operation", params["mode"])
     datasets = request.get("datasets")
     if mode == "context":
-        return {
+        return {"values": {
             "email": datasets.get("users", "alice")["email"],
             "fields": datasets.get_many("users", ["enabled", "missing"]),
             "all": datasets.read("compact"),
-        }
+        }}
     if mode == "selector":
         return {
             "target": datasets.get("users", "target"),
@@ -291,37 +291,43 @@ def queued(request, params):
     assert_eq!(second.unwrap(), json!({"ok": true}));
 
     let query = ParsedQuery::parse("SELECT 1").unwrap();
-    let query_id = query.query_id();
-    let context_request = ContextRequest {
-        data_contexts: &yasp::lineage::DataContexts::EMPTY,
+    let context_request = QueryContextRequest {
         authenticated_user: "bi-service",
         frontend_database: "analytics",
         client_id: 7,
-        query_id,
-        query: &query,
+
         datasets: Some(&reader),
+
+        sql: (query).sql(),
+        gateway_dialect: yasp::query::SqlDialect::Postgresql,
+        default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
     };
-    let context = ContextHook::Python(context_python)
+    let context = QueryContextHook::Python(context_python)
         .derive(context_request, Duration::from_secs(1), 8192)
-        .await;
+        .await
+        .unwrap()
+        .values;
     assert_eq!(context["email"], "alice@example.test");
     assert_eq!(context["fields"], json!({"enabled": true}));
     assert_eq!(context["all"]["loader"]["reason"], "startup");
 
     // The Rust context wrapper receives the same reader API.
-    let rust_context = bind_context((), |request, _| {
+    let rust_context = bind_query_context((), |request, _| {
         Box::pin(async move {
             request
                 .datasets
                 .unwrap()
                 .get_many("users", &["enabled", "target"])
                 .await
-                .map_err(|_| ContextError::Failed)
+                .map(Into::into)
+                .map_err(|_| QueryContextError::Failed)
         })
     });
-    let rust_context = ContextHook::Rust(rust_context)
+    let rust_context = QueryContextHook::Rust(rust_context)
         .derive(context_request, Duration::from_secs(1), 8192)
-        .await;
+        .await
+        .unwrap()
+        .values;
     assert_eq!(
         rust_context,
         Map::from_iter([
@@ -334,9 +340,9 @@ def queued(request, params):
         data_contexts: &yasp::lineage::DataContexts::EMPTY,
         authenticated_user: "bi-service",
         client_id: 7,
-        query_id,
+        query_id: query.query_id(),
         query: &query,
-        context: &rust_context,
+        query_context: &rust_context,
         datasets: Some(&reader),
         async_hook_timeout_ms: 1000,
     };

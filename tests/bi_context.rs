@@ -10,7 +10,8 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
         config::{ApplicationContextsSettings, DatasetSettings, PythonSettings, SelectorSettings},
         datasets::{DatasetLoader, Datasets, bind_dataset_loader},
         hooks::{
-            ContextHook, ContextRequest, RoutedSelector, SelectionRequest, python::PythonRuntime,
+            QueryContextHook, QueryContextRequest, RoutedSelector, SelectionRequest,
+            python::PythonRuntime,
         },
         query::ParsedQuery,
     };
@@ -56,11 +57,11 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
     .unwrap();
     let reader = datasets.reader();
     let runtime = PythonRuntime::new(PythonSettings::default()).await.unwrap();
-    let context = ContextHook::Python(
+    let context = QueryContextHook::Python(
         runtime
             .register(
                 &examples.join("context.py"),
-                "derive_context",
+                "derive_query_context",
                 Map::from_iter([
                     ("workload".into(), json!("reporting")),
                     ("report_kind".into(), json!("dashboard")),
@@ -116,19 +117,23 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
         let query_id = query.query_id();
         let derived = context
             .derive(
-                ContextRequest {
-                    data_contexts: &yasp::lineage::DataContexts::EMPTY,
+                QueryContextRequest {
                     authenticated_user: "bi-service",
                     frontend_database: "analytics",
                     client_id: 1,
-                    query_id,
-                    query: &query,
+
                     datasets: Some(&reader),
+
+                    sql: (query).sql(),
+                    gateway_dialect: yasp::query::SqlDialect::Postgresql,
+                    default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
                 },
                 Duration::from_secs(1),
                 8192,
             )
-            .await;
+            .await
+            .unwrap()
+            .values;
         if let Some(user_id) = user_id {
             assert_eq!(derived["user_id"], user_id);
             assert_eq!(derived["department"], "finance");
@@ -148,7 +153,7 @@ async fn bi_user_remarks_reach_the_existing_context_and_role_mapping() {
                 client_id: 1,
                 query_id,
                 query: &query,
-                context: &derived,
+                query_context: &derived,
                 datasets: Some(&reader),
                 async_hook_timeout_ms: 1000,
             })

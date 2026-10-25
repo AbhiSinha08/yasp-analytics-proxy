@@ -6,7 +6,7 @@ def select_backend(request, params):
     fallback = {"target": "primary", "backend_login": "analyst"}
     # return None  # Return None to deny backend selection.
 
-    context = request.get("context", {})
+    context = request.get("query_context", {})
     workload = context.get("workload")
     user_id = context.get("user_id")
     department = context.get("department")
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         "type_by_report": {"dashboard": "small"},
     }
     request = {
-        "context": {
+        "query_context": {
             "workload": "reporting",
             "user_id": "alice",
             "department": "finance",
@@ -69,14 +69,14 @@ if __name__ == "__main__":
     assert select_backend(request, params) == {
         "target": "olap", "backend_login": "restricted", "compute_type": "small"
     }
-    wrong_department = {**request["context"], "department": "sales"}
-    assert select_backend({"context": wrong_department, "datasets": Datasets()}, params) == {
-        "target": "secondary", "backend_login": "restricted"
+    wrong_department = {**request["query_context"], "department": "sales"}
+    assert select_backend({"query_context": wrong_department, "datasets": Datasets()}, params) == {
+        "target": "primary", "backend_login": "analyst"
     }
-    unknown_user = {**request["context"], "user_id": "eve"}
-    assert select_backend({"context": unknown_user, "datasets": Datasets()}, params) == {
-        "target": "secondary", "backend_login": "restricted"
+    unknown_user = {**request["query_context"], "user_id": "eve"}
+    assert select_backend({"query_context": unknown_user, "datasets": Datasets()}, params) == {
+        "target": "primary", "backend_login": "analyst"
     }
-    assert select_backend({"context": {}}, params) == {
-        "target": "secondary", "backend_login": "restricted"
+    assert select_backend({"query_context": {}}, params) == {
+        "target": "primary", "backend_login": "analyst"
     }

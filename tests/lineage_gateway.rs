@@ -13,9 +13,8 @@ use yasp::{
     backend::{PostgresBackend, PostgresBackends},
     catalog::{Catalog, CatalogSettings},
     config::{BackendSettings, CacheSettings, GatewaySettings},
-    hooks::{BackendSelection, bind_cache_eligibility, bind_context, bind_select_backend},
+    hooks::{BackendSelection, bind_cache_eligibility, bind_query_context, bind_select_backend},
     lineage::AstSettings,
-    query::{InputOptions, SqlDialect},
 };
 
 fn redis(url: &str, args: &[&str]) -> Vec<u8> {
@@ -46,20 +45,9 @@ async fn lineage_reaches_all_hooks_and_cache_publication_with_current_schema() {
         .unwrap();
     catalog.stop_refreshing().await;
     let seen = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
-    let context = bind_context(seen.clone(), |request, seen| {
-        Box::pin(async move {
-            seen.lock().unwrap().push((
-                "context".into(),
-                serde_json::to_value(request.data_contexts).unwrap(),
-            ));
-            assert!(request.query.serialized_ast().get("Query").is_some());
-            assert_eq!(
-                request.query.input_options().dialect,
-                SqlDialect::Postgresql
-            );
-            assert!(request.query.input_options().native);
-            Ok(Default::default())
-        })
+    let context = bind_query_context((), |request, _| {
+        assert!(!request.sql.is_empty());
+        Box::pin(async { Ok(Default::default()) })
     });
     let eligible = bind_cache_eligibility(seen.clone(), |request, seen| {
         seen.lock().unwrap().push((
@@ -114,10 +102,9 @@ async fn lineage_reaches_all_hooks_and_cache_publication_with_current_schema() {
         .with_catalog(catalog.clone())
         .with_ast_context(AstSettings {
             enabled: true,
-            dialect: Some(SqlDialect::Postgresql),
             namespace: ast_namespace.name.clone(),
         })
-        .with_context_hook(context)
+        .with_query_context_hook(context)
         .with_cache(cache);
     let server = GatewayServer::routed(gateway, backends, selector);
     let connection = env.gateway().connection(server.address);
@@ -168,9 +155,7 @@ async fn lineage_reaches_all_hooks_and_cache_publication_with_current_schema() {
             .iter()
             .map(|(phase, _)| phase.as_str())
             .collect::<Vec<_>>(),
-        [
-            "context", "select", "eligible", "context", "select", "eligible"
-        ]
+        ["select", "eligible", "select", "eligible"]
     );
     assert!(calls.iter().all(|(_, context)| context == &calls[0].1));
     seen.lock().unwrap().clear();
@@ -210,11 +195,7 @@ async fn lineage_reaches_all_hooks_and_cache_publication_with_current_schema() {
         .iter()
         .map(|(phase, _)| phase.clone())
         .collect();
-    assert_eq!(
-        phases,
-        ["context", "select"],
-        "transactions bypass Redis eligibility"
-    );
+    assert_eq!(phases, ["select"], "transactions bypass Redis eligibility");
     let slow_sql = format!("SELECT pg_sleep(2) AS \"{}\"", namespace.name);
     let slow_id = yasp::query::ParsedQuery::parse(&slow_sql)
         .unwrap()
@@ -275,11 +256,9 @@ fn lineage_and_decisions_share_one_raw_association() {
         .gateway_config()
         .with_ast_context(AstSettings {
             enabled: true,
-            dialect: Some(SqlDialect::Snowflake),
             namespace: ast_namespace.name.clone(),
         })
         // Explicit per-query options take precedence over the configured default.
-        .with_input_options(|_| InputOptions::native(SqlDialect::Postgresql))
         .with_decision_model({
             let mut settings = mock.settings(true);
             settings.namespace = model_namespace.name.clone();
@@ -356,7 +335,6 @@ fn concurrent_dashboard_queries_all_publish_and_reuse_their_contexts() {
         .with_ast_context(AstSettings {
             enabled: true,
             namespace: ast.name.clone(),
-            ..Default::default()
         })
         .with_decision_model(Arc::new(
             yasp::decision_model::DecisionModel::new(model, BTreeMap::new()).unwrap(),

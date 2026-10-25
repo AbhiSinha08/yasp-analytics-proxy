@@ -59,15 +59,9 @@ application_contexts:
           file: hooks/examples/users.json
 
 hooks:
-  input_options:
+  query_context:
     type: rust
-    callback: builtin.input_options.metabase
-    params:
-      native_dialect: postgresql
-      unmarked_data_dialect: postgresql
-  context:
-    type: rust
-    callback: builtin.extractors.metabase_rs
+    callback: builtin.query_context.metabase
   select_backend:
     type: python
     path: ../hooks/examples/rbac.py

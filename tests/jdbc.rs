@@ -10,7 +10,6 @@ use std::{
 use yasp::{
     backend::PostgresBackend,
     config::{GatewaySettings, GatewayTls},
-    query::InputOptions,
 };
 
 #[test]
@@ -42,13 +41,13 @@ fn bundled_jdbc_setup_and_metadata_corpus() {
                 ..GatewaySettings::default()
             })
             .unwrap()
-            .with_input_options(move |request| {
+            .with_query_context_hook(yasp::hooks::bind_query_context((), move |request, _| {
                 let mut queries = capture.lock().unwrap();
                 if queries.len() < 1024 {
                     queries.push(request.sql.to_owned());
                 }
-                InputOptions::frontend(request.frontend_dialect)
-            });
+                Box::pin(async { Ok(Default::default()) })
+            }));
         let backend = Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap());
         let server = support::GatewayServer::start(move |listener, shutdown| async move {
             let catalog = yasp::catalog::Catalog::postgres(
@@ -72,7 +71,7 @@ fn bundled_jdbc_setup_and_metadata_corpus() {
         let report = run_client(profile, &identity, server.address, "public", "users", false);
         server.stop();
         let queries = observed.lock().unwrap();
-        std::fs::write(output.join(format!("jdbc-{profile}.json")), serde_json::to_vec_pretty(&serde_json::json!({"profile":profile,"image":image,"client":report,"queries":*queries})).unwrap()).unwrap();
+        std::fs::write(output.join(format!("jdbc-{profile}.json")), serde_json::to_vec_pretty(&serde_json::json!({"profile":profile,"image":image,"client":report,"ordinary_queries":*queries})).unwrap()).unwrap();
         let mut required = vec![
             "schemas",
             "tables",

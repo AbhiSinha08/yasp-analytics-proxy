@@ -35,7 +35,7 @@ pub(super) fn with_config(
             "snowflake":{"account":"local","schema":"PUBLIC","warehouse":"LOCAL","emulator":std::env::var("YASP_SNOWFLAKE_ENDPOINT").unwrap()},
             "logins":{"reader":{"username":"fake","private_key_file":std::env::var("YASP_SNOWFLAKE_PRIVATE_KEY_FILE").unwrap(),"role":"PUBLIC"}}}},
         "schema_discovery":{"target":"snowflake","backend_login":"reader","catalog":{"schemas":["PUBLIC","ANALYTICS"],"refresh_interval_seconds":1}},
-        "hooks":{"input_options":{"type":"rust","callback":"builtin.input_options.metabase","params":{"native_dialect":"snowflake","unmarked_data_dialect":"snowflake"}},
+        "hooks":{"query_context":{"type":"rust","callback":"builtin.query_context.metabase"},
         "select_backend":{"type":"rust","callback":"builtin.select_backend.passthrough","params":{"target":"snowflake","backend_login":"reader"}}}
     });
     configure(&mut config);

@@ -31,13 +31,12 @@ Query-hook names remain under [yasp::hooks](../src/hooks.rs); dataset APIs are u
 Reusable repository callbacks are under [hooks/builtin](../hooks/builtin),
 and Python examples are under [hooks/examples](../hooks/examples).
 
-| Stage             | Binding and data                                                                                                                              | Result/failure policy                                                                                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Input options     | `GatewayConfig::with_input_options(f)`; synchronous `InputRequest` with byte-bounded SQL and listener dialect.                                | Typed input grammar and native-query classification. No credentials, routing decisions, or discovery privileges.                                                                                |
-| Context           | `bind_context(state, f)`; async borrowed `ContextRequest` with frontend identity/database, IDs, and immutable parsed query.                   | Owned JSON mapping; invalid/error/timeout/saturation supplies empty context. Cancellation stops the query.                                                                                      |
-| Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context. | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
-| Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                       | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
-| Dataset loading   | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                            | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
+| Stage             | Binding and data                                                                                                                                           | Result/failure policy                                                                                                                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Query context     | `bind_query_context(state, f)` / `with_query_context_hook`; byte-bounded raw SQL, frontend identity, gateway and optional common target dialect, datasets. | `QueryContextOutput { dialect, values }`; errors reject the query. No AST, lineage, or final query ID is available yet.                                                                         |
+| Selection         | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context.              | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
+| Cache eligibility | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                                    | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
+| Dataset loading   | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                                         | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
 
 Library hosts can create `backend::ConnectionBudget::new(total)` and pass it to
 `PostgresBackend::with_budget`, `PostgresBackends::with_bindings_and_budget`, or an
@@ -69,33 +68,67 @@ Rust state/functions must meet the binder's `Send + Sync + 'static` requirements
 Synchronous selection and eligibility must be fast and nonblocking.
 Use `bind_select_backend_async` or `bind_cache_eligibility_async` for asynchronous
 dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
-The supplied host can bind `hooks.context` directly to
-`builtin.extractors.metabase_rs`, `builtin.extractors.metabase_pg`, or
-`builtin.extractors.redash` without Python. These existing extractors return raw
-remark metadata, including numeric user IDs. Application callbacks own dataset
-lookups and account policy.
+`hooks.query_context` runs once after frontend metadata/setup recognition and before
+ordinary SQL parsing, including on cache hits. Metadata recognition always uses the
+gateway profile and is independent of remarks or hook output. A recognized request
+does not invoke query context, selection, eligibility, or result processing.
 
-Context uses cooperative async I/O; its deadline cannot interrupt blocking Rust.
-See [binding examples](../hooks/README.md).
+The hook returns `{"dialect": "postgresql", "values": {"user_id": 7}}`. Both fields
+are optional: the dialect defaults to the gateway and values to an empty object.
+Supported dialects are `postgresql`, `redshift`, and `snowflake`. The dialect is the
+grammar of incoming SQL; it selects no target, login, or compute. Hook failures,
+invalid output, size/nesting violations, and timeouts reject the query with `XX000`;
+cancellation reports `57014`. Authenticated identity remains engine-owned.
 
-Input options run before tokenization and parsing. An explicit callback takes
-precedence over `AstSettings::dialect`. Without a callback, that optional setting
-selects the native data grammar after frontend setup/catalog compatibility handling;
-lineage uses the same parsed tree and dialect. It also applies when lineage is
-disabled. With neither setting, the frontend dialect is the default. The callback
-must be cheap and nonblocking. Repository hosts can bind
-`hooks::builtin::input_options::metabase`
-with their logical database's native dialect, or `metabase_with_default` with an
-optional unmarked-data dialect. `InputOptions::native_after_compatibility` preserves
-frontend setup/catalog handling before using the configured native grammar for data.
-Explicit MBQL stays in the frontend grammar. Other consumers can supply their
-own closure without interpreting BI comments in the core engine. Original SQL,
-immutable AST, and `ParsedQuery::input_options()` reach context and selection.
-Adapter input validation runs after ordinary routing and before pool acquisition
-or cache lookup. PostgreSQL enforces explicit native source affinity; Snowflake
-forwards read-only data SQL without a dialect gate or translation. All backends and
-frontend/dialect combinations use the shared cache path when enabled; adapter
-validation still runs before a hit can replay.
+```yaml
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.metabase
+```
+
+Params are optional. Metabase MBQL/UI exploration and absent/malformed/unknown
+remarks use the gateway dialect. Explicit native remarks use `params.native_dialect`
+when supplied, otherwise the common dialect of configured targets. Multiple logins
+and compute instances do not affect inference. Mixed target dialects require an
+explicit native dialect or a custom hook; inference never uses the discovery target.
+
+`builtin.query_context.redash` extracts saved, `adhoc`, and scheduled query remarks.
+Redash has no native/generated or dialect field, so its default is the gateway.
+Optional `params.dialect` overrides the dialect for a valid Redash remark; missing
+or malformed remarks retain the gateway default.
+
+```yaml
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.redash
+    params:
+      dialect: postgresql # Optional: Redash SQL written for PostgreSQL.
+```
+
+Superset remark formats and any other custom BI metadata belong to application
+hooks. No default Superset parser is registered. Custom Rust/Python providers use
+the same `dialect`/`values` output contract. Successful empty output `{}` uses defaults;
+errors do not silently fall back. Downstream hooks read application values through
+`request.query_context` in Rust or `request["query_context"]` in Python.
+
+Rust providers return `QueryContextOutput`; its optional `dialect` defaults to the
+gateway and `values` is an owned `serde_json::Map`. A values-only Rust provider may
+return `values.into()`. Use cooperative async I/O: deadlines cannot interrupt
+blocking Rust. Raw request fields are `authenticated_user`, `frontend_database`,
+`client_id`, `sql`, `gateway_dialect`, and `default_target_dialect`; Python receives
+their JSON equivalents plus an invocation-scoped dataset helper when configured.
+
+```python
+def query_context(request, params):
+    # Parse the application's configured Superset/custom remark format here.
+    return {"dialect": "postgresql", "values": {"user_id": 7}}
+```
+
+Only selection, eligibility, and result hooks receive the parsed AST and output
+data contexts. A future translator compares the returned incoming dialect with
+the selected target dialect; see [planned translation](multi-engine.md#planned-sql-translation).
 
 ## Result processing
 
@@ -163,16 +196,14 @@ hooks:
 Files/functions are registered before listener startup. Every trusted synchronous
 function receives `function(request, params)` with fresh copied JSON-compatible
 objects. Selection/eligibility requests contain `authenticated_user`, `client_id`,
-`query_id`, original `sql`, `query_ast`, `data_contexts`, and `context`.
+`query_id`, original `sql`, `query_ast`, `data_contexts`, and `query_context`.
 `query_ast` uses sqlparser 0.63 Serde syntax; `data_contexts.ast` contains optional
 local output lineage. Rust requests borrow the same `DataContexts` alongside their
 existing `ParsedQuery`. Python receives fresh copies, so callback mutations cannot
 change later hooks. AST lineage performs no dictionary lookup or classification.
-See [AST lineage](ast-lineage.md). Context input also includes
-`frontend_database` and has no derived context yet. Selection returns exactly
+See [AST lineage](ast-lineage.md). Query-context input uses the raw request described above and contains no AST, lineage, or final query ID. Selection returns exactly
 a dictionary with optional `target`, `backend_login`, and `compute_type` keys,
-or `None` to deny; context returns a dictionary
-or `None`; eligibility returns a boolean.
+or `None` to deny; query context returns the `dialect`/`values` envelope; eligibility returns a boolean.
 
 The boundary accepts exact built-in null/bool/string/list/string-keyed dictionary,
 signed/unsigned 64-bit integers, and finite float values, with nesting limited to 64. It is not a database value codec. Unsupported values/coroutines fail. Python
@@ -213,7 +244,8 @@ flowchart TD
     Rewrite --> Validate[Revalidate SQL and binds]
     Validate --> Lineage[Recompute lineage for rewritten SQL]
     Lineage --> Route[Role selection and configured bounds]
-    Route --> Source[Load source result from cache or backend]
+    Route --> Translate[Translate when incoming and target dialects differ; validate effective SQL and lineage]
+    Translate --> Source[Load source result from cache or backend]
     Source --> DataContexts[Data contexts: model classification and AST lineage]
     DataContexts --> Transform[Optional result transformations with data contexts]
     Transform --> Mask[Mandatory policy and masking]

@@ -46,7 +46,6 @@ cache:
 data_contexts:
   ast:
     enabled: true
-    dialect: postgresql
     namespace: "yasp-ast:ast_cache"
 
 application_contexts:
@@ -76,15 +75,9 @@ application_contexts:
           file: hooks/examples/email_columns.json
 
 hooks:
-  input_options:
+  query_context:
     type: rust
-    callback: builtin.input_options.metabase
-    params:
-      native_dialect: postgresql
-      unmarked_data_dialect: postgresql
-  context:
-    type: rust
-    callback: builtin.extractors.metabase_rs
+    callback: builtin.query_context.metabase
   # Both accounts read with local; the result hook applies email permissions.
   process_result:
     type: python

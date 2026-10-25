@@ -6,7 +6,7 @@ mod dialect;
 
 use crate::{
     catalog::{ColumnId, Snapshot},
-    query::{ParsedQuery, SqlDialect},
+    query::ParsedQuery,
 };
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
@@ -15,10 +15,6 @@ use serde::{Serialize, Serializer, ser::SerializeMap};
 #[serde(default, deny_unknown_fields)]
 pub struct AstSettings {
     pub enabled: bool,
-    /// Default data-query grammar when no input-options callback is registered.
-    /// Frontend setup/catalog handling is preserved, even with lineage disabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dialect: Option<SqlDialect>,
     /// Redis metadata prefix on the result cache's shared connection and TTL.
     pub namespace: String,
 }
@@ -27,7 +23,6 @@ impl Default for AstSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            dialect: None,
             namespace: "yasp:ast_cache".into(),
         }
     }

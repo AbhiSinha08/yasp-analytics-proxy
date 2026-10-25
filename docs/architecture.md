@@ -13,7 +13,7 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Host                            | [main.rs](../src/main.rs), [host/](../src/host)                                                                | CLI, environment resources, logging, compiled callback registration, and process lifecycle.                                                                                                                 |
 | Configuration                   | [config.rs](../src/config.rs), [config/](../src/config)                                                        | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs.                                                                                                     |
 | Shared pgwire frontend          | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                                    | Listener/shutdown and authentication in `server`/`session`; bounded parsing in `query`; profile response and error encoding in `result`.                                                                    |
-| Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Ordered validation/discovery/context/routing stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                      |
+| Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Read-only validation, lineage, routing/execution stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                      |
 | SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery)               | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                                   |
 | Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, result-processing, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                              | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                                                                    |
@@ -75,91 +75,48 @@ provides its own result/session implementation after its connector gates pass.
 
 ```mermaid
 flowchart TD
-    Query[Simple-query message] --> Bound[SQL byte bound]
-    Bound --> Hint[Optional host input-dialect resolver]
-    Hint --> CatalogMatch{Non-native captured metadata?}
-    CatalogMatch -->|yes| CatalogState{Transaction usable and snapshot fresh?}
-    CatalogState -->|yes| CatalogResponse[Pin generation and render frontend metadata]
-    CatalogResponse --> Ready
-    CatalogState -->|no| CatalogFailure[Reject failed transaction or unavailable snapshot]
-    CatalogFailure --> Ready
-    CatalogMatch -->|no| Fallback{Configured native default for unmarked data?}
-    Fallback -->|yes| Compatibility[Keep recognized frontend setup and metadata; select native grammar for data]
-    Fallback -->|no| Parse[Dialect-aware tokenize and parse]
-    Compatibility --> Parse
-    Parse --> Control{Transaction control?}
-    Control -->|yes| TxControl[Begin pending transaction or finish pinned work]
-    Control -->|no| Usable{Transaction usable?}
-    Usable -->|no| Aborted[Reject until rollback]
-    Usable -->|yes| Setup{Recognized setup command?}
-    Setup -->|yes| Local[Update or read frontend state]
-    Setup -->|no| ReadOnly[Validate read-only statement]
-    ReadOnly --> Descriptor{Exact frontend descriptor query?}
-    Descriptor -->|yes| Local
-    Descriptor -->|no| Metadata{Classified PostgreSQL or captured Redshift metadata?}
-    Metadata -->|yes| UnsupportedMetadata[Reject unsupported metadata with 0A000]
-    Metadata -->|no| DatasetRead[Attach optional bounded dataset reader]
-    DatasetRead --> Lineage[Compute optional AST lineage from current catalog]
-    Lineage --> Context[Derive optional bounded application context]
-    Context --> Route[Resolve target, login, and optional compute type]
-    Route --> Affinity[Validate selected adapter input]
-    Affinity --> Explicit{Explicit transaction?}
-    Explicit -->|yes| Pin[Validate affinity and pin first backend]
-    Explicit -->|no| Eligible{Shared cache enabled and query eligible?}
-    Eligible -->|yes| Lookup[Reserve budget and validate cached response]
-    Lookup -->|hit| Decisions[Load matching cached decisions without inference]
-    Decisions --> Replay[Replay raw response through optional result hook]
-    Lookup -->|miss or no budget| Allocate[Acquire source capacity]
-    Eligible -->|no| Allocate
-    Allocate --> Engine{Selected engine}
-    Engine -->|PostgreSQL| Execute[Acquire backend lease and execute]
-    Engine -->|Snowflake| Native[Admit and submit unchanged SQL through HTTPS]
-    Native --> NativeRows[Poll and stream bounded JSON partitions]
-    NativeRows --> NativeCleanup[Verify complete row count and release admission]
-    NativeCleanup --> Complete
-    Execute --> Stream[Stream native text rows]
-    Stream -.-> Classify[Optional shared bounded prefix classification before data rows]
-    NativeRows -.-> Classify
-    PinnedExecute -.-> Classify
-    Classify -.-> ResultHook[Optional bounded result hook and validation before client output]
-    Stream --> Cleanup[Rollback, discard state, verify idle]
-    Cleanup --> Complete[Send success completion]
-    Complete --> Cacheable{Caching allowed and capture complete?}
-    Cacheable -->|yes| Store[Atomically write raw result and optional lineage and decision sidecars]
-    Cacheable -->|no| Ready
-    Local --> Ready[ReadyForQuery with idle, transaction, or failed status]
-    TxControl --> Ready
-    Aborted --> Ready
-    UnsupportedMetadata --> Ready
-    Pin --> PinnedExecute[Execute on retained connection without result cache]
-    PinnedExecute --> Ready
-    Replay --> Ready
-    Store --> Ready
+    SQL[Simple-query message] --> Bound[Bound SQL bytes]
+    Bound --> Metadata{Recognized gateway metadata?}
+    Metadata -->|yes| Snapshot[Check transaction and fresh catalog; render compatibility response]
+    Metadata -->|no| Control{Recognized frontend setup or transaction control?}
+    Control -->|yes| Local[Update frontend state or retained transaction]
+    Control -->|no| Context[Derive bounded query context and incoming dialect]
+    Context --> Parse[Parse once in returned dialect and validate read-only SQL]
+    Parse --> Lineage[Compute optional lineage from current catalog]
+    Lineage --> Select[Authorize target, login, and optional compute type]
+    Select --> Tx{Explicit transaction?}
+    Tx -->|yes| Pinned[Validate affinity; execute on pinned source without cache]
+    Tx -->|no| Cache{Eligible valid raw cache hit?}
+    Cache -->|hit| Replay[Replay raw results and associated data contexts]
+    Cache -->|miss| Execute[Acquire capacity; execute unchanged SQL; capture bounded raw results]
+    Execute --> Cleanup[Verified source cleanup; publish only complete raw cache entries]
+    Execute --> Process[Classify and process bounded source batches]
+    Pinned --> Process
+    Replay --> Process
+    Process --> Ready[Client output and ReadyForQuery]
+    Snapshot --> Ready
+    Local --> Ready
 ```
 
-`ParsedQuery` keeps original SQL, typed input options, and an immutable statement
-tree. Optional `data_contexts.ast.enabled` computes local output lineage against
-the currently available catalog before application context and routing hooks.
-Known constituents survive missing metadata alongside explicit unknowns; no
-dictionary classification or enforcement occurs. Python query hooks also receive
-the sqlparser 0.63 JSON AST. See [AST lineage](ast-lineage.md). Without
-an input-options resolver, optional `data_contexts.ast.dialect` selects the native
-data-query grammar after frontend setup/catalog compatibility handling. An explicit
-resolver takes precedence and may select a grammar before tokenization and parsing;
-unknown/missing Metabase remarks retain the listener's grammar unless an explicit native-data default is configured. Native SQL always
-uses ordinary context and routing and never borrows discovery access. PostgreSQL
-source affinity is enforced before cache or pool acquisition. Frontend fingerprints
-describe the configured frontend. PostgreSQL discovery preserves its source version; Snowflake discovery advertises PostgreSQL 18.0 or Redshift 8.0.2. Supported reads
-include SELECT, read-only WITH/subqueries/joins/aggregates/unions, catalog queries,
-and supported SHOW requests. Application query rewrites are not implemented; the
-metadata providers collect engine-native facts during refresh. Parsing has a default
-1 MiB SQL limit, 4,096 significant tokens, and recursion budget 64. Unicode escaped
-identifiers are unsupported. Inspection does not analyze custom function bodies;
-PostgreSQL read-only transactions and source grants remain necessary.
 
-Context runs once for each ordinary query, including cache hits. It cannot replace
-authenticated frontend identity. Context errors supply an empty mapping; selector
-errors stop the query; eligibility errors bypass caching. See [extensions](extensions.md).
+`ParsedQuery` keeps original SQL, its incoming dialect, and an immutable AST.
+Metadata recognition uses the gateway grammar before query context, regardless of
+any native remark. Frontend setup, fingerprints, and transaction controls bypass
+context. Ordinary queries derive context exactly once, including cache hits, then
+parse using its dialect (or the gateway default). Hook errors reject the query.
+The raw context request has no AST, lineage, or final query ID; downstream selection,
+eligibility, and result hooks receive the parsed AST and `query_context` values.
+
+Optional `data_contexts.ast.enabled` computes lineage from the current catalog after
+query context and before routing. Missing facts remain explicit unknowns. Parsing
+has byte, 4,096-token, and recursion bounds; Unicode escaped identifiers remain
+unsupported. Source grants and read-only transactions remain necessary.
+
+Current execution forwards accepted SQL unchanged. The planned application modifier
+runs after parsing and revalidates its output. Future target-specific translation
+runs after selection whenever the incoming dialect differs from the target's;
+revalidate effective SQL, recompute lineage and query ID before cache eligibility.
+See [SQL translation](multi-engine.md#planned-sql-translation).
 
 The host loads registered application datasets before it serves clients. Rust and
 Python callbacks receive an optional `DatasetReader`; each lookup reads the latest
@@ -248,7 +205,8 @@ Frontend metadata modules recognize reviewed statement templates and encode the
 client response. The source version is captured during loading, without a separate
 listener-startup source lookup.
 
-Native SQL skips snapshot handling. Metadata responses pin a generation and acquire
+Recognized metadata uses snapshot handling regardless of native remarks or hook
+output. Metadata responses pin a generation and acquire
 no backend session or application context, selection or result-cache hooks.
 Unsupported classified metadata returns `0A000` for either engine. Expired snapshots
 return `55000`; neither failure triggers live discovery. Failed frontend transactions

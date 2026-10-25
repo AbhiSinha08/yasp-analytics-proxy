@@ -3,7 +3,8 @@
 use super::{FrontendProfile, protocol_error, session::connection};
 use crate::backend::execution::Execution;
 use crate::{
-    cache::RedisCache, config::GatewayConfig, datasets::DatasetReader, hooks::ContextHook, logger,
+    cache::RedisCache, config::GatewayConfig, datasets::DatasetReader, hooks::QueryContextHook,
+    logger,
 };
 use async_trait::async_trait;
 use pgwire::{
@@ -69,7 +70,7 @@ pub(super) async fn serve_sessions(
     };
     drop(config.password);
     let cache = config.cache;
-    let context_hook = config.context_hook;
+    let query_context_hook = config.query_context_hook;
     let result_processing = config.result_processing;
     let datasets = config.datasets;
     let (stopping, stopped) = watch::channel(false);
@@ -81,13 +82,12 @@ pub(super) async fn serve_sessions(
         cache: cache.clone(),
         decision_model: config.decision_model,
         ast: config.ast,
-        context_hook: context_hook.clone(),
+        query_context_hook: query_context_hook.clone(),
         result_processing: result_processing.clone(),
         datasets,
         stopped,
         server_version,
         profile,
-        input_options: config.input_options,
         catalog: config
             .catalog
             .expect("catalog was validated before serving"),
@@ -145,7 +145,7 @@ pub(super) async fn serve_sessions(
     drop(listener);
     tracing::info!("gateway shutting down");
     stopping.send_replace(true);
-    if let Some(hook) = &context_hook {
+    if let Some(hook) = &query_context_hook {
         hook.shutdown();
     }
     if let Some(processing) = &result_processing {
@@ -180,12 +180,11 @@ pub(super) struct Credentials {
     pub(super) decision_model: Option<Arc<crate::decision_model::DecisionModel>>,
     pub(super) ast: crate::lineage::AstSettings,
     pub(super) result_processing: Option<Arc<crate::hooks::result::ResultProcessing>>,
-    pub(super) context_hook: Option<Arc<ContextHook>>,
+    pub(super) query_context_hook: Option<Arc<QueryContextHook>>,
     pub(super) datasets: Option<DatasetReader>,
     pub(super) stopped: watch::Receiver<bool>,
     pub(super) server_version: String,
     pub(super) profile: FrontendProfile,
-    pub(super) input_options: Option<Arc<crate::hooks::InputOptionsResolver>>,
 }
 
 impl fmt::Debug for Credentials {

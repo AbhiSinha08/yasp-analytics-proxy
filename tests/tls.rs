@@ -318,28 +318,29 @@ async fn encrypted_disconnect_drops_active_work_and_releases_the_session() {
     }
     let entered = Arc::new(tokio::sync::Notify::new());
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let hook = yasp::hooks::bind_context((entered.clone(), dropped.clone()), |request, state| {
-        let pending = request.query.sql().contains("disconnect_test");
-        Box::pin(async move {
-            if pending {
-                let _guard = Dropped(state.1.clone());
-                state.0.notify_one();
-                std::future::pending::<()>().await;
-            }
-            Ok(serde_json::Map::new())
-        })
-    });
+    let hook =
+        yasp::hooks::bind_query_context((entered.clone(), dropped.clone()), |request, state| {
+            let pending = request.sql.contains("disconnect_test");
+            Box::pin(async move {
+                if pending {
+                    let _guard = Dropped(state.1.clone());
+                    state.0.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Ok((serde_json::Map::new()).into())
+            })
+        });
     let env = support::TestEnvironment::load();
     let identity = env.gateway();
     let backend = Arc::new(PostgresBackend::new(backend(&env, outbound())).unwrap());
     let mut limits = settings("server");
-    limits.context_timeout_ms = 30_000;
+    limits.query_context_timeout_ms = 30_000;
     let server = support::GatewayServer::fixed(
         identity
             .gateway_config()
             .with_settings(limits)
             .unwrap()
-            .with_context_hook(hook),
+            .with_query_context_hook(hook),
         backend,
     );
     let mut client = connect_client(server.address, &identity).await;

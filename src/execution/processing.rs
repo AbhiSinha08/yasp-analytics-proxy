@@ -178,7 +178,7 @@ impl<'a, 'query> Processor<'a, 'query> {
             query: selection.query,
             target: &self.request.route.target,
             backend_login: &self.request.route.backend_login,
-            context: selection.context,
+            query_context: selection.query_context,
             data_contexts: ResultDataContexts {
                 ast: self.ast.as_ref(),
                 decision_model: decisions,

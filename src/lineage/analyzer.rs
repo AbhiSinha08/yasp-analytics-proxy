@@ -158,7 +158,7 @@ pub(super) fn analyze(
     max_bytes: usize,
 ) -> AstDataContext {
     let mut analyzer = Analyzer {
-        dialect: query.input_options().dialect,
+        dialect: query.dialect(),
         snapshot,
         remaining: (max_bytes / 8).clamp(64, 65_536),
         max_columns: (max_bytes / 64).clamp(1, 4096),

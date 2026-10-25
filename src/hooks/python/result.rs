@@ -76,7 +76,7 @@ impl PythonCallback {
             "client_id": request.client_id, "query_id": request.query_id,
             "sql": request.query.sql(), "query_ast": request.query.serialized_ast(),
             "target": request.target, "backend_login": request.backend_login,
-            "context": request.context,
+            "query_context": request.query_context,
             "data_contexts": { "ast": request.data_contexts.ast,
                 "decision_model": request.data_contexts.decision_model },
             "columns": columns.iter().map(|c| json!({ "ordinal": c.ordinal, "name": c.name,

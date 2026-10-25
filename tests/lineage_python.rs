@@ -6,7 +6,7 @@ use yasp::{
     catalog::{ColumnId, RelationId},
     config::PythonSettings,
     hooks::{
-        CacheEligibility, ContextHook, ContextRequest, RoutedSelector, SelectionRequest,
+        CacheEligibility, QueryContextHook, QueryContextRequest, RoutedSelector, SelectionRequest,
         python::PythonRuntime,
     },
     lineage::{AstDataContext, ColumnLineage, DataContexts, LineageSource},
@@ -28,22 +28,22 @@ def check(request):
     request['data_contexts']['ast']['columns'][0]['sources'].clear()
 
 def context(request, params):
-    check(request)
-    return {'checked': True}
+    assert "query_ast" not in request and "data_contexts" not in request
+    return {"values": {"checked": True}}
 
 def select(request, params):
     check(request)
-    assert request['context']['checked']
+    assert request['query_context']['checked']
     return {'target':'primary','backend_login':'reader'}
 
 def eligible(request, params):
     check(request)
-    return request['context']['checked']
+    return request['query_context']['checked']
 "#,
     )
     .unwrap();
     let runtime = PythonRuntime::new(PythonSettings::default()).await.unwrap();
-    let context: ContextHook = runtime
+    let context: QueryContextHook = runtime
         .register(&path, "context", Map::new())
         .await
         .unwrap()
@@ -81,19 +81,23 @@ def eligible(request, params):
     };
     let derived = context
         .derive(
-            ContextRequest {
+            QueryContextRequest {
                 authenticated_user: "bi",
                 frontend_database: "analytics",
                 client_id: 1,
-                query_id: query.query_id(),
-                query: &query,
+
                 datasets: None,
-                data_contexts: &data,
+
+                sql: (query).sql(),
+                gateway_dialect: yasp::query::SqlDialect::Postgresql,
+                default_target_dialect: Some(yasp::query::SqlDialect::Postgresql),
             },
             Duration::from_secs(1),
             1024,
         )
-        .await;
+        .await
+        .unwrap()
+        .values;
     assert_eq!(
         derived,
         json!({"checked":true}).as_object().unwrap().clone()
@@ -103,7 +107,7 @@ def eligible(request, params):
         client_id: 1,
         query_id: query.query_id(),
         query: &query,
-        context: &derived,
+        query_context: &derived,
         datasets: None,
         async_hook_timeout_ms: 2000,
         data_contexts: &data,

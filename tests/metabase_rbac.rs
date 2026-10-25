@@ -50,9 +50,9 @@ fn metabase_roles_and_email_masks_use_current_accounts_on_raw_cache_hits() {
         )
         .unwrap();
         assert_eq!(
-            config["hooks"]["context"],
+            config["hooks"]["query_context"],
             json!({
-                "type": "rust", "callback": "builtin.extractors.metabase_rs",
+                "type": "rust", "callback": "builtin.query_context.metabase",
             })
         );
         match callback {
@@ -222,10 +222,11 @@ fn metabase_roles_and_email_masks_use_current_accounts_on_raw_cache_hits() {
             let postgres_remark =
                 format!("-- Metabase:: userID: 2 queryType: native queryHash: pg\n{sql}");
             let result = query(None, &postgres_remark);
-            assert!(
-                !result.status.success(),
-                "the configured Redshift extractor does not accept a PostgreSQL remark"
+            support::assert_success(
+                &result,
+                "unified Metabase provider accepts PostgreSQL remarks",
             );
+            assert_eq!(String::from_utf8(result.stdout).unwrap(), masked);
             assert_eq!(
                 String::from_utf8(query(Some(1), sql).stdout).unwrap(),
                 original

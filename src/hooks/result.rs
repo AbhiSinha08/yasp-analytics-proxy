@@ -30,7 +30,7 @@ pub struct ResultRequest<'a> {
     pub query: &'a ParsedQuery,
     pub target: &'a str,
     pub backend_login: &'a str,
-    pub context: &'a Map<String, Value>,
+    pub query_context: &'a Map<String, Value>,
     pub data_contexts: ResultDataContexts<'a>,
     pub datasets: Option<&'a DatasetReader>,
 }

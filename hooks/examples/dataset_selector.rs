@@ -21,7 +21,7 @@ fn select_backend<'a>(
 ) -> BoxFuture<'a, Result<BackendDecision, SelectionError>> {
     Box::pin(async move {
         let user_id = request
-            .context
+            .query_context
             .get("user_id")
             .and_then(serde_json::Value::as_str)
             .ok_or(SelectionError::Denied)?;

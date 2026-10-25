@@ -29,7 +29,7 @@ fn context_and_metadata_bypass() {
     let context_namespace = format!("{namespace}_context");
     let context_observations = Arc::new(std::sync::Mutex::new(Vec::new()));
     let context_sequence = Arc::new(AtomicUsize::new(0));
-    let context_hook = bind_context((), {
+    let query_context_hook = bind_query_context((), {
         let context_sequence = context_sequence.clone();
         move |request, _state| {
             let snapshot = context_sequence.fetch_add(1, Ordering::SeqCst) + 1;
@@ -42,14 +42,14 @@ fn context_and_metadata_bypass() {
                     serde_json::json!("spoofed-user"),
                 );
                 context.insert("derived_for".into(), serde_json::json!(authenticated_user));
-                Ok(context)
+                Ok((context).into())
             })
         }
     });
     let context_selector = bind_select_backend(
         (route(&default.backend_login), context_observations.clone()),
         |request, (selected, observations)| {
-            let context = request.context;
+            let context = request.query_context;
             observations.lock().unwrap().push((
                 "selector",
                 context["snapshot"].as_u64().unwrap(),
@@ -62,7 +62,7 @@ fn context_and_metadata_bypass() {
     );
     let context_eligibility =
         bind_cache_eligibility(context_observations.clone(), |request, observations| {
-            let context = request.context;
+            let context = request.query_context;
             observations.lock().unwrap().push((
                 "eligibility",
                 context["snapshot"].as_u64().unwrap(),
@@ -84,7 +84,7 @@ fn context_and_metadata_bypass() {
         .expect("frontend identity is valid")
         .with_schema_discovery(discovery_route.clone())
         .with_cache(context_cache)
-        .with_context_hook(context_hook);
+        .with_query_context_hook(query_context_hook);
     let context_server = start_server(context_gateway, make_backends(), context_selector);
     let context_address = context_server.address;
     let normalized_context_hit =

@@ -11,7 +11,7 @@ use yasp::{
     backend::PostgresBackend,
     catalog::{Catalog, CatalogSettings},
     config::GatewaySettings,
-    hooks::bind_context,
+    hooks::bind_query_context,
 };
 
 #[tokio::test]
@@ -56,7 +56,7 @@ async fn postgres_reflection_pins_source_facts_and_never_falls_back() {
             ..Default::default()
         })
         .unwrap()
-        .with_context_hook(bind_context(calls, |_, calls| {
+        .with_query_context_hook(bind_query_context(calls, |_, calls| {
             calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Ok(Default::default()) })
         }));

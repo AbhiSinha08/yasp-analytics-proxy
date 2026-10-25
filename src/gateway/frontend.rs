@@ -3,7 +3,7 @@
 use crate::discovery::SetupResponse;
 use crate::{
     config::ConfigError,
-    query::{InputOptions, ParsedQuery, QueryError, SqlDialect},
+    query::{ParsedQuery, QueryError, SqlDialect},
 };
 use sqlparser::ast::{Expr, SetExpr, Statement, Value};
 
@@ -29,37 +29,14 @@ impl FrontendProfile {
         }
     }
 
-    pub(crate) fn parse_query(
-        self,
-        sql: &str,
-        bound: usize,
-        options: InputOptions,
-    ) -> Result<ParsedQuery, QueryError> {
-        if let Some(native) = options.native_after_compatibility {
-            let frontend = self.parse_query(sql, bound, InputOptions::frontend(self.dialect()));
-            if let Ok(query) = &frontend
-                && (!matches!(query.statement(), sqlparser::ast::Statement::Query(_))
-                    || crate::discovery::classify(query).is_some()
-                    || self.setup(query).is_some()
-                    || self.fingerprint(query.statement()).is_some())
-            {
-                return frontend;
-            }
-            return ParsedQuery::parse_with_options(sql, bound, InputOptions::native(native));
-        }
-        let parsed = ParsedQuery::parse_with_options(sql, bound, options);
-        // Redshift JDBC emits PostgreSQL catalog vector subscripts such as
-        // con.confkey[pos.n]. Its normal grammar treats [pos.n] as a quoted name.
-        // The alternate grammar is restricted to verified metadata-only ASTs;
-        // native SQL and application-data queries never use this path.
+    /// Inspect only the frontend compatibility surface before application hooks.
+    pub(crate) fn parse_query(self, sql: &str, bound: usize) -> Result<ParsedQuery, QueryError> {
+        let parsed = ParsedQuery::parse_with_dialect(sql, bound, self.dialect());
+        // Captured Redshift catalog SQL uses PostgreSQL vector subscripts.
+        // This alternate grammar is restricted to catalog-only statements.
         if self == Self::Redshift
-            && !options.native
             && matches!(parsed, Err(QueryError::Syntax))
-            && let Ok(catalog) = ParsedQuery::parse_with_options(
-                sql,
-                bound,
-                InputOptions::frontend(SqlDialect::Postgresql),
-            )
+            && let Ok(catalog) = ParsedQuery::parse_with_dialect(sql, bound, SqlDialect::Postgresql)
             && crate::discovery::classify(&catalog)
                 == Some(crate::discovery::DiscoveryKind::Catalog)
         {
@@ -68,9 +45,16 @@ impl FrontendProfile {
         parsed
     }
 
+    pub(crate) fn is_frontend_request(self, query: &ParsedQuery) -> bool {
+        !matches!(query.statement(), Statement::Query(_))
+            || self.setup(query).is_some()
+            || self.fingerprint(query.statement()).is_some()
+            || crate::discovery::classify(query).is_some()
+    }
+
     pub(crate) fn setup(self, query: &ParsedQuery) -> Option<SetupResponse> {
         let statement = query.statement();
-        if !query.input_options().native && matches!(statement, Statement::Query(_)) {
+        if matches!(statement, Statement::Query(_)) {
             let sql = statement.to_string();
             if sql.eq_ignore_ascii_case("SELECT pg_backend_pid()")
                 || sql.eq_ignore_ascii_case("SELECT pg_catalog.pg_backend_pid()")
@@ -144,7 +128,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_catalog_grammar_does_not_admit_native_or_application_queries() {
+    fn legacy_catalog_grammar_cannot_admit_application_queries() {
         let corpus: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/jdbc_redshift.json")).unwrap();
         let sql = corpus["queries"]
@@ -154,17 +138,9 @@ mod tests {
             .filter_map(|q| q.as_str())
             .find(|sql| sql.contains("con.confkey[pos.n]"))
             .unwrap();
-        let options = InputOptions::frontend(SqlDialect::Redshift);
-        let parsed = FrontendProfile::Redshift
-            .parse_query(sql, 4096, options)
-            .unwrap();
-        assert_eq!(parsed.input_options().dialect, SqlDialect::Postgresql);
-        assert!(
-            FrontendProfile::Redshift
-                .parse_query(sql, 4096, InputOptions::native(SqlDialect::Redshift))
-                .is_err()
-        );
-        for sql in [
+        let parsed = FrontendProfile::Redshift.parse_query(sql, 4096).unwrap();
+        assert_eq!(parsed.dialect(), SqlDialect::Postgresql);
+        for altered in [
             sql.replace("pg_catalog.pg_constraint con,", "public.users con,"),
             sql.replace(
                 "pg_catalog.pg_constraint con,",
@@ -173,9 +149,8 @@ mod tests {
         ] {
             assert!(
                 FrontendProfile::Redshift
-                    .parse_query(&sql, 4096, options)
-                    .is_err(),
-                "{sql}"
+                    .parse_query(&altered, 4096)
+                    .is_err()
             );
         }
     }

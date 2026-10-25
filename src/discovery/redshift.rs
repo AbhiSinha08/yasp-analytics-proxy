@@ -19,7 +19,7 @@ pub(crate) struct Request {
 
 impl Request {
     pub(crate) fn recognize(query: &ParsedQuery) -> Option<Self> {
-        if query.input_options().native || query.input_options().dialect != SqlDialect::Redshift {
+        if query.dialect() != SqlDialect::Redshift {
             return None;
         }
         let actual = tokens(query.sql(), &RedshiftSqlDialect {})?;
@@ -82,20 +82,17 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        discovery::{DiscoveryKind, classify},
-        query::InputOptions,
-    };
+    use crate::discovery::{DiscoveryKind, classify};
 
     #[test]
     fn sqlalchemy_reflection_accepts_only_captured_metadata_with_literal_filters() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/superset_redshift.json"))
                 .unwrap();
-        let options = InputOptions::frontend(SqlDialect::Redshift);
+        let options = SqlDialect::Redshift;
         for captured in fixture["queries"].as_array().unwrap() {
             let sql = captured["sql"].as_str().unwrap();
-            let parsed = ParsedQuery::parse_with_options(sql, 128 * 1024, options).unwrap();
+            let parsed = ParsedQuery::parse_with_dialect(sql, 128 * 1024, options).unwrap();
             assert!(Request::recognize(&parsed).is_some(), "{sql}");
             assert_eq!(classify(&parsed), Some(DiscoveryKind::Catalog));
             for altered in [
@@ -108,7 +105,7 @@ mod tests {
             ] {
                 if altered != sql
                     && let Ok(parsed) =
-                        ParsedQuery::parse_with_options(&altered, 128 * 1024, options)
+                        ParsedQuery::parse_with_dialect(&altered, 128 * 1024, options)
                 {
                     assert!(Request::recognize(&parsed).is_none());
                     assert_eq!(classify(&parsed), None, "{altered}");
@@ -118,24 +115,17 @@ mod tests {
                 let different = sql.replacen("'public'", "'other'", 1);
                 assert!(
                     Request::recognize(
-                        &ParsedQuery::parse_with_options(&different, 128 * 1024, options).unwrap()
+                        &ParsedQuery::parse_with_dialect(&different, 128 * 1024, options).unwrap()
                     )
                     .is_none()
                 );
             }
-            let native = ParsedQuery::parse_with_options(
-                sql,
-                128 * 1024,
-                InputOptions::native(SqlDialect::Redshift),
-            )
-            .unwrap();
-            assert!(Request::recognize(&native).is_none());
-            assert_eq!(classify(&native), None);
-            if let Ok(postgres) = ParsedQuery::parse_with_options(
-                sql,
-                128 * 1024,
-                InputOptions::frontend(SqlDialect::Postgresql),
-            ) {
+            let native =
+                ParsedQuery::parse_with_dialect(sql, 128 * 1024, SqlDialect::Redshift).unwrap();
+            assert!(Request::recognize(&native).is_some());
+            if let Ok(postgres) =
+                ParsedQuery::parse_with_dialect(sql, 128 * 1024, SqlDialect::Postgresql)
+            {
                 assert!(Request::recognize(&postgres).is_none());
                 assert_eq!(classify(&postgres), None);
             }

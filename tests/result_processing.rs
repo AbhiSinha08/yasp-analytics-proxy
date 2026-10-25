@@ -19,7 +19,9 @@ use support::{GatewayServer, TestDatabase, TestEnvironment, assert_success};
 use yasp::{
     backend::{PostgresBackend, PostgresBackends},
     config::{CacheSettings, GatewaySettings, ResultProcessingSettings},
-    hooks::{BackendSelection, bind_context, bind_process_result, bind_select_backend, builtin},
+    hooks::{
+        BackendSelection, bind_process_result, bind_query_context, bind_select_backend, builtin,
+    },
 };
 
 #[test]
@@ -161,15 +163,16 @@ async fn cache_reprocesses_current_context_and_exposes_raw_classification_and_da
     .await
     .unwrap();
     let turn = Arc::new(AtomicUsize::new(0));
-    let context = bind_context(turn, |_, turn| {
+    let context = bind_query_context(turn, |_, turn| {
         Box::pin(async move {
-            Ok(Map::from_iter([
+            Ok((Map::from_iter([
                 (
                     "turn".into(),
                     json!(turn.fetch_add(1, Ordering::SeqCst) + 1),
                 ),
                 ("authenticated_user".into(), json!("untrusted")),
             ]))
+            .into())
         })
     });
     let retained = Arc::new(Mutex::new(None::<DatasetReader>));
@@ -194,7 +197,7 @@ async fn cache_reprocesses_current_context_and_exposes_raw_classification_and_da
                 Some(json!({"allowed":true}))
             );
             *retained.lock().unwrap() = Some(reader.clone());
-            let turn = request.context["turn"].as_u64().unwrap();
+            let turn = request.query_context["turn"].as_u64().unwrap();
             let keep = (0..batch.len())
                 .map(|row| {
                     batch.text(row, 0).unwrap().unwrap().parse::<u64>().unwrap() % 2 == turn % 2
@@ -226,7 +229,7 @@ async fn cache_reprocesses_current_context_and_exposes_raw_classification_and_da
     let gateway = env
         .gateway()
         .gateway_config()
-        .with_context_hook(context)
+        .with_query_context_hook(context)
         .with_datasets(datasets.reader())
         .with_ast_context(yasp::lineage::AstSettings {
             enabled: true,
@@ -403,9 +406,9 @@ def process(request, batch, params):
         else:
             raise AssertionError('retained batch is still live')
     previous[:] = [batch]
-    assert request['context']['prefix'] == 'custom'
+    assert request['query_context']['prefix'] == 'custom'
     try:
-        request['context']['prefix'] = 'mutated'
+        request['query_context']['prefix'] = 'mutated'
     except TypeError:
         pass
     else:
@@ -449,13 +452,13 @@ def process(request, batch, params):
         )
         .await
         .unwrap();
-    let context = bind_context((), |_, _| {
-        Box::pin(async { Ok(Map::from_iter([("prefix".into(), json!("custom"))])) })
+    let context = bind_query_context((), |_, _| {
+        Box::pin(async { Ok((Map::from_iter([("prefix".into(), json!("custom"))])).into()) })
     });
     let gateway = env
         .gateway()
         .gateway_config()
-        .with_context_hook(context)
+        .with_query_context_hook(context)
         .with_result_hook(
             callback,
             ResultProcessingSettings {
@@ -510,8 +513,8 @@ def process(request, batch, params):
     let gateway = env
         .gateway()
         .gateway_config()
-        .with_context_hook(bind_context((), |_, _| {
-            Box::pin(async { Ok(Map::from_iter([("prefix".into(), json!("custom"))])) })
+        .with_query_context_hook(bind_query_context((), |_, _| {
+            Box::pin(async { Ok((Map::from_iter([("prefix".into(), json!("custom"))])).into()) })
         }))
         .with_result_hook(
             callback,

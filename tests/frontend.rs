@@ -8,76 +8,47 @@ use std::{
 use yasp::{
     backend::PostgresBackend,
     config::{GatewaySettings, GatewayTls},
-    hooks::{bind_context, builtin::input_options::metabase},
-    query::{InputOptions, ParsedQuery, SqlDialect},
+    hooks::{bind_query_context, builtin::query_context::metabase},
+    query::{ParsedQuery, SqlDialect},
 };
 
 #[test]
-fn native_grammar_and_read_only_inspection_use_the_same_dialect() {
+fn dialect_grammar_and_read_only_inspection_use_the_same_dialect() {
     let sql = r"SELECT 'a\'b' AS value";
     assert!(ParsedQuery::parse(sql).is_err());
-    let parsed =
-        ParsedQuery::parse_with_options(sql, 4096, InputOptions::native(SqlDialect::Snowflake))
-            .unwrap();
-    assert_eq!(parsed.sql(), sql);
-    assert_eq!(parsed.input_options().dialect, SqlDialect::Snowflake);
+    let parsed = ParsedQuery::parse_with_dialect(sql, 4096, SqlDialect::Snowflake).unwrap();
+    assert_eq!(parsed.dialect(), SqlDialect::Snowflake);
     parsed.validate_read_only().unwrap();
-    let resolve = metabase(SqlDialect::Snowflake);
-    for query_type in ["native", "MBQL", "unknown"] {
-        let sql = format!(
-            r#"-- /* partner: "metabase", {{"dashboard_id":null,"chart_id":57,"optional_user_id":1,"optional_account_id":null,"filter_values":{{}}}} */ Metabase:: userID: 1 queryType: {query_type} queryHash: abc
-SELECT 1"#
-        );
-        let options = resolve(yasp::hooks::InputRequest {
-            sql: &sql,
-            frontend_dialect: SqlDialect::Redshift,
-        });
-        assert_eq!(options.native, query_type == "native");
-        assert_eq!(
-            options.dialect,
-            if query_type == "native" {
-                SqlDialect::Snowflake
-            } else {
-                SqlDialect::Redshift
-            }
-        );
-    }
     for dialect in [
         SqlDialect::Postgresql,
         SqlDialect::Redshift,
         SqlDialect::Snowflake,
     ] {
-        let parsed = ParsedQuery::parse_with_options(
+        let query = ParsedQuery::parse_with_dialect(
             "WITH secret AS (SELECT * FROM users) DELETE FROM users",
             4096,
-            InputOptions::native(dialect),
+            dialect,
         )
         .unwrap();
-        assert!(parsed.validate_read_only().is_err());
-        assert!(
-            ParsedQuery::parse_with_options(
-                "SELECT 1; SELECT 2",
-                4096,
-                InputOptions::native(dialect)
-            )
-            .is_err()
-        );
-        assert!(
-            ParsedQuery::parse_with_options("SELECT 1", 2, InputOptions::native(dialect)).is_err()
-        );
+        assert!(query.validate_read_only().is_err());
+        assert!(ParsedQuery::parse_with_dialect("SELECT 1; SELECT 2", 4096, dialect).is_err());
+        assert!(ParsedQuery::parse_with_dialect("SELECT 1", 2, dialect).is_err());
     }
 }
 
 #[test]
-fn remarks_choose_grammar_but_cannot_bypass_routing() {
+fn metadata_bypasses_context_and_ordinary_sql_uses_its_dialect() {
     let environment = support::TestEnvironment::load();
     let identity = environment.gateway();
     let database = support::TestDatabase::create(&environment.source(None), "yasp_dialects");
     let backend = Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap());
     let observed = Arc::new(Mutex::new(Vec::new()));
-    let hook = bind_context(observed.clone(), |request, state| {
-        state.lock().unwrap().push(request.query.input_options());
-        Box::pin(async { Ok(serde_json::Map::new()) })
+    let hook = bind_query_context(observed.clone(), |request, state| {
+        Box::pin(async move {
+            let output = metabase(request, None)?;
+            state.lock().unwrap().push(output.dialect);
+            Ok(output)
+        })
     });
     let server = support::GatewayServer::fixed(
         identity
@@ -87,47 +58,37 @@ fn remarks_choose_grammar_but_cannot_bypass_routing() {
                 ..GatewaySettings::default()
             })
             .unwrap()
-            .with_input_options(metabase(SqlDialect::Snowflake))
-            .with_context_hook(hook),
+            .with_query_context_hook(hook),
         backend,
     );
     let connection = identity.connection(server.address);
-    // Native Snowflake syntax parses before context, then fails engine affinity.
-    let native = connection
-        .query("-- Metabase:: userID: 7 queryType: native queryHash: abc\nSELECT 'a\\'b' AS value");
-    assert!(String::from_utf8_lossy(&native.stderr).contains("does not match"));
-    let mbql = connection.query("-- Metabase:: userID: 7 queryType: MBQL queryHash: abc\nSELECT 7");
-    support::assert_success(&mbql, "MBQL defaults to PostgreSQL");
-    assert_eq!(String::from_utf8_lossy(&mbql.stdout).trim(), "7");
-    for remark in [
-        "",
-        "-- Metabase:: userID: 7 queryType: unknown queryHash: abc\n",
-        "-- Metabase:: queryType: native\n",
-    ] {
+    for kind in ["native", "MBQL", "unknown"] {
         support::assert_success(
-            &connection.query(&format!("{remark}SELECT 8")),
-            "unknown remarks default to frontend",
+            &connection.query(&format!(
+                "-- Metabase:: userID: 7 queryType: {kind} queryHash: abc\nSELECT 7"
+            )),
+            "remark data query",
         );
     }
-    // A native remark cannot borrow the discovery role, even for catalog SQL.
-    let spoof = connection.query("-- Metabase:: userID: 7 queryType: native queryHash: abc\nSELECT relname FROM pg_catalog.pg_class");
-    assert!(String::from_utf8_lossy(&spoof.stderr).contains("does not match"));
     support::assert_success(
-        &connection.query("SELECT current_catalog"),
-        "ordinary metadata bypass remains available",
+        &connection.query("SELECT 8"),
+        "unmarked defaults to frontend",
     );
+    for remark in [
+        "",
+        "-- Metabase:: userID: 7 queryType: native queryHash: abc\n",
+    ] {
+        support::assert_success(
+            &connection.query(&format!("{remark}SHOW server_version")),
+            "metadata ignores native remark",
+        );
+    }
     let oversized = connection.query(&format!("SELECT 1 /* {} */", "x".repeat(512)));
     assert!(String::from_utf8_lossy(&oversized.stderr).contains("54000"));
-    let requests = observed.lock().unwrap();
-    assert_eq!(requests.len(), 6);
-    assert!(requests[0].native && requests[0].dialect == SqlDialect::Snowflake);
-    assert!(
-        requests[1..5]
-            .iter()
-            .all(|options| !options.native && options.dialect == SqlDialect::Postgresql)
+    assert_eq!(
+        *observed.lock().unwrap(),
+        vec![Some(SqlDialect::Postgresql); 4]
     );
-    assert!(requests[5].native);
-    drop(requests);
     server.stop();
 }
 
@@ -219,25 +180,19 @@ fn session_pid_matches_startup_without_routing_or_intercepting_data_sql() {
         tokio::client::PgWireClient,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use yasp::hooks::{ContextError, builtin::input_options::metabase_with_default};
+    use yasp::hooks::QueryContextError;
 
     let environment = support::TestEnvironment::load();
     let identity = environment.gateway();
     let database = support::TestDatabase::create(&environment.source(None), "yasp_session_pid");
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
-    let hook = bind_context(calls.clone(), |_, count| {
+    let hook = bind_query_context(calls.clone(), |_, count| {
         count.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Err(ContextError::Failed) })
+        Box::pin(async { Err(QueryContextError::Failed) })
     });
     let server = support::GatewayServer::fixed(
-        identity
-            .gateway_config()
-            .with_input_options(metabase_with_default(
-                SqlDialect::Snowflake,
-                Some(SqlDialect::Snowflake),
-            ))
-            .with_context_hook(hook),
+        identity.gateway_config().with_query_context_hook(hook),
         Arc::new(PostgresBackend::new(database.connection.backend_config()).unwrap()),
     );
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
@@ -249,7 +204,8 @@ fn session_pid_matches_startup_without_routing_or_intercepting_data_sql() {
         assert_ne!(first.process_id(), second.process_id());
         for client in [&mut first, &mut second] {
             for sql in ["SELECT pg_backend_pid()", "/* probe */ select pg_catalog.pg_backend_pid ( );",
-                "-- Metabase:: userID: 1 queryType: MBQL queryHash: abc\nSELECT pg_backend_pid()"] {
+                "-- Metabase:: userID: 1 queryType: MBQL queryHash: abc\nSELECT pg_backend_pid()",
+                "-- Metabase:: userID: 1 queryType: native queryHash: abc\nSELECT pg_backend_pid()"] {
                 let mut rows = client.simple_query(DefaultSimpleQueryHandler::new(), sql).await.unwrap()
                     .remove(0).into_data_rows_reader();
                 assert_eq!(rows.next_row().unwrap().next_value::<i32>().unwrap(), Some(client.process_id()));
@@ -266,7 +222,6 @@ fn session_pid_matches_startup_without_routing_or_intercepting_data_sql() {
         "SELECT pg_backend_pid() FROM users",
         "WITH hidden AS (SELECT * FROM users) SELECT pg_backend_pid()",
         "SELECT pg_backend_pid() + 1",
-        "-- Metabase:: userID: 1 queryType: native queryHash: abc\nSELECT pg_backend_pid()",
     ] {
         let output = identity.connection(server.address).query(sql);
         assert!(
@@ -275,6 +230,6 @@ fn session_pid_matches_startup_without_routing_or_intercepting_data_sql() {
         );
         assert!(output.stdout.is_empty());
     }
-    assert_eq!(observed.load(Ordering::SeqCst), 4);
+    assert_eq!(observed.load(Ordering::SeqCst), 3);
     server.stop();
 }

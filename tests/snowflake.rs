@@ -9,7 +9,7 @@ use yasp::{
         snowflake::{SnowflakeBackend, SnowflakeConfig},
     },
     config::{BackendSettings, GatewaySettings},
-    hooks::{BackendSelection, bind_select_backend, builtin::input_options::metabase},
+    hooks::{BackendSelection, bind_select_backend, builtin::query_context::metabase},
     query::SqlDialect,
 };
 
@@ -78,7 +78,17 @@ fn native_snowflake_through_pgwire_routes_values_transactions_and_recovers() {
             ..GatewaySettings::default()
         })
         .unwrap()
-        .with_input_options(metabase(SqlDialect::Snowflake));
+        .with_query_context_hook(yasp::hooks::bind_query_context((), |request, _| {
+            Box::pin(async move {
+                assert_eq!(
+                    request.default_target_dialect, None,
+                    "mixed engines cannot infer a native dialect from discovery"
+                );
+                let dialect =
+                    (!request.sql.contains("ambiguous_input")).then_some(SqlDialect::Snowflake);
+                metabase(request, dialect)
+            })
+        }));
     let server = support::GatewayServer::start(move |listener, stopped| async move {
         let catalog = backends
             .catalog(
@@ -178,7 +188,9 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
                 ..GatewaySettings::default()
             })
             .unwrap()
-            .with_input_options(metabase(SqlDialect::Snowflake));
+            .with_query_context_hook(yasp::hooks::bind_query_context((), |request, _| {
+                Box::pin(async move { metabase(request, Some(SqlDialect::Snowflake)) })
+            }));
         let server = support::GatewayServer::start(move |listener, shutdown| async move {
             let catalog = yasp::catalog::Catalog::snowflake(
                 sf,
@@ -292,6 +304,9 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
 
 fn check_native_runtime(identity: &support::Identity, server: support::GatewayServer) {
     let connection = identity.connection(server.address);
+    let ambiguous = connection.query(&format!("{NATIVE}SELECT 42 /* ambiguous_input */"));
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("query context unavailable"));
     let sql = format!(
         "{NATIVE}SELECT 12345678901234567890.123456789::NUMBER(38,9), NULL, TO_BINARY('00ff', 'HEX'), TRUE, DATE '2024-02-29', TO_TIMESTAMP_NTZ('2024-02-29 12:34:56.123456'), TO_TIME('12:34:56.123456')"
     );
@@ -330,18 +345,18 @@ fn check_native_runtime(identity: &support::Identity, server: support::GatewaySe
     let generated = connection.query("SELECT 1");
     support::assert_success(&generated, "frontend SQL passes through unchanged");
     assert_eq!(String::from_utf8_lossy(&generated.stdout).trim(), "1");
-    let affinity = connection.query(&format!("{NATIVE}SELECT 1 /* route_postgres */"));
-    assert!(String::from_utf8_lossy(&affinity.stderr).contains("does not match"));
+    let forwarded = connection.query(&format!("{NATIVE}SELECT 1 /* route_postgres */"));
+    support::assert_success(
+        &forwarded,
+        "accepted SQL is forwarded unchanged until dialect translation is implemented",
+    );
+    assert_eq!(String::from_utf8_lossy(&forwarded.stdout).trim(), "1");
     let catalog_sql =
         "SELECT relname FROM pg_catalog.pg_class WHERE relname = 'yasp_catalog_only_marker'";
     let spoof = connection.query(&format!("{NATIVE}{catalog_sql}"));
-    support::assert_success(
-        &spoof,
-        "emulator has its own PostgreSQL compatibility views",
-    );
     assert!(
-        spoof.stdout.is_empty(),
-        "native catalog hints cannot borrow PostgreSQL discovery"
+        String::from_utf8_lossy(&spoof.stderr).contains("0A000"),
+        "unsupported gateway metadata is rejected independently of native remarks"
     );
     assert!(String::from_utf8_lossy(&connection.query(catalog_sql).stderr).contains("0A000"));
     let tables = include_str!("../src/gateway/metadata/queries/sqlalchemy_postgresql_tables.sql")
@@ -444,7 +459,10 @@ fn yaml_snowflake_only_host_routes_native_data_and_serves_bi_definitions() {
         snowflake_host::with_host(profile, |_, _, query| {
             let result =
                 query("SELECT AMOUNT, \"MixedCase\", PAYLOAD FROM ANALYTICS.METADATA_TYPES");
-            support::assert_success(&result, "unmarked native Snowflake data");
+            support::assert_success(
+                &result,
+                "unmarked data uses the gateway grammar and shared forwarding path",
+            );
             assert_eq!(
                 String::from_utf8(result.stdout).unwrap().trim(),
                 "12345678901234567890.123456789||\\x00ff"

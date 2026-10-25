@@ -79,7 +79,7 @@ impl CacheEligibility {
             client_id: request.client_id,
             query_id: request.query_id,
             query: request.query,
-            context: request.context,
+            query_context: request.query_context,
             datasets: datasets.as_ref(),
             async_hook_timeout_ms: request.async_hook_timeout_ms,
         };

@@ -23,7 +23,7 @@ use yasp::{
     cache::RedisCache,
     config::{ApplicationContextsSettings, CacheSettings, DatasetSettings, SelectorSettings},
     datasets::{DatasetError, DatasetLoader, DatasetReader, Datasets, bind_dataset_loader},
-    hooks::{CacheEligibilityError, bind_cache_eligibility_async, bind_context},
+    hooks::{CacheEligibilityError, bind_cache_eligibility_async, bind_query_context},
 };
 
 fn redis_url() -> String {
@@ -69,19 +69,19 @@ async fn rust_context_and_selector_dataset_access_expires_after_the_query() {
         Some(json!({"department": "finance"}))
     );
     let retained = Arc::new(Mutex::new(None::<DatasetReader>));
-    let context = bind_context(retained.clone(), |request, retained| {
+    let context = bind_query_context(retained.clone(), |request, retained| {
         Box::pin(async move {
             if let Some(reader) = request.datasets {
                 *retained.lock().unwrap() = Some(reader.clone());
                 reader
                     .get("users", "alice")
                     .await
-                    .map_err(|_| yasp::hooks::ContextError::Failed)?
-                    .ok_or(yasp::hooks::ContextError::Failed)?;
+                    .map_err(|_| yasp::hooks::QueryContextError::Failed)?
+                    .ok_or(yasp::hooks::QueryContextError::Failed)?;
             } else {
-                return Err(yasp::hooks::ContextError::Failed);
+                return Err(yasp::hooks::QueryContextError::Failed);
             }
-            Ok(Map::from_iter([("user_id".into(), json!("alice"))]))
+            Ok((Map::from_iter([("user_id".into(), json!("alice"))])).into())
         })
     });
     let backends = Arc::new(
@@ -114,7 +114,7 @@ async fn rust_context_and_selector_dataset_access_expires_after_the_query() {
     );
     let gateway = identity
         .gateway_config()
-        .with_context_hook(context)
+        .with_query_context_hook(context)
         .with_cache(cache)
         .with_datasets(datasets.reader());
     let selector = dataset_selector::bind(dataset_selector::RoutingPolicy {

@@ -265,11 +265,11 @@ impl FileConfig {
         if let Some(catalog) = &self.schema_discovery.catalog {
             catalog.runtime()?;
         }
-        if let Some(hook) = &self.hooks.context {
+        if let Some(hook) = &self.hooks.query_context {
             match hook {
-                SelectorSettings::Rust(name) => validate_value("hooks.context", name)?,
+                SelectorSettings::Rust(name) => validate_value("hooks.query_context", name)?,
                 SelectorSettings::RustReference(hook) => {
-                    validate_value("hooks.context.callback", &hook.callback)?
+                    validate_value("hooks.query_context.callback", &hook.callback)?
                 }
                 SelectorSettings::Python(hook) => {
                     validate_value("context hook path", &hook.path.to_string_lossy())?;

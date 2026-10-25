@@ -15,8 +15,7 @@ pub struct DataContextsSettings {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HooksSettings {
-    pub input_options: Option<RustHookSettings>,
-    pub context: Option<SelectorSettings>,
+    pub query_context: Option<SelectorSettings>,
     pub process_result: Option<SelectorSettings>,
     pub select_backend: SelectorSettings,
     pub python: PythonSettings,
@@ -25,8 +24,7 @@ pub struct HooksSettings {
 impl Default for HooksSettings {
     fn default() -> Self {
         Self {
-            input_options: None,
-            context: None,
+            query_context: None,
             process_result: None,
             select_backend: SelectorSettings::Rust("builtin.select_backend.passthrough".into()),
             python: PythonSettings::default(),
@@ -303,7 +301,7 @@ pub struct GatewaySettings {
     pub max_message_bytes: usize,
     pub max_sql_bytes: usize,
     pub max_context_bytes: usize,
-    pub context_timeout_ms: u32,
+    pub query_context_timeout_ms: u32,
     pub async_hook_timeout_ms: u32,
     pub query_timeout_ms: u32,
     pub read_timeout_ms: u32,
@@ -340,7 +338,7 @@ impl Default for GatewaySettings {
             max_message_bytes: 8 * 1024 * 1024,
             max_sql_bytes: 1024 * 1024,
             max_context_bytes: 65536,
-            context_timeout_ms: 2000,
+            query_context_timeout_ms: 2000,
             async_hook_timeout_ms: 2000,
             query_timeout_ms: 60_000,
             read_timeout_ms: 600_000,
@@ -366,7 +364,7 @@ impl GatewaySettings {
             || self.max_sql_bytes == 0
             || self.max_context_bytes == 0
             || [
-                self.context_timeout_ms,
+                self.query_context_timeout_ms,
                 self.async_hook_timeout_ms,
                 self.query_timeout_ms,
                 self.read_timeout_ms,

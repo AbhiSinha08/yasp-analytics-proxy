@@ -563,7 +563,7 @@ def startup_checks(directory):
         (variant(lambda config: config["backend"].update(max_connections_total=1)), secret_file),
         (variant(lambda config: config.update(hooks={"select_backend": "unknown.hook"})), secret_file),
         (variant(lambda config: config["hooks"]["select_backend"].update(callback="unknown.hook")), secret_file),
-        (variant(lambda config: config["hooks"].update(context="unknown.context")), secret_file),
+        (variant(lambda config: config["hooks"].update(context="unknown.query_context")), secret_file),
         (python_reference("missing_script.py", "context"), secret_file),
         (python_reference("bad_import.py", "context"), secret_file),
         (python_reference("not_callable.py", "context"), secret_file),
@@ -578,7 +578,7 @@ def startup_checks(directory):
         (variant(lambda config: config["gateway"].update(max_message_bytes=2147483648)), secret_file),
         (variant(lambda config: config["gateway"].update(max_sql_bytes=0)), secret_file),
         (variant(lambda config: config["gateway"].update(max_context_bytes=0)), secret_file),
-        (variant(lambda config: config["gateway"].update(context_timeout_ms=0)), secret_file),
+        (variant(lambda config: config["gateway"].update(query_context_timeout_ms=0)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=0)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=2147483648)), secret_file),
         (variant(lambda config: config["gateway"].update(write_timeout_ms=4294967296)), secret_file),
@@ -705,29 +705,29 @@ def context_config_checks(directory):
         available.bind(("127.0.0.1", 0))
         ADDRESS = available.getsockname()
     custom = json.loads(json.dumps(CONFIG))
-    custom["gateway"].update(listen=f"{ADDRESS[0]}:{ADDRESS[1]}", context_timeout_ms=25, max_context_bytes=128)
-    custom["hooks"]["context"] = {
-        "type": "python", "path": "../context_hooks.py", "callback": "derive",
+    custom["gateway"].update(listen=f"{ADDRESS[0]}:{ADDRESS[1]}", query_context_timeout_ms=25, max_context_bytes=128)
+    custom["hooks"]["query_context"] = {
+        "type": "python", "path": "../query_context_hooks.py", "callback": "derive",
         "params": {"username": GATEWAY["username"], "database": GATEWAY["database"]},
     }
-    (Path(directory) / "context_hooks.py").write_text("""
+    (Path(directory) / "query_context_hooks.py").write_text("""
 import time
 import yasp_extractors
 
 def derive(request, params):
     assert request['authenticated_user'] == params['username']
     assert request['frontend_database'] == params['database']
-    assert len(request['query_id']) == 64
+    assert 'query_id' not in request and 'query_ast' not in request
     sql = request['sql']
     if 'context_raise' in sql:
         raise RuntimeError('SECRET_MARKER_lookup_detail')
     if 'context_invalid' in sql:
         return []
     if 'context_large' in sql:
-        return {'value': 'x' * 256}
+        return {'values': {'value': 'x' * 256}}
     if 'context_slow' in sql:
         time.sleep(0.1)
-        return {'deny': True}
+        return {'values': {'deny': True}}
     if 'context_helpers' in sql:
         metabase = yasp_extractors.metabase_pg(
             '-- Metabase:: userID: 42 queryType: native queryHash: abcdef\\nSELECT 1')
@@ -753,13 +753,13 @@ def derive(request, params):
             pass
         else:
             raise RuntimeError('Superset extractor must remain deferred')
-        return {'extractors_verified': True}
-    return {'deny': True} if 'context_deny' in sql else None
+        return {'values': {'extractors_verified': True}}
+    return {'values': {'deny': True}} if 'context_deny' in sql else {}
 
 def select(request, params):
     if 'context_helpers' in request['sql']:
-        assert request['context'].get('extractors_verified') is True
-    return None if request['context'].get('deny') else params
+        assert request['query_context'].get('extractors_verified') is True
+    return None if request['query_context'].get('deny') else params
 """)
     custom_path = Path(directory) / "config/context.yml"
     custom_path.write_text(json.dumps(custom))
@@ -775,7 +775,7 @@ def select(request, params):
             wait_ready(process)
             assert psql("SELECT 1 /* context_helpers */").stdout.strip() == "1"
         custom["hooks"]["select_backend"] = {
-            "type": "python", "path": "../context_hooks.py", "callback": "select", "params": default_route,
+            "type": "python", "path": "../query_context_hooks.py", "callback": "select", "params": default_route,
         }
         custom_path.write_text(json.dumps(custom))
         with server(directory, config_file=custom_path, **(FRONTEND_ENV | PASSWORDS)) as process:
@@ -788,8 +788,14 @@ def select(request, params):
                 for tag in ["missing", "raise", "invalid", "large", "slow", "helpers"]:
                     stream.sendall(packet(b"Q", f"SELECT 2 /* context_{tag} */".encode() + b"\0"))
                     result = responses(stream)
-                    assert [kind for kind, _ in result] == [b"T", b"D", b"C", b"Z"], tag
-                    assert result[1][1] == b"\0\1\0\0\0\x012"
+                    if tag in ["raise", "invalid", "large", "slow"]:
+                        assert [kind for kind, _ in result] == [b"E", b"Z"], tag
+                        assert b"CXX000\0" in result[0][1]
+                        if tag == "slow":
+                            time.sleep(0.12)  # Executing Python retains its worker after timeout.
+                    else:
+                        assert [kind for kind, _ in result] == [b"T", b"D", b"C", b"Z"], tag
+                        assert result[1][1] == b"\0\1\0\0\0\x012"
                 stream.sendall(packet(b"Q", b"SELECT 1 /* context_deny */\0"))
                 assert b"C42501\0" in responses(stream)[0][1], "late/default context cannot replace a later snapshot"
     finally:
