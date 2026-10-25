@@ -1,35 +1,45 @@
 # YASP documentation
 
-YASP is a reusable SQL proxy library and a local host application. The current
-runtime supports a bounded PostgreSQL simple-query subset, configured source-role
-routing, application context and query modification hooks, shared JSON datasets, metadata discovery, and an
-optional Redis cache and System 1 result classification, with optional verified TLS
-for PostgreSQL and Redis.
+Start with [Architecture](architecture.md) for the system overview, component map,
+and query/session diagrams. It explains the current runtime in plain language.
+Use the references below for exact settings and contracts.
 
-| Read                                                               | For                                                                                                                          |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| [Architecture](architecture.md)                                    | Current components, ownership, query flow, sessions, cancellation, and caching.                                              |
-| [Configuration](configuration.md)                                  | Runtime settings, secrets, defaults, pools, discovery, and desktop-client setup.                                             |
-| [TLS setup](tls.md)                                                | Certificates, encrypted client/source/Redis connections, and library application setup.                                      |
-| [Extensions](extensions.md)                                        | Current Rust/Python contracts and boundaries for future engines, hooks, RBAC, and UI.                                        |
-| [Development](development.md)                                      | Toolchain, dependencies, Rust structure, and verification commands.                                                          |
-| [Hook examples](../hooks/README.md)                                | Binding callbacks and choosing runnable examples.                                                                            |
-| [Tests](../tests/README.md)                                        | Isolated test services, fixtures, requirements, and Cargo filters.                                                           |
-| [Multi-engine compatibility](multi-engine.md)                      | Frontend profiles, Snowflake execution and metadata, SQL API execution limits, and remaining compatibility work.             |
-| [Shared schema catalog](catalog.md)                                | Stored schema generations, periodic refresh, frontend metadata handlers, and current AST lineage inputs.                     |
-| [AST output lineage](ast-lineage.md)                               | Implemented PostgreSQL, Snowflake, and Redshift lineage, hook access, uncertainty handling, and cache metadata.              |
-| [Query modification](query-modification.md)                        | Rust/Python SQL replacement with parsed AST input, downstream lineage, validation, cache behavior, and application examples. |
-| [Result processing](result-processing.md)                          | Bounded Rust/Python text edits, NULL replacement, filtering, cache replay, and resource bounds.                              |
-| [Result classification](decision-model.md)                         | Optional System 1 REST classification, bounded samples, failures, and Redis decision sidecars.                               |
-| [Plan](PLAN.md)                                                    | Product direction, phase boundaries, and planned capabilities.                                                               |
-| [Source access and compute routing](source-access-routing-plan.md) | Partial selector decisions, compute types, overflow, shared budgets, and future queuing.                                     |
+## Setup and development
 
-Architecture and configuration describe implemented behavior. The plan and the
-explicitly marked future sections in the extension guide describe the intended
-end state. Extended protocol, binary results, automatic cross-dialect translation,
-engine RBAC interpretation, mandatory masking, and management UI remain
-future capabilities.
+| Guide                                  | Use it for                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| [Configuration](configuration.md)      | Run the host, resolve secrets, configure routes and limits, and connect clients. |
+| [TLS](tls.md)                          | Certificates and encrypted frontend, source, and Redis connections.              |
+| [Development](development.md)          | Toolchain, source tour, Rust conventions, dependencies, and Python embedding.    |
+| [Tests](../tests/README.md)            | Disposable services, feature matrices, fixtures, and focused test commands.      |
+| [Local environments](../dev/README.md) | Persistent BI tools, decision model, and Snowflake emulator.                     |
 
-The [development environments](../dev/README.md) cover local BI tools, the
-native decision model, and the Datasource emulators, including connection settings,
-storage, and startup commands.
+## Implementation reference
+
+| Reference                                     | Owns the detailed contract for                                                           |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [Extensions](extensions.md)                   | Library assembly, callback stages, query context, dataset ownership, and Python runtime. |
+| [Hook examples](../hooks/README.md)           | Built-in callback names and runnable application examples.                               |
+| [Routing](source-access-routing.md)           | Selector decisions, overflow, and connection ownership.                                  |
+| [Multi-engine compatibility](multi-engine.md) | Frontend/backend combinations, Snowflake values, and compatibility gates.                |
+| [Schema catalog](catalog.md)                  | Source facts, immutable generations, refresh, and frontend metadata.                     |
+| [AST lineage](ast-lineage.md)                 | Output-column sources, JSON paths, uncertainty, and cache association.                   |
+| [Query modification](query-modification.md)   | SQL replacement, revalidation, failures, and transformation examples.                    |
+| [Result processing](result-processing.md)     | Text/NULL edits, row filtering, native batches, and raw cache replay.                    |
+| [Result classification](decision-model.md)    | Bounded System 1 requests, outcomes, failures, and decision sidecars.                    |
+
+## Product scope
+
+[PLAN.md](PLAN.md) defines phase goals, remaining capabilities, and acceptance gates.
+[deliverables.md](deliverables.md) tracks implementation work. Current behavior is
+described in architecture and the implementation references; planned features are
+explicitly marked.
+
+## Maintaining these docs
+
+Keep each fact in its owning guide: settings/defaults in configuration, callback
+contracts in extensions or their stage reference, runnable examples beside their
+resources, and future requirements in the plan. Architecture keeps the high-level
+explanation and diagrams; link to details rather than copying their full contract.
+Code comments explain local purpose, invariants, and non-obvious constraints.
+Record session history and abandoned approaches in version control.

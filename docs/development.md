@@ -46,6 +46,28 @@ Run checks appropriate to the changed observable contract; broaden testing when
 failures or cross-component behavior require it. Preserve unrelated checkout edits
 and never kill unknown services to free a port.
 
+## Source tour
+
+Read [architecture](architecture.md#query-flow) alongside these entry points. A
+Rust file is usually a module; short facade files expose the public API while
+neighboring directories hold implementation stages.
+
+| Start here                                                                                                                   | Follow it to understand                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [lib.rs](../src/lib.rs), [host/mod.rs](../src/host/mod.rs)                                                                   | Library exports and how the supplied executable assembles services before listening.    |
+| [gateway/query.rs](../src/gateway/query.rs)                                                                                  | Metadata/setup recognition, context derivation, parsing, and optional SQL modification. |
+| [execution.rs](../src/execution.rs)                                                                                          | Effective-query lineage, route validation, transaction affinity, and cache dispatch.    |
+| [backend/execution.rs](../src/backend/execution.rs), [backend/budget.rs](../src/backend/budget.rs)                           | Adapter dispatch, admitted resources, and capacity retained through cleanup.            |
+| [cache/execution.rs](../src/cache/execution.rs)                                                                              | Validated raw replay, source capture, and publication after verified completion.        |
+| [execution/classification.rs](../src/execution/classification.rs), [execution/processing.rs](../src/execution/processing.rs) | Bounded raw sampling, result callbacks, and output backpressure.                        |
+| [catalog.rs](../src/catalog.rs), [lineage/analyzer.rs](../src/lineage/analyzer.rs)                                           | Published schema generations and resolving output expressions to source columns.        |
+
+`&T` borrows an existing value; `Arc<T>` shares ownership across tasks. `async`
+functions yield while waiting for I/O. Dropping an owned lease or permit can close
+a resource or release its budget, so cancellation and cleanup comments describe
+correctness constraints. `pub(crate)` limits an API to this package.
+`#[cfg(feature = "...")]` compiles it only when that Cargo feature is enabled.
+
 ## Rust structure and testing norms
 
 Keep one library plus a thin binary host. Prefer existing code, the standard

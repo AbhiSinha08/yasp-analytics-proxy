@@ -6,9 +6,5 @@ YASP is a reusable SQL reverse-proxy engine for analytics across multiple databa
 
 The Rust library keeps protocol and database adapters, execution, resource limits, and extension contracts separate from organization-specific policy and integrations. Applications can build their own proxy host and provide their customizations without editing core engine modules.
 
-- [Phases and components](docs/PLAN.md)
-- [Development setup](docs/development.md)
-- [Test strategy](tests/README.md)
-- [Multi-engine compatibility](docs/multi-engine.md)
-- [Shared schema catalog](docs/catalog.md)
-- [Development containers](dev/README.md)
+Start with the [documentation](docs/README.md) for architecture, setup, reference
+guides, and the implementation plan.

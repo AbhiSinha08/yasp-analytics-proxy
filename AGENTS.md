@@ -51,41 +51,17 @@ implementation proceeds through requested subtasks
   from derived custom context. Extensions cannot bypass configured bounds.
 - Shared components consume extension decisions through contracts; they must not
   import organization code or interpret hard-coded organization metadata formats.
-- Reuse `hooks::bind_select_backend` for compiled routing callbacks and
-  `hooks::builtin::select_backend::passthrough` for a configured default route.
-  Configure Rust/Python references with `type`, `callback`, and application-owned
-  `params`; Python also requires a file `path`. The host parses Rust params into
-  typed state and maps names at startup. Passthrough selection belongs in its params,
-  and the loadable example preserves future settings in commented blocks.
-  Add reusable repository hooks under
-  `hooks/builtin`; application-specific callbacks belong in the consuming host.
-  Add lifecycle contracts only when their milestone is active.
-- Routed PostgreSQL hosts construct `backend::PostgresBackends` with configured
-  pairs and pool limits, then use `gateway::serve_routed`. The fixed-backend
-  `gateway::serve` shares the same session and cleanup handling.
-- Reuse feature-gated `hooks::python::PythonRuntime` and `PythonCallback` for trusted
-  external Python functions. Create one runtime per process and clone it for further
-  registration. `RoutedSelector` adapts compiled Rust or Python selection; examples
-  remain under `hooks/examples`, and engine routing validates each returned pair.
-- Keep the Redis result cache disabled by default; `cache.enabled` is its only opt-in.
-  Hits do not reach PostgreSQL, so source grants and RLS are not rechecked and cached
-  results can remain available until expiry. Use the shared multiplexed Redis
-  connection, bounded `GETRANGE` reads, opaque versioned PostgreSQL payloads, and
-  miss-on-error behavior. `cache.max_rows_per_query` bounds rows captured and replayed;
-  exceeding it bypasses caching while the full result streams. Reserve three times
-  the serialized-entry budget per active cached query across Redis, buffered, and
-  response-wire copies. `cache.max_buffered_bytes_total` is an aggregate in-process
-  budget, not Redis storage; the internal per-entry guard is derived as one third of
-  it, and the Redis server has a separate memory/eviction policy.
-  Bind optional eligibility with `hooks::bind_cache_eligibility`, configured under
-  `cache.eligibility`; it may bypass queries but cannot expand supported SQL or
-  configured limits. Cache keys use normalized effective-SQL SHA-256 query IDs.
-  Validate frontend identity, database, selected backend endpoint/database and source
-  user, fixed text settings, query/write timers, and codec version before replay.
-  Source-role authorization still applies when a query reaches PostgreSQL. Future
-  engine RBAC and masking must also apply to cached data. Initial Redis transport is
-  loopback TCP; verified remote TLS remains deferred. Redis operation deadlines are
-  fixed internally at 100 ms.
+- Reuse the public binders and existing adapters; register configured callback names
+  and application-owned params at startup. See [extensions](docs/extensions.md)
+  for library assembly, Python runtime ownership, and callback contracts.
+- Resolve every selector decision against configured bounds, including cache hits.
+  Credentials stay adapter-owned; SQL remarks never establish authenticated identity.
+- Keep the result cache opt-in. Store raw source results and apply current result
+  processing on replay. Hits skip source grants/RLS until expiry; future mandatory
+  policy must cover both hits and misses. See [configuration](docs/configuration.md#redis-result-cache)
+  for current keys, scope, limits, deadlines, and transport settings.
+- Preserve one shared occupied-capacity budget across configured adapters, including
+  metadata loading and cleanup. See [routing](docs/source-access-routing.md).
 
 ## Tests
 
@@ -123,9 +99,13 @@ implementation proceeds through requested subtasks
   or maintained documentation. Use commits and review descriptions for history.
 - Keep comments focused on purpose, contracts, constraints, and non-obvious
   reasons. Keep README, plan, setup instructions, and examples consistent.
-- Use [docs/README.md](docs/README.md) as the documentation index. Keep component
-  behavior in architecture, configuration, and extension guides, and planned scope
-  in docs/PLAN.md.
+- Use [docs/README.md](docs/README.md) as the sole root README documentation link
+  and the guide to document ownership. Keep high-level diagrams and flows in
+  docs/architecture.md; settings/defaults in configuration; contracts in their
+  reference guides; runnable examples beside resources; future scope in docs/PLAN.md.
+  Link to the owning guide instead of repeating full contracts or volatile defaults.
+- Source comments explain behavior for a human reader, including necessary Rust
+  ownership terms. Do not add agent names, session notes, or agent-specific debt tags.
 - For large functionality changes, update the relevant component documentation and
   Mermaid query, session, or component diagrams in the same change. Verify those
   flows against the code; mark future stages explicitly.

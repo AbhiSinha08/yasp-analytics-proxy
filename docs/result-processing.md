@@ -72,7 +72,7 @@ let gateway = gateway.with_result_hook(
 ```
 
 `ResultRequest` supplies authenticated frontend identity/database, client/query IDs,
-original SQL and parsed query, validated target/login names, derived `query_context`,
+effective SQL and parsed query, validated target/login names, derived `query_context`,
 invocation-scoped `datasets`, and raw output `data_contexts.ast` and
 `data_contexts.decision_model`. Source credentials never reach callbacks. AST
 entries are aligned with actual output ordinals. Disabled model classification is
@@ -138,13 +138,6 @@ Processing runs again for each caller on every hit. Application context and hook
 versions do not change cache keys. Redis publication still requires a complete,
 clean source result; processing never waits for a full-result cache fill before
 streaming. The client completion count reports only emitted rows.
-
-## Performance reference
-
-Local release measurements (2026-10-21; 256 rows × 8 columns) uppercased one
-column at 317–339k rows/s in Rust and 298–304k in Python, using PostgreSQL loopback
-with TLS, cache, and inference disabled. Small batches favored native Rust and lazy
-Python over dataframe conversion; Polars/pandas remain optional callback dependencies.
 
 ## Verification
 

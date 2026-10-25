@@ -122,9 +122,9 @@ exact count of TCP sockets. PostgreSQL cancellation uses a separate control conn
 
 For a total of four, three occupied PostgreSQL connections leave one slot for
 Snowflake. A waiting binding can reclaim an idle PostgreSQL connection to make room;
-active connections and retained cleanup are never reclaimed. Catalog refreshes and
-catalog refreshes use the same budget. Cache hits and snapshot metadata responses
-acquire no backend slot. Separate processes have separate budgets.
+active connections and retained cleanup are never reclaimed. Catalog refreshes use
+the same budget. Cache hits and snapshot metadata responses acquire no backend slot.
+Separate processes have separate budgets.
 
 Overflow stays within the selected type and login. If all eligible instances or
 the shared budget are full, acquisition waits asynchronously for capacity, up to
@@ -231,10 +231,7 @@ the returned incoming dialect and selected target dialect; see
 
 ## Query modification
 
-`hooks.modify_query` is optional. It runs after query context and parsing, before
-query IDs, lineage, selection, and cache eligibility. Rust receives an immutable
-AST; Python receives `query_ast`. Both receive query context and scoped datasets,
-without lineage or `data_contexts`. Return replacement SQL or no change.
+`hooks.modify_query` uses the shared Rust/Python reference format.
 
 ```yaml
 hooks:
@@ -246,15 +243,13 @@ hooks:
       to: reporting.orders_v2
 ```
 
-The host compiles the Rust table-rename example; no Python feature is required.
-`from` and `to` must be qualified SQL names, and matching incoming tables require
-explicit aliases. Application-owned Python references remain available with
-`--features python`; their paths resolve relative to YAML. Other custom Rust names
-require registration in the consuming host using
-`GatewayConfig::with_query_modification_hook`; the repository host rejects unknown
-names. Replacement SQL is bounded and reparsed in the resolved dialect into a new
-AST. Failures reject without fallback. `gateway.async_hook_timeout_ms` and existing
-Python payload/queue limits apply. See [query modification](query-modification.md).
+The host compiles this example without the Python feature. `from` and `to` must be
+qualified SQL names; matching incoming tables require explicit aliases. Custom Rust
+names require host registration; unknown names fail startup. Python references need
+`--features python` and a YAML-relative `path`.
+
+See [query modification](query-modification.md) for the request/return contract,
+validation, errors, timeouts, and application examples.
 
 ## Result processing
 
@@ -675,7 +670,6 @@ engine-enforced masking remain separate future capabilities.
 data_contexts:
   ast:
     enabled: true
-    dialect: snowflake # Optional; omit to retain the frontend grammar.
     namespace: "yasp:ast_cache"
 ```
 
@@ -687,10 +681,8 @@ eligibility hooks, including on raw cache hits and within transactions. Missing
 facts remain explicit unknowns. `gateway.max_context_bytes` bounds encoded lineage;
 parser depth/token bounds and internal traversal/column budgets also apply.
 
-The query-context output selects the parsing dialect before lineage analysis.
-`enabled` controls only lineage generation. Lineage settings do not select a grammar,
-target, login, or compute. Analysis runs after query modification and before selection
-and cache eligibility, using the effective immutable parsed tree.
+The query-context output selects the parsing dialect; lineage settings do not
+select a grammar, target, login, or compute.
 
 `namespace` defaults to `yasp:ast_cache`. Both AST and decision-model namespace
 values must be nonempty and contain no NUL. The AST namespace must differ from
@@ -698,7 +690,6 @@ values must be nonempty and contain no NUL. The AST namespace must differ from
 Redis connection, URL/TLS settings, atomic publication, and TTL.
 
 Library hosts call `GatewayConfig::with_ast_context(AstSettings { enabled: true,
-dialect: Some(SqlDialect::Snowflake), ..Default::default() })`, using the types from `yasp::lineage` and
-`yasp::query`.
+..Default::default() })`, using `yasp::lineage::AstSettings`.
 See [AST lineage](ast-lineage.md) for supported constructs, hook payloads,
 unknown output shape, cache association, and dialect boundaries.

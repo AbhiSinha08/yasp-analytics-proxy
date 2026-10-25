@@ -37,6 +37,7 @@ and Python examples are under [hooks/examples](../hooks/examples).
 | Query modification | `bind_modify_query(state, f)` / `with_query_modification_hook`; incoming SQL and AST, dialect, identity, query context, datasets.                          | Optional replacement SQL; reparse and validate before IDs, lineage, routing, and caching. Errors reject without fallback. No lineage or data contexts in the request.                           |
 | Selection          | `bind_select_backend` or `bind_select_backend_async`; borrowed `SelectionRequest` with frontend user, IDs, parsed query, and derived context.              | Partial `BackendDecision` (or an explicit pair convertible into it); invalid/ambiguous selection is `42501`, failure is `XX000`. The engine resolves configured defaults and allocates compute. |
 | Cache eligibility  | `bind_cache_eligibility` or `bind_cache_eligibility_async`; the same selection request.                                                                    | Boolean that may bypass caching; errors bypass without failing execution. Cannot expand SQL or resource limits.                                                                                 |
+| Result processing  | `bind_process_result` / `with_result_hook`; bounded native batches and immutable request context.                                                          | Edit text/NULLs or filter rows, preserving schema/order; failures reject without raw fallback. See [result processing](result-processing.md).                                                   |
 | Dataset loading    | `bind_dataset_loader(state, f)`; async `DatasetLoadRequest` with dataset name and `startup` or `scheduled` reason.                                         | JSON object loaded before service starts and published to the shared dataset registry. Startup failure prevents serving; refresh failure preserves the previous value.                          |
 
 Library hosts can create `backend::ConnectionBudget::new(total)` and pass it to
@@ -69,6 +70,9 @@ Rust state/functions must meet the binder's `Send + Sync + 'static` requirements
 Synchronous selection and eligibility must be fast and nonblocking.
 Use `bind_select_backend_async` or `bind_cache_eligibility_async` for asynchronous
 dataset reads; `gateway.async_hook_timeout_ms` bounds these waits.
+
+## Query context
+
 `hooks.query_context` runs once after frontend metadata/setup recognition and before
 ordinary SQL parsing, including on cache hits. Metadata recognition always uses the
 gateway profile and is independent of remarks or hook output. A recognized request
@@ -134,33 +138,15 @@ the selected target dialect; see [planned translation](multi-engine.md#planned-s
 
 ## Query modification
 
-`bind_modify_query(state, f)` binds an async Rust callback returning
-`Result<Option<String>, QueryModificationError>`. Python uses
-`modify_query(request, params)` returning a SQL string or `None`. Register it with
-`GatewayConfig::with_query_modification_hook` or `hooks.modify_query`.
-
-The request contains original SQL, its parsed AST (`statement` in Rust,
-`query_ast` in Python), the resolved/gateway/common target dialects, authenticated
-frontend identity/database, client ID, derived query context, and scoped datasets.
-It has no query ID, selected backend, lineage, or `data_contexts`. Replacement SQL
-is reparsed and validated in the resolved dialect; downstream lineage, selection,
-cache eligibility, and execution consume the effective query. No change preserves
-the original bytes. Failures reject the query without fallback.
-
-The hook runs once per ordinary query, including cache hits and transaction source
-queries. `gateway.async_hook_timeout_ms` and existing Python bounds apply.
-See [query modification](query-modification.md) for configuration, errors, and
-table/subquery/filter examples.
+Register `bind_modify_query(state, f)` with `GatewayConfig::with_query_modification_hook`,
+or configure `hooks.modify_query`. The [query modification reference](query-modification.md)
+owns the Rust/Python request, replacement validation, failure rules, and examples.
 
 ## Result processing
 
-Use `bind_process_result(state, f)` and `GatewayConfig::with_result_hook` for bounded
-async Rust callbacks, or a registered Python callback with the native batch object.
-The result request includes immutable identity, selected target/login, application
-context, scoped dataset access, and raw output AST/model data contexts. The callback
-may edit text, set NULL, and filter rows while preserving schema and retained-row
-order. Failures deny the affected query; no raw fallback runs. The same processing
-stage runs after raw cache capture and on replay. See [the contract and examples](result-processing.md).
+Register `bind_process_result(state, f)` with `GatewayConfig::with_result_hook`, or
+configure `hooks.process_result`. The [result processing reference](result-processing.md)
+owns native batch APIs, allowed edits, budgets, failures, and processing on raw cache hits.
 
 ## Owning shared datasets
 
@@ -218,7 +204,7 @@ hooks:
 Files/functions are registered before listener startup. Every trusted synchronous
 function receives `function(request, params)` with fresh copied JSON-compatible
 objects. Selection/eligibility requests contain `authenticated_user`, `client_id`,
-`query_id`, original `sql`, `query_ast`, `data_contexts`, and `query_context`.
+`query_id`, effective `sql`, `query_ast`, `data_contexts`, and `query_context`.
 `query_ast` uses sqlparser 0.63 Serde syntax; `data_contexts.ast` contains optional
 local output lineage. Rust requests borrow the same `DataContexts` alongside their
 existing `ParsedQuery`. Python receives fresh copies, so callback mutations cannot
@@ -249,102 +235,41 @@ use the optional reader. See the runnable [dataset examples](../hooks/README.md#
 
 ## Planned query and result stages
 
-Optional [REST column classification](decision-model.md) exposes typed requests and
-probability/confidence outcomes through `decision_model` and
-`GatewayConfig::with_decision_model`. It supplies raw outcomes to optional result callbacks and does not apply masks.
-The YAML host configures it under `data_contexts.decision_model`. Result hooks receive
-named model outcomes and AST lineage. Dictionary matching remains future work;
-lineage performs no classification.
-
-Lifecycle hooks, target-specific translation, and engine policy/masking remain
-future work. The diagram combines implemented query modification/result callbacks
-with those planned stages; see the current [query pipeline](architecture.md#query-flow):
-
-```mermaid
-flowchart TD
-    Context[Application context and incoming AST] --> Rewrite[Optional query modifier]
-    Rewrite --> Validate[Reparse and validate effective SQL]
-    Validate --> Lineage[Analyze lineage for effective SQL]
-    Lineage --> Route[Role selection and configured bounds]
-    Route --> Translate[Translate when incoming and target dialects differ; validate effective SQL and lineage]
-    Translate --> Source[Load source result from cache or backend]
-    Source --> DataContexts[Data contexts: model classification and AST lineage]
-    DataContexts --> Transform[Optional result transformations with data contexts]
-    Transform --> Mask[Mandatory policy and masking]
-    Mask --> Check[Validate schema, types, rows and bytes]
-    Check --> Client[Client response]
-```
-
-Future stage requests should expose original/effective SQL, derived context,
-engine-validated route/execution decisions and cache outcome when known, and bounded
-result metadata/batches where appropriate. Before execution, callbacks may propose
-supported rewrites, denial, rerouting, or cache bypass only where their stage allows;
-the engine validates each proposal centrally. Later stages observe the decided flow
-immutably. No stage may replace authenticated identity, exceed configured bounds,
-bypass mandatory policy, or change transaction/portal decisions already pinned for
-execution. These stage contracts remain future work.
-
-Future prepared-query rewrites must preserve parameter positions/types and repeat
-dialect/read-only validation. Result stages must preserve schema and ordering, use lossless native
-values, and handle NULLs and duplicate column names by ordinal/metadata. Optional
-transformations precede mandatory masks; later hooks cannot restore raw values.
-Run policy and masking on both cache hits and misses. A partially emitted result
-cannot be retracted; whole-result decisions require bounded buffering or conservative
-masking before output. Mask thresholds, mandatory-mask failure policy, and policy
-generations belong to that future contract. Classification already has bounded
-availability and cache-association contracts. See [Phase 2](PLAN.md#phase-2--additional-engines-dynamic-masking-and-management).
+Current ordering is shown in [architecture](architecture.md#query-flow). Optional
+[REST classification](decision-model.md) and result callbacks are implemented;
+lifecycle hooks, translation, dictionary matching and engine-enforced policy/masking
+remain planned. [Phase 1 hooks](PLAN.md#hooks) and
+[Phase 2 masking](PLAN.md#system-1-decision-model-integration-and-dynamic-masking)
+own the future stage requirements, including immutable decisions, prepared-query
+rewrites, and mandatory processing on cache hits and misses.
 
 ## Adding capabilities when their phase is active
 
-| Capability                                | Local ownership and required proof                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Another backend                           | Add its adapter for drivers, native values, pooling, session state, cancellation, and error conversion. Add concrete dispatch when needed. Define supported SQL/dialect and PostgreSQL frontend mappings, including native metadata discovery. Prove precision, NULLs, timestamps, transaction cleanup, and source-identity cache isolation before declaring support. Shared execution supplies cache policy and response encoding; adapters do not opt into caching. |
-| Another client protocol or BI integration | Keep protocol framing/authentication/encoding in its frontend adapter. A warehouse driver does not provide another frontend protocol. Record real client/version/startup/discovery/query/cancel traffic; verify metadata trust, absent-context behavior, prepared/binary needs, and BI-side caching. Current extractor names are placeholders.                                                                                                                        |
-| RBAC and identity mapping                 | Supply application-owned trusted context, local policy, and role mappings. Preserve configured route bounds and source grants. Current source roles enforce access; engine policy must cover cached and uncached results before output.                                                                                                                                                                                                                               |
-| Query/result/lifecycle hooks              | Define only the active stage's bounded request/result/failure contract. Preserve cancellation, lossless values, schema, and resource accounting; implement stages in query order rather than a generic plugin registry.                                                                                                                                                                                                                                               |
-| Load balancing                            | The engine allocates configured compute instances in overflow order within the selected type and source login. The selector chooses the type, without live pool-state logic. Least-busy and round-robin strategies, provider lifecycle, and prepared-state pinning are later milestones.                                                                                                                                                                              |
-| Management or UI                          | Add an authenticated host/service boundary over supported engine operations. Authorize configuration inspection and query execution; redact secrets/results, enforce request limits, and define atomic config activation/cache invalidation. No management API or UI exists yet.                                                                                                                                                                                      |
+Keep source drivers, native values, session behavior and error conversion inside
+adapters. Keep frontend framing/authentication in protocol adapters. A new adapter
+must prove the SQL, type, metadata, isolation and cleanup contract described in
+[the plan](PLAN.md#phase-2--additional-engines-dynamic-masking-and-management) and
+[multi-engine compatibility](multi-engine.md). Extend concrete dispatch as needed;
+add shared traits only when another implementation requires them.
 
 ### Observed SQL context from local BI traffic
 
-The 2026-10-18 local capture showed these chart-query formats:
+These are supported diagnostic envelopes, not authenticated end-user identity.
+Metabase formats were verified with v0.64.2.8; Redash with 26.9. The local Superset
+6.1.0 deployment has no verified remark/mutator contract.
 
-| Tool     | SQL shape observed                                                                                                                                                                                     | Context available in the captured SQL                                                                                                                                                                                                                                             |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Metabase | A leading line comment, `-- Metabase:: userID: <id> queryType: <type> queryHash: <hash>`, followed by native SQL. The session also sent `SET application_name = 'Metabase v0.64.2.8 [<instance-id>]'`. | `userID`, `queryType` (observed as `native`), and `queryHash`; the application name identifies the client version and instance. Repeated runs retained the query hash.                                                                                                            |
-| Redash   | A leading block comment, `/* user_id: <id>, query_id: <id>, Job ID: <uuid>, Query Hash: <hash>, Scheduled: <bool> */`, followed by SQL.                                                                | User, saved-query, job, hash, and scheduled-run fields. The capture showed `Scheduled: False`; repeated runs kept the saved-query ID and hash while changing the job ID.                                                                                                          |
-| Superset | Generated SQL wraps a query as `SELECT ... FROM ( <dataset SQL> ) AS virtual_table`, often with outer grouping, ordering, or a `LIMIT 1000`.                                                           | No native user/query comment or equivalent SQL marker was visible. The test charts deliberately included a string literal such as `'Superset' AS bi_tool_name`; this is a test marker, not metadata emitted by Superset, and the outer query may omit it from its output columns. |
+| Tool                | Leading remark and normalized context                                                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metabase PostgreSQL | `-- Metabase:: userID: <id> queryType: <type> queryHash: <hash>`; `metabase_pg` extracts user, query type and hash.                                                                                           |
+| Metabase Redshift   | `-- /* partner: "metabase", { ... } */ Metabase:: ...`; `metabase_rs` also extracts dashboard, chart, account and filter fields.                                                                              |
+| Redash              | `/* user_id: <id>, query_id: <id>, Job ID: <uuid>, Query Hash: <hash>, Scheduled: <bool> */`; `redash` extracts the corresponding fields. Unsaved `query_id: adhoc` stays a string; saved IDs remain numeric. |
+| Superset            | No registered extractor. Generated wrappers, grouping and limits do not identify a user. Deployment-specific remarks require a custom context provider.                                                       |
 
-Treat comment fields such as `userID` and `user_id` as client-supplied hints, never as authenticated identity or authorization evidence. The SQL log records query text and execution/cache events, but does not identify whether a run came from a dashboard refresh, a chart view, a download, or an embed. The failed support-ticket join still appeared in the received SQL, so failures do not change the observed envelope. A YASP cache hit appears as a cache-served event rather than a new backend execution.
+Malformed or nonleading comments produce no metadata. Client application names and
+remark fields do not prove viewer identity, dashboard/download/embed origin, or
+source permissions. Application test literals such as `bi_tool_name` are not native
+BI metadata.
 
-The `metabase_pg` and Redash extractors recognize the leading PostgreSQL comments
-shown above. They return normalized fields including `tool`, `user_id`,
-`query_hash`, and tool-specific values such as `query_type`, `query_id`, `job_id`,
-or `scheduled`. Malformed or nonleading comments produce no metadata.
-Redash 26.9 emits `query_id: adhoc` for an unsaved SQL-editor query. The extractor
-preserves that marker as a string while retaining numeric saved-query IDs and
-numeric user IDs. The same context hook therefore handles saved and unsaved runs.
-
-Metabase's Redshift driver overrides `query->remark` to prepend a JSON `partner`
-comment containing dashboard, chart, user, account, and filter metadata before the
-default `Metabase::` remark. The resulting SQL remark is
-`-- /* partner: "metabase", { ... } */ Metabase:: userID: ... queryType: ... queryHash: ...`.
-The `metabase_rs` extractor parses that envelope and returns the partner fields
-alongside the common Metabase fields. This format is implemented from Metabase's
-[Redshift driver source](https://github.com/metabase/metabase/blob/master/modules/drivers/redshift/src/metabase/driver/redshift.clj#L3427-L3445);
-the same envelope was observed through the YASP Redshift gateway with Metabase
-v0.64.2.8.
-
-Superset extraction is deferred: the local 6.1.0 instance had no
-`SQL_QUERY_MUTATOR` configured, and its deployment-controlled mutation path has not
-been verified for every query path. When DEBUG logging is enabled, PostgreSQL and Redshift
-queries recognized by the gateway include `bi_remark` as the normalized object or
-`null` in the `query received` event; the raw leading BI comment is omitted from
-that event's `sql` field. The metadata is diagnostic only and does not affect
-context or routing.
-
-Keep PostgreSQL-specific response types and parsing inside the relevant adapters
-as new implementations arrive. The present concrete APIs do not promise arbitrary
-cross-engine SQL translation or PostgreSQL transparency. Add reusable traits only
-when another implementation needs them, and validate each new boundary with focused
-[contract scenarios](../tests/README.md) rather than internal-structure tests.
+DEBUG `query received` events include normalized `bi_remark` or `null` and omit the
+recognized leading remark from the `sql` field. This diagnostic extraction does not
+select a route or supply application context; the configured provider does that.

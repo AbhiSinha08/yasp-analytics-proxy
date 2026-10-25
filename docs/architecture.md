@@ -6,6 +6,28 @@ simple queries against configured PostgreSQL or optional Snowflake bindings.
 Source roles enforce access. Application-specific identity mapping and policy belong to
 the consuming host. See the [plan](PLAN.md) for the multi-engine product direction.
 
+## Reading the system
+
+A frontend is the connection BI tools see; a backend is the database that executes
+their SQL. The host assembles the library, settings, secrets, and callbacks before
+opening the listener. A callback is application code invoked at a defined query stage.
+
+Follow the query diagram first, then the capacity and session diagrams to see who
+holds connections and how they are released. The component table maps these ideas
+to code. Exact settings live in [configuration](configuration.md); detailed contracts
+are indexed in [the documentation guide](README.md).
+
+| Term              | Meaning in YASP                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| Frontend identity | The authenticated BI service account; a SQL remark does not authenticate an individual viewer.             |
+| Query context     | Application-derived values and incoming SQL dialect, available before ordinary parsing.                    |
+| AST               | Abstract syntax tree: SQL represented as nested statements and expressions for inspection.                 |
+| Data contexts     | Facts about raw outputs: optional column lineage and model classifications.                                |
+| Catalog snapshot  | One immutable generation of source schema definitions, used for discovery and lineage.                     |
+| Route             | A configured target/login and eligible compute choice; credentials stay inside the adapter.                |
+| Lease / permit    | A lease holds a source connection; a permit accounts for occupied capacity until the resource is released. |
+| Raw result        | Source values before caller-specific result callbacks; this is what the cache stores.                      |
+
 ## Component ownership
 
 | Component                       | Code                                                                                                           | Responsibility                                                                                                                                                                                              |
@@ -13,9 +35,9 @@ the consuming host. See the [plan](PLAN.md) for the multi-engine product directi
 | Host                            | [main.rs](../src/main.rs), [host/](../src/host)                                                                | CLI, environment resources, logging, compiled callback registration, and process lifecycle.                                                                                                                 |
 | Configuration                   | [config.rs](../src/config.rs), [config/](../src/config)                                                        | Public facade; YAML topology/loading, settings/defaults/validation, and secret-bearing runtime configs.                                                                                                     |
 | Shared pgwire frontend          | [gateway.rs](../src/gateway.rs), [gateway/](../src/gateway)                                                    | Listener/shutdown and authentication in `server`/`session`; bounded parsing in `query`; profile response and error encoding in `result`.                                                                    |
-| Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Read-only validation, lineage, routing/execution stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                      |
+| Shared execution                | [execution.rs](../src/execution.rs), [execution/](../src/execution)                                            | Read-only validation, lineage, routing/execution stages and transaction state; typed requests, responses, and failures without wire messages or source connection objects.                                  |
 | SQL and metadata classification | [query.rs](../src/query.rs), [discovery.rs](../src/discovery.rs), [discovery/](../src/discovery)               | Bounded immutable PostgreSQL, Redshift, or Snowflake AST; separate catalog allowlists, metadata classification, and frontend setup state.                                                                   |
-| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, result-processing, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                                          |
+| Extension contracts             | [hooks.rs](../src/hooks.rs), [hooks/](../src/hooks)                                                            | Separate context, selection, result-processing, cache-eligibility, and dataset-loader contracts; bounded JSON payloads and optional Python runtime, interpreter, and conversion code.                       |
 | Shared application datasets     | [datasets.rs](../src/datasets.rs)                                                                              | Startup-loaded JSON mappings shared through bounded Redis lookup helpers by context and query callbacks.                                                                                                    |
 | Shared schema catalog           | [catalog.rs](../src/catalog.rs), [catalog/](../src/catalog), [gateway/metadata.rs](../src/gateway/metadata.rs) | Bounded periodic schema snapshots, source coordinates/native types, age/status, and captured frontend metadata responses. The current snapshot also supplies local output lineage.                          |
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)                           | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                        |
@@ -99,7 +121,6 @@ flowchart TD
     Snapshot --> Ready
     Local --> Ready
 ```
-
 
 `ParsedQuery` keeps SQL, its incoming dialect, and an immutable AST.
 Metadata recognition uses the gateway grammar before query context, regardless of
@@ -337,6 +358,22 @@ security are not rechecked until expiry. Buffer accounting and cache settings ar
 process both hits and misses before client output.
 
 ## Optional result classification
+
+```mermaid
+flowchart LR
+    Raw[Raw source rows or validated cache replay] --> Classify[Load or compute optional classifications]
+    Raw --> Capture[Capture raw source misses when caching is enabled]
+    Classify --> Hook[Optional result callback with AST and model contexts]
+    Hook --> Validate[Validate edits, schema, rows and bytes]
+    Validate --> Client[Stream client output]
+    Capture --> Publish[Publish only complete clean source results]
+```
+
+The same result stage runs for source reads and cache replay. Cache hits reuse
+their associated model outcomes; AST lineage is computed from the current catalog.
+Callbacks can change supported text values, replace values with NULL, or filter
+rows. Without a callback, values pass through unchanged. Classification and optional
+presentation callbacks do not implement mandatory engine masking.
 
 `decision_model` owns the bounded REST contract and typed probability/confidence
 outcomes. `execution/classification.rs` pauses data-row output while collecting

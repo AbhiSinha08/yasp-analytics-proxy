@@ -56,7 +56,7 @@
 - [x] **Source access rules (RBAC)** — Let the application apply its own access rules when choosing a database login, and validate them with the intended BI client.
   - [x] **Partial selector decisions** — Let the single selector omit unambiguous target/login fields and request an optional target-scoped compute type.
   - [x] **BI policy validation** — Verify user isolation, missing context, source denial, and cached and uncached query behavior with the intended real BI client.
-- [x] **Optional compute-type routing and overflow** — Uses [target-scoped compute routing](source-access-routing-plan.md) and bounded shared allocation.
+- [x] **Optional compute-type routing and overflow**
   - [x] **Target-scoped compute configuration** — Define compute types, ordered instances, and supported login bindings without changing ordinary targets.
   - [x] **Shared connection budgets** — Bound actual open connections across pools and reclaim idle sessions when another binding needs capacity.
   - [x] **Type-local overflow and recovery** — Allocate within the selected type and verify shared capacity, cancellation, cleanup, discovery, and cache scope.
