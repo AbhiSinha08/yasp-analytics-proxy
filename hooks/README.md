@@ -137,6 +137,8 @@ comments or string literals. For Python use
 [examples/rbac.py](examples/rbac.py) demonstrates application-owned email permissions
 using AST/model contexts; configure the examples with
 [local-ast.yml](../config/local-ast.yml) or [local-model.yml](../config/local-model.yml).
+The model hook treats scores at or above `hooks.process_result.params.threshold`
+as yes; the default is `0.5`.
 These examples use one source login and apply presentation rules in the result hook.
 See [result processing](../docs/result-processing.md) for native Rust/Python batches,
 NULL replacement, filtering, raw-cache replay, and bounds.

@@ -65,7 +65,7 @@ def mask_email_from_model(request, batch, params):
         if outcome["status"] != "available":
             raise ValueError("email classification unavailable")
         answer = outcome["answers"]["email"]
-        if answer["value"] >= 0.5:
+        if answer["value"] >= params.get("threshold", 0.5):
             _mask(batch, output["ordinal"])
         elif answer["confidence"] < 0.5:
             raise ValueError("email classification uncertain")

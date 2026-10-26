@@ -82,6 +82,8 @@ hooks:
     type: python
     path: ../hooks/examples/rbac.py
     callback: mask_email_from_model
+    params:
+      threshold: 0.5
   python:
     search_paths: []
     queue_capacity: 32
