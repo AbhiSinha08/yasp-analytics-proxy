@@ -235,7 +235,7 @@ impl<'a> Route<'a> {
                 let lease = tokio::select! {
                     biased;
                     _ = &mut *cancel => return Err(ExecutionError::cancelled()),
-                    lease = route.acquire() => lease?,
+                    lease = route.acquire(settings.queue_timeout()) => lease?,
                 };
                 let pinned = tokio::select! {
                     biased;

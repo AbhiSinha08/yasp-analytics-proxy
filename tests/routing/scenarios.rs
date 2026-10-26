@@ -133,7 +133,6 @@ pub(super) fn routed_gateway_contract() {
             BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 4,
-                acquire_timeout_ms: 10_000,
             },
         )
         .expect("route pools must fit the configured bounds"),
@@ -197,6 +196,7 @@ pub(super) fn routed_gateway_contract() {
     .expect("gateway identity is valid")
     .with_settings(GatewaySettings {
         max_sessions: 2,
+        queue_timeout_ms: 10_000,
         ..GatewaySettings::default()
     })
     .expect("test gateway limits are valid")
@@ -252,7 +252,6 @@ pub(super) fn routed_gateway_contract() {
                 BackendSettings {
                     max_connections_per_pool: 1,
                     max_connections_total: 4,
-                    acquire_timeout_ms: 60_000,
                 },
             )
             .unwrap(),

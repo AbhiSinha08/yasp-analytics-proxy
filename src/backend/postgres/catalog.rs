@@ -64,7 +64,7 @@ impl PostgresBackend {
         };
         let mut transaction = self
             .route()
-            .acquire()
+            .acquire(settings.refresh_timeout)
             .await
             .map_err(|_| CatalogError::SourceUnavailable)?
             .begin(settings.refresh_timeout, settings.refresh_timeout)

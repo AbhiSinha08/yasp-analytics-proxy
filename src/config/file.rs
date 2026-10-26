@@ -299,11 +299,7 @@ impl FileConfig {
                 validate_value("Python callback", &hook.callback)?;
             }
         }
-        if self.backend.max_connections_per_pool == 0
-            || self.backend.max_connections_total == 0
-            || self.backend.acquire_timeout_ms == 0
-            || self.backend.acquire_timeout_ms > i32::MAX as u64
-        {
+        if self.backend.max_connections_per_pool == 0 || self.backend.max_connections_total == 0 {
             return Err(ConfigError::InvalidPoolLimit);
         }
         for (target_name, target) in &self.targets {

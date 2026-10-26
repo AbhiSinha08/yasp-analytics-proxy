@@ -45,7 +45,7 @@ impl BackendRoute<'_> {
         let lease = tokio::select! {
             biased;
             _ = &mut cancel => return Err(protocol_error("57014", "query cancelled")),
-            result = self.acquire() => result?,
+            result = self.acquire(settings.queue_timeout()) => result?,
         };
         let backend = lease.backend();
         let identity = backend.execution_identity();

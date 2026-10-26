@@ -210,8 +210,8 @@ binary results as concrete client requirements demand.
 
 ## Phase 2 — Additional engines, dynamic masking, and management
 
-**Outcome:** validated warehouse adapters, policy-driven dynamic masking, and
-authenticated management tools.
+**Outcome:** validated warehouse adapters, policy-driven dynamic masking,
+authenticated management tools, and coordinated multi-instance deployments.
 
 | Capability              | Remaining requirement                                                                                                                    |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -220,7 +220,7 @@ authenticated management tools.
 | Dynamic masking         | Combine data contexts and application policy before output, including cache hits.                                                        |
 | Management and UI       | Authorize inspection, configuration, scoped cache clearing and SQL Studio through the normal execution path.                             |
 | Configuration lifecycle | Activate coherent immutable policy/hook/model/settings generations; retire affected pools and drain or cancel pinned work.               |
-| Redis query queue       | Define bounded admission, deadlines, cancellation, worker ownership and recovery beyond local capacity waits.                            |
+| Multi-instance YASP     | Coordinate Redis admission, shared connection pools and limits, schema snapshots, session ownership, configuration and recovery.           |
 
 Current Snowflake and frontend limits are in [multi-engine compatibility](multi-engine.md).
 A native warehouse client protocol is a separate gateway capability.

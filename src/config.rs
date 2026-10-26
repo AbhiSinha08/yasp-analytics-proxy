@@ -65,7 +65,7 @@ pub enum ConfigError {
     MissingRoutes,
     #[error("connection() requires exactly one configured target with one login")]
     UnsupportedTopology,
-    #[error("backend pool limits must be positive and acquire_timeout_ms must be 1..=2147483647")]
+    #[error("backend pool limits must be positive")]
     InvalidPoolLimit,
     #[error(
         "passthrough params must contain optional target, backend_login, and compute_type strings"
@@ -89,7 +89,7 @@ pub enum ConfigError {
     InvalidListener,
     #[error("gateway session, SQL, context, hook, and timeout limits must be positive")]
     InvalidGatewayLimit,
-    #[error("gateway query/write timeouts must not exceed 2147483647 milliseconds")]
+    #[error("gateway queue/query/write timeouts must not exceed 2147483647 milliseconds")]
     InvalidExecutionTimeout,
     #[error("gateway.max_message_bytes must be between 8 and 2147483647")]
     InvalidFrameLimit,

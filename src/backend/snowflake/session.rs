@@ -23,12 +23,12 @@ pub(crate) struct Session {
 impl Session {
     pub(super) async fn open(
         inner: Arc<Inner>,
-        _: &GatewaySettings,
+        settings: &GatewaySettings,
         _: bool,
     ) -> ExecutionResult<Self> {
         let permit = inner
             .capacity()
-            .acquire(Instant::now() + inner.acquire_timeout)
+            .acquire(Instant::now() + settings.queue_timeout())
             .await
             .map_err(|error| match error {
                 CapacityError::Closed => {

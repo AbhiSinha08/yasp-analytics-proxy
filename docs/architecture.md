@@ -190,11 +190,11 @@ A blocked Snowflake binding can reclaim an idle PostgreSQL connection. Callbacks
 run outside accounting locks; active resources are never reclaimed. Returning a
 PostgreSQL lease to idle wakes waiters even though its physical permit stays held.
 
-Queries wait asynchronously under one `backend.acquire_timeout_ms` deadline, then
+Queries wait asynchronously under one `gateway.queue_timeout_ms` deadline, then
 receive `53300`. Closing a binding stops its waiters without releasing active or
-cleanup permits or closing unrelated bindings. Session limits bound waiting queries;
-Redis query queuing is future work. Cache replay and snapshot metadata responses
-acquire no capacity; catalog refreshes share normal source admission.
+cleanup permits or closing unrelated bindings. Session limits bound waiting queries.
+Cache replay and snapshot metadata responses acquire no capacity; catalog refreshes
+share normal source admission.
 
 ```mermaid
 flowchart TD

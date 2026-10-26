@@ -74,6 +74,7 @@ fn native_snowflake_through_pgwire_routes_values_transactions_and_recovers() {
         .gateway_config()
         .with_schema_discovery(pg_selection)
         .with_settings(GatewaySettings {
+            queue_timeout_ms: 6_000,
             query_timeout_ms: 1_500,
             ..GatewaySettings::default()
         })
@@ -134,7 +135,6 @@ fn snowflake_backend() -> Arc<SnowflakeBackend> {
                     .unwrap(),
             ),
             max_connections: 2,
-            acquire_timeout: Duration::from_secs(6),
             max_response_bytes: 8 * 1024 * 1024,
         })
         .unwrap(),
@@ -180,6 +180,7 @@ fn snowflake_catalog_uses_network_metadata_and_serves_both_frontend_profiles() {
             .with_schema_discovery(sf_selection)
             .with_settings(GatewaySettings {
                 protocol: profile.into(),
+                queue_timeout_ms: 6_000,
                 tls: yasp::config::GatewayTls {
                     mode: "enable".into(),
                     cert_file: Some(tls.join("server.crt")),

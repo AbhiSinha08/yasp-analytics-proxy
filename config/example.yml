@@ -13,6 +13,7 @@ gateway:
   # Future prepared queries and portals:
   # max_prepared_statements_per_session: 128
   # max_portals_per_session: 32
+  queue_timeout_ms: 60000 # Maximum asynchronous wait for backend capacity.
   query_timeout_ms: 60000
   read_timeout_ms: 600000
   write_timeout_ms: 60000
@@ -126,7 +127,6 @@ schema_discovery:
 backend:
   max_connections_per_pool: 8 # Pools are partitioned by target/login.
   max_connections_total: 32 # Shared physical connection cap across configured targets.
-  acquire_timeout_ms: 60000 # Maximum asynchronous wait for pool capacity.
   # Future configurable backend lifecycle deadlines:
   # connect_timeout_ms: 5000
   # idle_transaction_timeout_ms: 30000

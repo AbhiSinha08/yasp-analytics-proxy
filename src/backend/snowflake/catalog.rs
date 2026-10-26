@@ -47,6 +47,8 @@ impl SnowflakeBackend {
             settings.max_rows + 1
         );
         let execution = GatewaySettings {
+            queue_timeout_ms: u32::try_from(settings.refresh_timeout.as_millis())
+                .map_err(|_| CatalogError::InvalidSettings)?,
             query_timeout_ms: u32::try_from(settings.refresh_timeout.as_millis())
                 .map_err(|_| CatalogError::InvalidSettings)?,
             ..GatewaySettings::default()

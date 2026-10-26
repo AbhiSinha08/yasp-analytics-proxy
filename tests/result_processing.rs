@@ -617,7 +617,6 @@ fn cancellation_and_disconnect_during_a_batch_release_single_source_capacity() {
             yasp::config::BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 1,
-                acquire_timeout_ms: 500,
             },
         )
         .unwrap(),
@@ -625,6 +624,11 @@ fn cancellation_and_disconnect_during_a_batch_release_single_source_capacity() {
     let gateway = env
         .gateway()
         .gateway_config()
+        .with_settings(GatewaySettings {
+            queue_timeout_ms: 500,
+            ..GatewaySettings::default()
+        })
+        .unwrap()
         .with_result_hook(
             hook,
             ResultProcessingSettings {

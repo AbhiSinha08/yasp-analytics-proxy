@@ -15,7 +15,7 @@ use support::{
 use yasp::{
     backend::{PostgresBackends, PostgresBinding},
     cache::RedisCache,
-    config::{BackendSettings, CacheSettings},
+    config::{BackendSettings, CacheSettings, GatewaySettings},
     hooks::{BackendDecision, BackendSelection, bind_cache_eligibility, bind_select_backend},
 };
 
@@ -90,7 +90,6 @@ fn compute_types_overflow_share_capacity_and_reclaim_idle_connections() {
             BackendSettings {
                 max_connections_per_pool: 2,
                 max_connections_total: 2,
-                acquire_timeout_ms: 60_000,
             },
         )
         .unwrap(),
@@ -308,7 +307,6 @@ fn saturated_shared_budget_waits_then_reports_capacity_and_recovers() {
             BackendSettings {
                 max_connections_per_pool: 1,
                 max_connections_total: 1,
-                acquire_timeout_ms: 10_000,
             },
         )
         .unwrap(),
@@ -316,6 +314,11 @@ fn saturated_shared_budget_waits_then_reports_capacity_and_recovers() {
     let server = GatewayServer::routed(
         identity
             .gateway_config()
+            .with_settings(GatewaySettings {
+                queue_timeout_ms: 10_000,
+                ..GatewaySettings::default()
+            })
+            .unwrap()
             .with_schema_discovery(BackendSelection {
                 target: "only".into(),
                 backend_login: "owner".into(),

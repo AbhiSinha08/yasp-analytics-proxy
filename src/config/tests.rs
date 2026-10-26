@@ -11,6 +11,35 @@ fn make_config(hooks: &str, targets: &str, backend: &str) -> FileConfig {
 const ONE_TARGET: &str = "  primary:\n    engine: postgresql\n    host: localhost\n    port: 5432\n    database: analytics\n    tls:\n      mode: disable\n    logins:\n      reader:\n        username: reader\n        password_env: READER_PASSWORD";
 
 #[test]
+fn queue_timeout_belongs_to_gateway_and_preserves_supported_bounds() {
+    let config = make_config("builtin.select_backend.passthrough", ONE_TARGET, "  {}");
+    assert_eq!(config.gateway.queue_timeout_ms, 60_000);
+    let value = serde_json::to_value(config).unwrap();
+    for timeout in [1, 120, i32::MAX as u32] {
+        let mut configured = value.clone();
+        configured["gateway"]["queue_timeout_ms"] = timeout.into();
+        let config: FileConfig = serde_json::from_value(configured).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.gateway.queue_timeout_ms, timeout);
+    }
+    for timeout in [0, i32::MAX as u32 + 1] {
+        let mut invalid = value.clone();
+        invalid["gateway"]["queue_timeout_ms"] = timeout.into();
+        assert!(
+            serde_json::from_value::<FileConfig>(invalid)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
+    for field in ["acquire_timeout_ms", "queue_timeout_ms"] {
+        let mut misplaced = value.clone();
+        misplaced["backend"][field] = 120.into();
+        assert!(serde_json::from_value::<FileConfig>(misplaced).is_err());
+    }
+}
+
+#[test]
 fn query_modification_references_validate_before_startup() {
     let config = make_config("builtin.select_backend.passthrough", ONE_TARGET, "  {}");
     assert!(config.hooks.modify_query.is_none());

@@ -128,11 +128,12 @@ Separate processes have separate budgets.
 
 Overflow stays within the selected type and login. If all eligible instances or
 the shared budget are full, acquisition waits asynchronously for capacity, up to
-`backend.acquire_timeout_ms` (60 seconds by default), then reports SQLSTATE
+`gateway.queue_timeout_ms` (60 seconds by default), then reports SQLSTATE
 `53300`. The frontend session can continue. Set this value in milliseconds; it
 must be between 1 and 2,147,483,647.
-Waiting consumes a bounded frontend session slot, not a dedicated worker thread;
-there is no durable query queue. Redis-backed queuing remains planned for Phase 2.
+Waiting consumes a frontend session slot, not a dedicated worker thread.
+`gateway.max_sessions` bounds executing, waiting, and idle frontend sessions
+together; it does not reserve a separate number of waiting queries.
 Connection failures can try another eligible instance before application SQL is
 submitted; source permission errors and submitted queries are not retried.
 
@@ -159,6 +160,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `max_context_bytes`        | 65,536           | Encoded derived-context bound; nesting is limited to 64.                                |
 | `query_context_timeout_ms` | 2,000            | Query-context derivation wait; failure rejects the query.                               |
 | `async_hook_timeout_ms`    | 2,000            | Query modification, async selection/eligibility, and result-hook wait.                  |
+| `queue_timeout_ms`         | 60,000           | Maximum asynchronous wait for backend capacity and connection checkout.                  |
 | `query_timeout_ms`         | 60,000           | Database query wait and PostgreSQL statement timeout.                                   |
 | `read_timeout_ms`          | 600,000          | Next complete authenticated message, including idle/partial reads; not query execution. |
 | `write_timeout_ms`         | 60,000           | Each frontend response write.                                                           |
@@ -167,11 +169,11 @@ organization-specific params stay outside the engine. See [extensions](extension
 | `tls.mode`                 | `disable`        | `disable` accepts plaintext; `enable` requires TLS with `cert_file` and `key_file`.     |
 
 Session, SQL, context, and timeout limits must be positive. Frontend frames must be
-between 8 and 2,147,483,647 bytes; query/write timers cannot exceed 2,147,483,647 ms.
+between 8 and 2,147,483,647 bytes; queue/query/write timers cannot exceed 2,147,483,647 ms.
 Backend connection and cleanup deadlines are fixed at 10 seconds. Acquisition
-uses `backend.acquire_timeout_ms`, which defaults to 60,000 ms. PostgreSQL
-transaction-local idle timeout uses the larger query/write budget for autocommit
-execution and `read_timeout_ms` for explicit client transactions.
+uses `gateway.queue_timeout_ms`; catalog refreshes use their refresh deadline.
+PostgreSQL transaction-local idle timeout uses the larger query/write budget for
+autocommit execution and `read_timeout_ms` for explicit client transactions.
 Prepared-statement and portal settings remain future configuration.
 
 The Redshift profile requires `tls.mode: enable`. It advertises version 8.0.2,
@@ -604,7 +606,7 @@ verified HTTPS at `https://<account>.snowflakecomputing.com`.
 
 PostgreSQL host/port/TLS/compute settings cannot be mixed into a Snowflake target.
 Admission obeys the shared `backend.max_connections_total` and the binding's
-`max_connections_per_pool` ceiling, using one `backend.acquire_timeout_ms` deadline.
+`max_connections_per_pool` ceiling, using one `gateway.queue_timeout_ms` deadline.
 Read-only frontend transaction blocks preserve routing and
 failure states while each Snowflake statement autocommits. They provide no shared
 snapshot or interactive source transaction.

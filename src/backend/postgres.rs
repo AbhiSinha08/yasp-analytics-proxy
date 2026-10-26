@@ -15,7 +15,7 @@ use super::ConnectionBudget;
 use pool::{InstanceState, PgManager};
 
 use crate::{
-    config::{BackendConfig, BackendSettings},
+    config::{BackendConfig, BackendSettings, GatewaySettings},
     hooks::{BackendDecision, BackendSelection, SelectionError},
     query::ParsedQuery,
 };
@@ -54,7 +54,6 @@ pub struct PostgresBackend {
     instance: Arc<InstanceState>,
     pool_slots: Arc<Semaphore>,
     budget: Arc<ConnectionBudget>,
-    acquire_timeout: Duration,
 }
 
 impl PostgresBackend {
@@ -87,7 +86,6 @@ impl PostgresBackend {
             settings.max_connections_per_pool,
             budget,
             instance,
-            Duration::from_millis(settings.acquire_timeout_ms),
         )
     }
 
@@ -96,7 +94,6 @@ impl PostgresBackend {
         capacity: usize,
         budget: Arc<ConnectionBudget>,
         instance: Arc<InstanceState>,
-        acquire_timeout: Duration,
     ) -> io::Result<Self> {
         let PostgresBinding {
             selection,
@@ -108,7 +105,7 @@ impl PostgresBackend {
         } = binding;
         let target = format!("{}:{}/{}", config.host, config.port, config.database);
         let database_user = config.username.clone();
-        let pool = pool::new(config, capacity, instance.clone(), acquire_timeout)?;
+        let pool = pool::new(config, capacity, instance.clone())?;
         Ok(Self {
             pool,
             target,
@@ -120,7 +117,6 @@ impl PostgresBackend {
             instance,
             pool_slots: Arc::new(Semaphore::new(capacity)),
             budget,
-            acquire_timeout,
         })
     }
 
@@ -165,7 +161,7 @@ impl PostgresBackend {
             .validate_read_only()
             .map_err(|error| error_response("0A000", &error.to_string()))?;
         self.route()
-            .acquire()
+            .acquire(GatewaySettings::default().queue_timeout())
             .await?
             .execute(query, output, query_timeout, write_timeout, None)
             .await
@@ -262,8 +258,8 @@ impl<'a> BackendRoute<'a> {
             .any(|candidate| std::ptr::eq(*candidate, backend))
     }
 
-    pub async fn acquire(&self) -> PgWireResult<BackendLease<'a>> {
-        let deadline = tokio::time::Instant::now() + self.candidates[0].acquire_timeout;
+    pub async fn acquire(&self, queue_timeout: Duration) -> PgWireResult<BackendLease<'a>> {
+        let deadline = tokio::time::Instant::now() + queue_timeout;
         let budget = &self.candidates[0].budget;
         loop {
             let notified = budget.changed.notified();
@@ -458,8 +454,6 @@ impl PostgresBackends {
             || settings.max_connections_per_pool > Semaphore::MAX_PERMITS
             || settings.max_connections_total == 0
             || settings.max_connections_total > Semaphore::MAX_PERMITS
-            || settings.acquire_timeout_ms == 0
-            || settings.acquire_timeout_ms > i32::MAX as u64
             || bindings.iter().any(|binding| {
                 binding.selection.target.is_empty()
                     || binding.selection.backend_login.is_empty()
@@ -472,7 +466,7 @@ impl PostgresBackends {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "routes and pool limits must be nonempty and acquisition timeout must be valid",
+                "routes and pool limits must be nonempty and valid",
             ));
         }
 
@@ -522,7 +516,6 @@ impl PostgresBackends {
                 settings.max_connections_per_pool,
                 budget.clone(),
                 instance,
-                Duration::from_millis(settings.acquire_timeout_ms),
             )?;
             pools.entry(route).or_default().push(backend);
         }

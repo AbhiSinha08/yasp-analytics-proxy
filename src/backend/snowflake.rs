@@ -39,7 +39,6 @@ pub struct SnowflakeConfig {
     /// Local development only: numeric loopback HTTP endpoint.
     pub emulator: Option<std::net::SocketAddr>,
     pub max_connections: usize,
-    pub acquire_timeout: Duration,
     /// Bounds each decompressed JSON response, including one result partition.
     pub max_response_bytes: usize,
 }
@@ -57,7 +56,6 @@ struct Inner {
     auth: auth::KeyPair,
     capacity: Mutex<Option<CapacityGroup>>,
     max_connections: usize,
-    acquire_timeout: Duration,
     max_response_bytes: usize,
 }
 
@@ -71,7 +69,6 @@ impl SnowflakeBackend {
         };
         if config.max_connections == 0
             || config.max_connections > 1024
-            || config.acquire_timeout.is_zero()
             || !(1024..=128 * 1024 * 1024).contains(&config.max_response_bytes)
             || config
                 .emulator
@@ -128,7 +125,6 @@ impl SnowflakeBackend {
                 auth,
                 capacity: Mutex::new(None),
                 max_connections: config.max_connections,
-                acquire_timeout: config.acquire_timeout,
                 max_response_bytes: config.max_response_bytes,
             }),
         })

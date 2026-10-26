@@ -10,7 +10,7 @@ fn gateway_contract() {
     use yasp::config::{BackendConfig, GatewayConfig};
 
     let mut environment = support::TestEnvironment::load();
-    environment.config.backend.acquire_timeout_ms = 10_000;
+    environment.config.gateway.queue_timeout_ms = 10_000;
     let config = &environment.config;
     let route = config
         .default_backend()

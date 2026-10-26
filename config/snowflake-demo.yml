@@ -4,6 +4,7 @@ version: 1
 gateway:
   protocol: redshift # postgresql uses the same Snowflake target.
   listen: "127.0.0.1:6433"
+  queue_timeout_ms: 10000
   query_timeout_ms: 60000
   tls:
     mode: enable
@@ -12,7 +13,6 @@ gateway:
 backend:
   max_connections_per_pool: 4
   max_connections_total: 4
-  acquire_timeout_ms: 10000
 targets:
   snowflake:
     engine: snowflake

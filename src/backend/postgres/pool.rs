@@ -24,7 +24,7 @@ use pgwire::{
     messages::{ProtocolVersion, response::TransactionStatus},
     tokio::client::PgWireMessageClientCodec,
 };
-use std::{io, sync::Arc, time::Duration};
+use std::{io, sync::Arc};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio_util::codec::Framed;
@@ -54,7 +54,6 @@ pub(super) fn new(
     config: BackendConfig,
     capacity: usize,
     instance: Arc<InstanceState>,
-    acquire_timeout: Duration,
 ) -> io::Result<Pool<PgManager>> {
     let mut wire = Config::new();
     wire.user(config.username)
@@ -72,7 +71,7 @@ pub(super) fn new(
         .max_size(capacity)
         .runtime(Runtime::Tokio1)
         .timeouts(Timeouts {
-            wait: Some(acquire_timeout),
+            wait: None,
             create: Some(CONNECT_TIMEOUT),
             recycle: Some(CLEANUP_TIMEOUT),
         })

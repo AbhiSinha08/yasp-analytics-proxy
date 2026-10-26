@@ -10,7 +10,7 @@ use yasp::{
     },
     cache::RedisCache,
     catalog::{CatalogError, CatalogSettings},
-    config::{BackendSettings, CacheSettings},
+    config::{BackendSettings, CacheSettings, GatewaySettings},
     hooks::{BackendSelection, bind_select_backend},
 };
 
@@ -31,7 +31,6 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
     let settings = BackendSettings {
         max_connections_per_pool: 2,
         max_connections_total: 1,
-        acquire_timeout_ms: 120,
     };
     let binding = || PostgresBinding {
         selection: pg_selection.clone(),
@@ -77,7 +76,6 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
                     .unwrap(),
             ),
             max_connections: 2,
-            acquire_timeout: Duration::from_millis(120),
             max_response_bytes: 8 * 1024 * 1024,
         })
         .unwrap(),
@@ -113,6 +111,11 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
     );
     let config = identity
         .gateway_config()
+        .with_settings(GatewaySettings {
+            queue_timeout_ms: 120,
+            ..GatewaySettings::default()
+        })
+        .unwrap()
         .with_schema_discovery(pg_selection.clone())
         .with_catalog(catalog.clone())
         .with_cache(cache);
@@ -136,7 +139,7 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
         "warm PostgreSQL cache",
     );
     let route = pg.resolve(&pg_selection.clone().into()).unwrap();
-    let held = route.acquire().await.unwrap();
+    let held = route.acquire(Duration::from_millis(120)).await.unwrap();
     let blocked = client.query("SELECT 42");
     assert!(
         String::from_utf8_lossy(&blocked.stderr).contains("53300"),
@@ -173,13 +176,13 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
         .await
         .unwrap();
     assert!(
-        route.acquire().await.is_err(),
+        route.acquire(Duration::from_millis(120)).await.is_err(),
         "Snowflake's retained session must block PostgreSQL"
     );
-    assert_eq!(
+    assert!(matches!(
         catalog.refresh().await,
-        Err(CatalogError::SourceUnavailable)
-    );
+        Err(CatalogError::SourceUnavailable | CatalogError::TimedOut)
+    ));
     assert_eq!(catalog.snapshot().unwrap().generation, generation);
     assert_success(
         &client.query("SELECT 41 /* route_postgres */"),
@@ -189,14 +192,14 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
         .simple_query(DefaultSimpleQueryHandler::new(), "ROLLBACK")
         .await
         .unwrap();
-    let recovered = route.acquire().await.unwrap();
+    let recovered = route.acquire(Duration::from_millis(120)).await.unwrap();
     drop(recovered);
     catalog.refresh().await.unwrap();
     assert!(catalog.snapshot().unwrap().generation > generation);
     catalog.stop_refreshing().await;
     drop(transaction);
-    let held = route.acquire().await.unwrap();
-    let waiting = route.acquire();
+    let held = route.acquire(Duration::from_millis(120)).await.unwrap();
+    let waiting = route.acquire(Duration::from_millis(120));
     tokio::pin!(waiting);
     assert!(futures::poll!(&mut waiting).is_pending());
     server.stop();
@@ -215,13 +218,19 @@ async fn mixed_targets_share_capacity_reclaim_idle_and_preserve_cache_and_catalo
         recovery_budget.clone(),
     )
     .unwrap();
-    assert!(failed.route().acquire().await.is_err());
+    assert!(
+        failed
+            .route()
+            .acquire(Duration::from_millis(120))
+            .await
+            .is_err()
+    );
     let healthy = yasp::backend::PostgresBackend::with_budget(
         database.connection.backend_config(),
         recovery_budget,
     )
     .unwrap();
     let route = healthy.route();
-    let lease = route.acquire().await.unwrap();
+    let lease = route.acquire(Duration::from_millis(120)).await.unwrap();
     drop(lease);
 }

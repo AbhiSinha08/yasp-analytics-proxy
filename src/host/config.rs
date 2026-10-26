@@ -138,9 +138,6 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                             .backend
                             .max_connections_per_pool
                             .min(file.backend.max_connections_total),
-                        acquire_timeout: std::time::Duration::from_millis(
-                            file.backend.acquire_timeout_ms,
-                        ),
                         max_response_bytes: sf.max_response_bytes,
                     },
                 ));

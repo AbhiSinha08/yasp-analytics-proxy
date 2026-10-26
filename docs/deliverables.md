@@ -108,7 +108,7 @@
   - [x] **Native batch contracts** — Lazy Python column access, scoped application/dataset context, output AST/model contexts, validation, and aggregate byte bounds.
   - [x] **Shared execution and replay** — Process source results, transactions, and raw cache hits while preserving raw cache entries and reporting emitted row counts.
   - [x] **Verification and measurements** — Functional recovery/isolation checks and a brief local performance reference.
-- [ ] **Redis query queue** — Add bounded shared admission for burst workloads, with deadlines, cancellation, worker ownership, and recovery. Current acquisition waits asynchronously for `backend.acquire_timeout_ms` (60 seconds by default), then returns `53300`.
+- [ ] **Warehouse Adapter 2** - Add support for one more Backend Database / Data Warehouse. Includes metadata fetch and handling, native query execution, result streams. Tests and local setup.
 - [ ] **Admin UI and SQL Studio** — Manages mappings and runs queries through the same authorized execution path.
 
 ## Phase 3 — Advanced analytics and integrations
@@ -134,3 +134,9 @@
 - [ ] **Semantic caching** — Reuses compatible result supersets while preserving SQL ordering, filtering, NULL, limit, and aggregate semantics.
 - [ ] **Cross-Engine Federation** — Plans and runs cross-engine queries with explicit type, consistency, and failure behavior.
 - [ ] **Natural-language queries** — Adds model-assisted query creation through the existing authorized execution path.
+- [ ] **Multi-instance YASP deployments** — Support coordinated operation across multiple YASP processes or pods.
+  - [ ] **Shared Redis admission queue** — Bound waiting work across instances with deadlines, cancellation, worker ownership, and recovery.
+  - [ ] **Shared connection pools and capacity** — Define cross-instance pool ownership and deployment-wide target/login/compute limits, preserving role isolation, transaction affinity, and cleanup.
+  - [ ] **Shared schema cache** — Publish source-scoped schema generations through shared storage with coordinated refresh, expiry, and invalidation.
+  - [ ] **Session routing and cancellation** — Route live sessions and cancellation to their owning instance and support bounded draining and client recovery after instance loss.
+  - [ ] **Configuration and cache consistency** — Coordinate configuration generations and verify result-cache and dataset publication and invalidation across instances.

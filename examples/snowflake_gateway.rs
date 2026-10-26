@@ -1,5 +1,5 @@
 //! Native Snowflake charts with PostgreSQL metadata through one pgwire listener.
-use std::{collections::BTreeMap, env, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, env, sync::Arc};
 use yasp::{
     backend::{
         Backends, PostgresBackends,
@@ -45,7 +45,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warehouse: env::var("SNOWFLAKE_WAREHOUSE")?,
         emulator: None,
         max_connections: 4,
-        acquire_timeout: Duration::from_secs(60),
         max_response_bytes: 8 * 1024 * 1024,
     })?);
     let backends = Arc::new(Backends::new(postgres).with_snowflake(selected.clone(), snowflake)?);

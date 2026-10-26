@@ -134,7 +134,6 @@ impl PythonSettings {
 pub struct BackendSettings {
     pub max_connections_per_pool: usize,
     pub max_connections_total: usize,
-    pub acquire_timeout_ms: u64,
 }
 
 impl Default for BackendSettings {
@@ -142,7 +141,6 @@ impl Default for BackendSettings {
         Self {
             max_connections_per_pool: 8,
             max_connections_total: 16,
-            acquire_timeout_ms: 60_000,
         }
     }
 }
@@ -305,6 +303,7 @@ pub struct GatewaySettings {
     pub max_context_bytes: usize,
     pub query_context_timeout_ms: u32,
     pub async_hook_timeout_ms: u32,
+    pub queue_timeout_ms: u32,
     pub query_timeout_ms: u32,
     pub read_timeout_ms: u32,
     pub write_timeout_ms: u32,
@@ -342,6 +341,7 @@ impl Default for GatewaySettings {
             max_context_bytes: 65536,
             query_context_timeout_ms: 2000,
             async_hook_timeout_ms: 2000,
+            queue_timeout_ms: 60_000,
             query_timeout_ms: 60_000,
             read_timeout_ms: 600_000,
             write_timeout_ms: 60_000,
@@ -368,6 +368,7 @@ impl GatewaySettings {
             || [
                 self.query_context_timeout_ms,
                 self.async_hook_timeout_ms,
+                self.queue_timeout_ms,
                 self.query_timeout_ms,
                 self.read_timeout_ms,
                 self.write_timeout_ms,
@@ -378,8 +379,15 @@ impl GatewaySettings {
         {
             return Err(ConfigError::InvalidGatewayLimit);
         }
-        // PostgreSQL statement and idle-transaction timers use signed millisecond values.
-        if self.query_timeout_ms > i32::MAX as u32 || self.write_timeout_ms > i32::MAX as u32 {
+        // Queue, statement and idle-transaction deadlines share the supported millisecond range.
+        if [
+            self.queue_timeout_ms,
+            self.query_timeout_ms,
+            self.write_timeout_ms,
+        ]
+        .iter()
+        .any(|&value| value > i32::MAX as u32)
+        {
             return Err(ConfigError::InvalidExecutionTimeout);
         }
         if !(8..=i32::MAX as usize).contains(&self.max_message_bytes) {
@@ -394,5 +402,9 @@ impl GatewaySettings {
 
     pub(crate) fn query_timeout(&self) -> Duration {
         Duration::from_millis(u64::from(self.query_timeout_ms))
+    }
+
+    pub(crate) fn queue_timeout(&self) -> Duration {
+        Duration::from_millis(u64::from(self.queue_timeout_ms))
     }
 }

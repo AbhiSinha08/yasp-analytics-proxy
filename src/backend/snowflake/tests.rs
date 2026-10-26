@@ -25,10 +25,17 @@ fn config(address: std::net::SocketAddr) -> SnowflakeConfig {
         warehouse: "COMPUTE".into(),
         emulator: Some(address),
         max_connections: 1,
-        acquire_timeout: Duration::from_millis(30),
         max_response_bytes: 4096,
     }
 }
+
+fn gateway_settings() -> GatewaySettings {
+    GatewaySettings {
+        queue_timeout_ms: 30,
+        ..GatewaySettings::default()
+    }
+}
+
 #[derive(Default)]
 struct Output {
     rows: Vec<Vec<Option<bytes::Bytes>>>,
@@ -154,7 +161,7 @@ async fn public_api_polls_partitions_and_signs_fixed_identity_without_losing_val
     ])
     .await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let mut session = backend.open(&settings, false).await.unwrap();
     let mut output = Output::default();
     let (_sender, cancel) = oneshot::channel();
@@ -262,7 +269,7 @@ async fn errors_limits_and_incomplete_results_never_produce_completion() {
     ] {
         let (address,task)=fixture(vec![response]).await;
         let backend=SnowflakeBackend::new(config(address)).unwrap();
-        let settings=GatewaySettings { query_timeout_ms:100, ..Default::default() };
+        let settings=GatewaySettings { query_timeout_ms:100, ..gateway_settings() };
         let mut session=backend.open(&settings,false).await.unwrap();
         let (_sender,cancel)=oneshot::channel();
         assert!(session.execute_sql("SELECT test",&mut Output::default(),&settings,&SessionSettings::default(),cancel).await.is_err());
@@ -281,7 +288,7 @@ async fn frontend_compatibility_transaction_does_not_submit_transaction_sql() {
     ])
     .await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let mut session = backend.open(&settings, true).await.unwrap();
     let (_sender, cancel) = oneshot::channel();
     session
@@ -320,7 +327,7 @@ async fn cancellation_keeps_admission_until_known_handle_cleanup_finishes() {
     )
     .await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let mut session = backend.open(&settings, false).await.unwrap();
     let (sender, cancel) = oneshot::channel();
     let mut output = Output::default();
@@ -378,7 +385,7 @@ async fn gzip_response_bound_applies_after_decompression() {
         .unwrap();
     let (address, task) = fixture_bytes(vec![gzip]).await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let mut session = backend.open(&settings, false).await.unwrap();
     let (_sender, cancel) = oneshot::channel();
     let result = session
@@ -434,7 +441,7 @@ async fn slow_frontend_blocks_fetching_the_next_partition() {
     let backend = SnowflakeBackend::new(config(address)).unwrap();
     let settings = GatewaySettings {
         write_timeout_ms: 30,
-        ..Default::default()
+        ..gateway_settings()
     };
     let mut session = backend.open(&settings, false).await.unwrap();
     let mut blocked = Blocked { row: false };
@@ -462,7 +469,7 @@ async fn failed_statement_http_422_releases_capacity_and_preserves_sqlstate() {
     let body=json!({"statementHandle":"abc-123","code":"002003","sqlState":"42S02","message":"missing table"}).to_string().into_bytes();
     let (address, task) = fixture_responses(vec![(422, body)]).await;
     let backend = SnowflakeBackend::new(config(address)).unwrap();
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let mut session = backend.open(&settings, false).await.unwrap();
     let (_sender, cancel) = oneshot::channel();
     let result = session
@@ -509,7 +516,7 @@ async fn registry_shares_capacity_across_bindings_aliases_and_standalone_use() {
             .with_snowflake(selection("conflict"), first.clone())
             .is_err()
     );
-    let settings = GatewaySettings::default();
+    let settings = gateway_settings();
     let a = first.open(&settings, false).await.unwrap();
     assert!(
         matches!(
@@ -585,7 +592,7 @@ async fn abandoned_operations_keep_the_shared_total_until_cleanup_finishes() {
         sibling.attach_budget(&budget).unwrap();
         let settings = GatewaySettings {
             query_timeout_ms: 500,
-            ..Default::default()
+            ..gateway_settings()
         };
         let mut session = backend.open(&settings, false).await.unwrap();
         let (cancel, cancelled) = oneshot::channel();
