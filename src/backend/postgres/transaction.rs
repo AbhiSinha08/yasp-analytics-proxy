@@ -1,8 +1,7 @@
 //! A read-only transaction retains its physical lease until verified cleanup.
 
 use super::{
-    BackendLease, CLEANUP_TIMEOUT, CONNECT_TIMEOUT, PostgresBackend, SESSION_DEFAULTS,
-    error_response, pool::Lease,
+    BackendLease, CLEANUP_TIMEOUT, CONNECT_TIMEOUT, PostgresBackend, error_response, pool::Lease,
 };
 use crate::query::ParsedQuery;
 use futures::{Sink, channel::oneshot};
@@ -33,10 +32,10 @@ impl<'a> BackendLease<'a> {
         };
         let connection = transaction.connection.0.as_mut().unwrap();
         connection.clean = false;
-        let sql = format!(
-            "BEGIN READ ONLY; SET LOCAL statement_timeout = '{}ms'; SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
-            query_timeout.as_millis(),
-            idle_timeout.as_millis(),
+        let sql = transaction_sql(
+            transaction.owner.backend.engine(),
+            query_timeout,
+            idle_timeout,
         );
         timeout(CONNECT_TIMEOUT, connection.control(&sql))
             .await
@@ -53,8 +52,13 @@ impl<'a> BackendLease<'a> {
 }
 
 impl PostgresTransaction<'_> {
-    /// All provider statements observe one source metadata snapshot.
+    /// PostgreSQL metadata uses repeatable read; Redshift keeps its native isolation.
     pub(super) async fn catalog_isolation(&mut self) -> PgWireResult<()> {
+        if self.owner.backend.engine() == crate::config::PgWireEngine::Redshift {
+            // Redshift uses the database's SNAPSHOT/SERIALIZABLE setting. Its
+            // catalogs do not promise PostgreSQL repeatable-read DDL visibility.
+            return Ok(());
+        }
         timeout(
             CONNECT_TIMEOUT,
             self.connection
@@ -98,7 +102,7 @@ impl PostgresTransaction<'_> {
         connection.cancel_requested = false;
         self.usable = false;
         if let Some(session) = session {
-            let setup = super::execution::session_sql(session);
+            let setup = super::execution::session_sql(self.owner.backend.engine(), session);
             let result = timeout(CONNECT_TIMEOUT, connection.control(&setup))
                 .await
                 .map_err(|_| error_response("08006", "PostgreSQL session setup timed out"))?;
@@ -139,8 +143,12 @@ impl PostgresTransaction<'_> {
             connection
                 .control(if commit { "COMMIT" } else { "ROLLBACK" })
                 .await?;
-            connection.control("DISCARD ALL").await?;
-            connection.control(SESSION_DEFAULTS).await?;
+            connection
+                .control(self.owner.backend.engine().reset_sql())
+                .await?;
+            connection
+                .control(self.owner.backend.engine().session_defaults())
+                .await?;
             if connection.status != TransactionStatus::Idle {
                 return Err(error_response(
                     "08006",
@@ -155,5 +163,23 @@ impl PostgresTransaction<'_> {
         .map_err(|_| error_response("08006", "PostgreSQL cleanup timed out"))??;
         self.connection.release();
         Ok(())
+    }
+}
+
+fn transaction_sql(
+    engine: crate::config::PgWireEngine,
+    query_timeout: Duration,
+    idle_timeout: Duration,
+) -> String {
+    match engine {
+        crate::config::PgWireEngine::Postgresql => format!(
+            "BEGIN READ ONLY; SET LOCAL statement_timeout = '{}ms'; SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
+            query_timeout.as_millis(),
+            idle_timeout.as_millis(),
+        ),
+        crate::config::PgWireEngine::Redshift => format!(
+            "BEGIN READ ONLY; SET LOCAL statement_timeout = {}",
+            query_timeout.as_millis(),
+        ),
     }
 }

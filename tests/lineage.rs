@@ -175,6 +175,94 @@ fn source_name(source: &LineageSource) -> String {
 }
 
 #[test]
+fn redshift_partiql_iteration_retains_super_origins_and_derived_metadata() {
+    let snapshot = schema(SqlDialect::Redshift);
+    for (sql, expected) in [
+        (
+            "SELECT item.sku, idx FROM users u, u.profile.items AS item AT idx",
+            vec![
+                vec!["users.profile:items[*]:sku"],
+                vec!["users.profile:items"],
+            ],
+        ),
+        (
+            "SELECT tag FROM users u, u.profile.tags AS tag",
+            vec![vec!["users.profile:tags[*]"]],
+        ),
+        (
+            "SELECT item.sku FROM users u, u.profile['items'] AS item",
+            vec![vec!["users.profile:items[*]:sku"]],
+        ),
+        (
+            "SELECT child.sku, idx FROM users u, u.profile.orders AS parent, parent.items AS child AT idx",
+            vec![
+                vec!["users.profile:orders[*]:items[*]:sku"],
+                vec!["users.profile:orders[*]:items"],
+            ],
+        ),
+        (
+            "WITH c AS (SELECT profile AS doc FROM users) SELECT item.sku FROM c, c.doc.items AS item",
+            vec![vec!["users.profile:items[*]:sku"]],
+        ),
+        (
+            "SELECT item.sku FROM (SELECT profile AS doc FROM users) s, s.doc.items AS item",
+            vec![vec!["users.profile:items[*]:sku"]],
+        ),
+        (
+            "SELECT attr, val.name FROM users u, UNPIVOT u.profile.objects AS val AT attr",
+            vec![
+                vec!["users.profile:objects"],
+                vec!["users.profile:objects[*]:name"],
+            ],
+        ),
+        (
+            "SELECT val.name FROM users u, UNPIVOT u.profile.objects AS val",
+            vec![vec!["users.profile:objects[*]:name"]],
+        ),
+        (
+            "SELECT item.sku FROM users u, UNNEST(u.profile.items) AS expanded(item)",
+            vec![vec!["users.profile:items[*]:sku"]],
+        ),
+        (
+            "SELECT expanded.item.sku FROM users u, UNNEST(u.profile.items) AS expanded(item)",
+            vec![vec!["users.profile:items[*]:sku"]],
+        ),
+        (
+            "SELECT u.id FROM public.users u, u.profile.items AS id",
+            vec![vec!["users.id"]],
+        ),
+        (
+            "SELECT u.id, t.email FROM public.users u JOIN public.support_tickets t ON t.user_id=u.id",
+            vec![vec!["users.id"], vec!["support_tickets.email"]],
+        ),
+    ] {
+        let query = parse(sql, SqlDialect::Redshift);
+        let context = AstDataContext::analyze(&query, Some(&snapshot), 65_536);
+        assert!(!context.unknown_outputs, "{sql}: {context:?}");
+        let actual: Vec<Vec<_>> = context
+            .columns
+            .iter()
+            .map(|column| column.sources.iter().map(source_name).collect())
+            .collect();
+        assert_eq!(actual, expected, "{sql}");
+    }
+    let unknown = AstDataContext::analyze(
+        &parse(
+            "SELECT item.sku FROM users u, missing.items AS item",
+            SqlDialect::Redshift,
+        ),
+        Some(&snapshot),
+        65_536,
+    );
+    assert!(
+        unknown.columns[0]
+            .sources
+            .iter()
+            .any(|source| matches!(source, LineageSource::Unknown { .. }))
+    );
+}
+
+#[test]
 fn schema_backed_analytics_corpus() {
     let cases: Vec<Case> = serde_json::from_str(include_str!("fixtures/lineage.json")).unwrap();
     let mut count = 0;

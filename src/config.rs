@@ -11,7 +11,7 @@ pub use file::{
     ComputeInstanceSettings, ComputeSettings, ComputeTypeSettings, CredentialOverride, FileConfig,
     LoginSettings, Logins, SchemaDiscoverySettings, SnowflakeSettings, TargetSettings,
 };
-pub use runtime::{BackendConfig, GatewayConfig};
+pub use runtime::{BackendConfig, GatewayConfig, PgWireEngine};
 pub use settings::{
     ApplicationContextsSettings, BackendSettings, CacheSettings, DataContextsSettings,
     DatasetSettings, GatewaySettings, GatewayTls, HooksSettings, PythonHookKind,
@@ -75,7 +75,9 @@ pub enum ConfigError {
     InvalidDefaultBackend,
     #[error("passthrough fields must resolve to one configured target, login, and compute type")]
     MissingDefaultBackend,
-    #[error("target engine must be postgresql or snowflake, with engine-specific settings")]
+    #[error(
+        "target engine must be postgresql, redshift or snowflake, with engine-specific settings"
+    )]
     UnsupportedTarget,
     #[error("Snowflake targets require the snowflake Cargo feature")]
     SnowflakeDisabled,

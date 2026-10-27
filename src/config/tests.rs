@@ -704,7 +704,7 @@ fn passthrough_requires_unambiguous_or_explicit_default() {
 }
 
 #[test]
-fn rejects_invalid_default_and_non_postgresql_target() {
+fn rejects_invalid_default_and_unsupported_target() {
     let config = make_config(
         "{type: rust, callback: builtin.select_backend.passthrough, params: {target: missing, backend_login: reader}}",
         ONE_TARGET,
@@ -724,6 +724,35 @@ fn rejects_invalid_default_and_non_postgresql_target() {
         config.validate(),
         Err(ConfigError::UnsupportedTarget)
     ));
+}
+
+#[test]
+fn redshift_targets_use_existing_login_tls_and_compute_validation() {
+    let redshift = ONE_TARGET.replace("engine: postgresql", "engine: redshift");
+    let config = make_config("builtin.select_backend.passthrough", &redshift, "  {}");
+    config.validate().unwrap();
+    let (target, login) = config.connection().unwrap();
+    assert_eq!(target.engine, "redshift");
+    assert_eq!(login.username, "reader");
+
+    let mut value = serde_json::to_value(&config).unwrap();
+    value["targets"]["primary"]["host"] = "".into();
+    assert!(matches!(
+        serde_json::from_value::<FileConfig>(value)
+            .unwrap()
+            .validate(),
+        Err(ConfigError::InvalidComputeTopology)
+    ));
+
+    let compute = redshift.replace("    host: localhost\n    port: 5432\n", "")
+        + "\n    compute:\n      types:\n        small:\n          max_connections: 2\n          max_in_flight: 1\n          instances: [{id: first, host: localhost, port: 5439}]";
+    let config = make_config("builtin.select_backend.passthrough", &compute, "  {}");
+    config.validate().unwrap();
+    assert_eq!(config.default_backend().unwrap().target, "primary");
+    assert_eq!(
+        config.discovery_compute().unwrap().as_deref(),
+        Some("first")
+    );
 }
 
 #[test]

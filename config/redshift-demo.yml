@@ -1,0 +1,41 @@
+# Start and seed dev/redshift/compose.yml first; see its README for local passwords.
+version: 1
+gateway:
+  protocol: redshift
+  listen: "127.0.0.1:6434"
+  query_timeout_ms: 60000
+  tls:
+    mode: enable
+    cert_file: local-tls/server.crt
+    key_file: local-tls/server.key
+backend:
+  max_connections_per_pool: 4
+  max_connections_total: 4
+targets:
+  redshift:
+    engine: redshift
+    host: localhost
+    port: 5439
+    database: yasp_demo
+    tls:
+      mode: enable
+      ca_file: local-tls/ca.crt
+    logins:
+      reader:
+        username: yasp_reader
+        password_env: YASP_REDSHIFT_READER_PASSWORD
+schema_discovery:
+  target: redshift
+  backend_login: reader
+  catalog:
+    schemas: [public, analytics]
+hooks:
+  query_context:
+    type: rust
+    callback: builtin.query_context.metabase
+  select_backend:
+    type: rust
+    callback: builtin.select_backend.passthrough
+    params:
+      target: redshift
+      backend_login: reader

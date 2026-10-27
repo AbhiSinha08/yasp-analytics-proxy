@@ -154,4 +154,6 @@ re-read whole files.
 After big code changes, refresh the graph with `trail build` (deterministic,
 no API key, $0).
 
+Do not add any learnings in trail. Any learning that is supposed to be persisted should be in the documents instead.
+
 <!-- trail:end -->

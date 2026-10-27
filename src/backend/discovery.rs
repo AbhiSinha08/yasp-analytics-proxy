@@ -14,7 +14,7 @@ impl DiscoverySource<'_> {
             #[cfg(feature = "snowflake")]
             Self::Snowflake(source) => source.catalog_identity(),
             Self::Postgres(source) => crate::catalog::SourceIdentity {
-                dialect: crate::query::SqlDialect::Postgresql,
+                dialect: source.engine().dialect(),
                 endpoint: source.target().into(),
                 principal: source.database_user().into(),
                 role: None,

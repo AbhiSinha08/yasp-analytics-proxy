@@ -463,6 +463,51 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let parts = dialect::name(self.dialect, name).unwrap_or_default();
+                if self.dialect == SqlDialect::Redshift {
+                    let identifiers: Option<Vec<_>> =
+                        name.0.iter().map(|part| part.as_ident().cloned()).collect();
+                    if let Some(identifiers) = identifiers {
+                        let expression = Expr::CompoundIdentifier(identifiers);
+                        let expression = match json_path {
+                            Some(path) => Expr::JsonAccess {
+                                value: Box::new(expression),
+                                path: path.clone(),
+                            },
+                            None => expression,
+                        };
+                        let inputs = self.expr(&expression, scope, ctes, outer);
+                        let nested_source = inputs.sources.iter().any(|source| match source {
+                            LineageSource::Column { column, .. } => self
+                                .snapshot
+                                .and_then(|snapshot| snapshot.relations.get(&column.relation))
+                                .and_then(|relation| {
+                                    relation
+                                        .columns
+                                        .iter()
+                                        .find(|candidate| candidate.id == *column)
+                                })
+                                .is_some_and(|column| {
+                                    dialect::nested_type(&column.native_type.name)
+                                }),
+                            _ => false,
+                        });
+                        if nested_source {
+                            let value = alias
+                                .as_ref()
+                                .map(|alias| self.ident(&alias.name))
+                                .or_else(|| parts.last().cloned());
+                            return Binding {
+                                // PartiQL range aliases are values, not relation qualifiers.
+                                names: Vec::new(),
+                                relation: self.iteration(
+                                    inputs,
+                                    value,
+                                    alias.as_ref().and_then(|alias| alias.at.as_ref()),
+                                ),
+                            };
+                        }
+                    }
+                }
                 let relation = if parts.len() == 1 && ctes.contains_key(&parts[0]) {
                     ctes[&parts[0]].clone()
                 } else {
@@ -518,13 +563,42 @@ impl Analyzer<'_> {
                 ..
             } => (
                 {
-                    let mut relation = self.generator(name, &args.args, scope, ctes, outer);
+                    let mut relation = if self.dialect == SqlDialect::Redshift
+                        && dialect::name(self.dialect, name).as_deref()
+                            == Some(&["unnest".to_owned()])
+                        && let [FunctionArg::Unnamed(FunctionArgExpr::Expr(expression))] =
+                            args.args.as_slice()
+                    {
+                        let inputs = self.expr(expression, scope, ctes, outer);
+                        self.iteration(
+                            inputs,
+                            Some("value".into()),
+                            alias.as_ref().and_then(|alias| alias.at.as_ref()),
+                        )
+                    } else {
+                        self.generator(name, &args.args, scope, ctes, outer)
+                    };
                     relation.unknown |= *with_ordinality;
                     relation
                 },
                 alias.as_ref(),
                 Vec::new(),
             ),
+            TableFactor::UnpivotExpr {
+                expression,
+                value_alias,
+                attribute_alias,
+            } if self.dialect == SqlDialect::Redshift => {
+                let inputs = self.expr(expression, scope, ctes, outer);
+                return Binding {
+                    names: Vec::new(),
+                    relation: self.iteration(
+                        inputs,
+                        Some(self.ident(value_alias)),
+                        attribute_alias.as_ref(),
+                    ),
+                };
+            }
             TableFactor::TableFunction {
                 expr: Expr::Function(function),
                 alias,
@@ -563,6 +637,30 @@ impl Analyzer<'_> {
             names
         };
         Binding { names, relation }
+    }
+
+    fn iteration(&self, inputs: Inputs, value: Option<String>, index: Option<&Ident>) -> Relation {
+        let mut columns = vec![Column {
+            name: value,
+            inputs: inputs
+                .clone()
+                .path(vec![PathSegment::Any { any: true }], self.max_bytes),
+            nested: true,
+        }];
+        if let Some(index) = index {
+            let mut inputs = inputs;
+            // An index/key is derived from the collection rather than an element value.
+            inputs.direct = false;
+            columns.push(Column {
+                name: Some(self.ident(index)),
+                inputs,
+                nested: false,
+            });
+        }
+        Relation {
+            columns,
+            unknown: false,
+        }
     }
 
     fn table(&mut self, parts: &[String]) -> Relation {

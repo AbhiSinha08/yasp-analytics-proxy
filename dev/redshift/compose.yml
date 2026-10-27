@@ -1,0 +1,28 @@
+services:
+  redshift:
+    build:
+      context: ../..
+      dockerfile: dev/redshift/Dockerfile
+    image: yasp-redshift-emulator:latest
+    ports:
+      - "127.0.0.1:5439:5439"
+    environment:
+      POSTGRES_USER: yasp_admin
+      POSTGRES_PASSWORD: ${YASP_REDSHIFT_PASSWORD:-yasp_local_password}
+      POSTGRES_DB: yasp_demo
+      POSTGRES_HOST_AUTH_METHOD: md5
+      OBLAKO_SSL_CERT: /yasp/tls/server.crt
+      OBLAKO_SSL_KEY: /yasp/tls/server.key
+      SSL_CERT_FILE: /yasp/tls/ca.crt
+    volumes:
+      - redshift-data:/var/lib/postgresql/data
+      - ../../config/local-tls:/yasp/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5439 -U yasp_admin -d yasp_demo"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    stop_grace_period: 15s
+volumes:
+  redshift-data:

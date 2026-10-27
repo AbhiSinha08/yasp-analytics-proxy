@@ -21,7 +21,7 @@ cargo check --locked --all-targets
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/test.py
-# Includes optional Snowflake/client fixtures and Python/docs:
+# Includes optional Snowflake/Redshift/client fixtures and Python/docs:
 python3 scripts/test.py --full
 ```
 
@@ -112,7 +112,7 @@ application's resolved versions. Library consumers resolve their own graph.
 | Tokio 1.53                                                                        | Runtime, networking, queues, deadlines, and signals; selected features rather than `full`.                              |
 | pgwire 0.41                                                                       | PostgreSQL frontend and backend protocol with `server-api-ring` and `client-api-ring`; native text values and metadata. |
 | deadpool 0.13                                                                     | Managed bounded PostgreSQL connection pools with Tokio runtime support.                                                 |
-| sqlparser 0.63 with `visitor`                                                     | Bounded PostgreSQL AST inspection; syntax checks do not replace database authorization.                                 |
+| sqlparser 0.63 with `visitor`                                                     | Bounded PostgreSQL, Redshift and Snowflake AST inspection; syntax checks do not replace database authorization.           |
 | Serde 1, serde-saphyr 1.3, serde_json 1                                           | Strict typed YAML configuration and bounded JSON hook/context values. JSON is not the database result codec.            |
 | thiserror 2                                                                       | Typed library error categories.                                                                                         |
 | tracing 0.1, tracing-subscriber 0.3                                               | Library events and host-installed stdout filtering.                                                                     |

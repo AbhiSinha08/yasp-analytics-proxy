@@ -33,7 +33,8 @@ pub(crate) enum Execution {
 impl Execution {
     pub(crate) fn default_target_dialect(&self) -> Option<crate::query::SqlDialect> {
         match self {
-            Self::Fixed(_) | Self::Routed { .. } => Some(crate::query::SqlDialect::Postgresql),
+            Self::Fixed(backend) => Some(backend.engine().dialect()),
+            Self::Routed { backends, .. } => backends.default_target_dialect(),
             #[cfg(feature = "snowflake")]
             Self::Mixed { backends, .. } => backends.default_target_dialect(),
         }
@@ -289,7 +290,15 @@ impl<'a> Route<'a> {
             #[cfg(feature = "snowflake")]
             Self::Snowflake(backend, _) => backend.execute_query(request, output, cancel).await,
             Self::Postgres(route) => route
-                .execute_query(request, &mut postgres::Output(output), cancel)
+                .execute_query(
+                    request,
+                    &mut postgres::Output::new(
+                        output,
+                        route.preferred().engine(),
+                        &request.settings.protocol,
+                    ),
+                    cancel,
+                )
                 .await
                 .map_err(Into::into),
         }
@@ -346,7 +355,11 @@ impl PinnedSession<'_> {
                 pinned
                     .execute(
                         query,
-                        &mut postgres::Output(output),
+                        &mut postgres::Output::new(
+                            output,
+                            pinned.backend().engine(),
+                            &settings.protocol,
+                        ),
                         settings.query_timeout(),
                         settings.write_timeout(),
                         Some(cancel),

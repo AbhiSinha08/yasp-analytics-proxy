@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn redshift_super_and_partiql_keep_native_sql_and_read_only_guards() {
+    for sql in [
+        "SELECT JSON_SERIALIZE(JSON_PARSE('{\"n\":12345678901234567890.123456789}'))",
+        "SELECT u.profile.customer.name, u.profile['items'][0].sku FROM users u",
+        "SELECT item.sku, idx FROM users u, u.profile.items AS item AT idx",
+        "SELECT child.sku FROM users u, u.profile.orders AS parent, parent.items AS child",
+        "SELECT attr, val.name FROM users u, UNPIVOT u.profile.objects AS val AT attr",
+        "WITH c AS (SELECT profile AS doc FROM users) SELECT item.sku FROM c, c.doc.items AS item",
+        "SELECT item.sku FROM users u, UNNEST(u.profile.items) AS expanded(item)",
+    ] {
+        let parsed = ParsedQuery::parse_with_dialect(sql, 1_048_576, SqlDialect::Redshift).unwrap();
+        parsed.validate_read_only().unwrap();
+        assert_eq!(parsed.sql(), sql);
+    }
+    for sql in [
+        "SELECT * INTO copied FROM users u, u.profile.items AS item",
+        "WITH hidden AS (DELETE FROM users RETURNING profile) SELECT item FROM hidden h, h.profile.items AS item",
+        "SELECT SET_CONFIG('statement_timeout', '0', false) FROM users u, u.profile.items AS item",
+        "SELECT item FROM users u, u.profile.items AS item; DELETE FROM users",
+    ] {
+        assert!(
+            !ParsedQuery::parse_with_dialect(sql, 1_048_576, SqlDialect::Redshift)
+                .is_ok_and(|query| query.validate_read_only().is_ok()),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn inspect_the_preserved_tree_including_nested_writes() {
     for sql in [
         "/* context */ WITH r AS (SELECT 1 AS n) SELECT n FROM r",

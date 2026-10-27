@@ -20,8 +20,8 @@ cargo run --locked -- --config config/local.yml
 
 ## Secrets and targets
 
-The YAML host accepts PostgreSQL targets and, with `--features snowflake`, Snowflake
-targets. Each engine has its own settings. A Snowflake-only configuration uses its
+The YAML host accepts PostgreSQL and Redshift targets and, with `--features snowflake`,
+Snowflake targets. Each engine has its own settings. A Snowflake-only configuration uses its
 own discovery binding and normalized catalog; no PostgreSQL placeholder is needed.
 
 The process environment takes precedence over optional `.env` in the working
@@ -31,7 +31,7 @@ secret values out of YAML and logs.
 | Resource                                  | Secret/configuration source                                                                       |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Frontend username/password/database label | `YASP_GATEWAY_USERNAME`, `YASP_GATEWAY_PASSWORD`, `YASP_GATEWAY_DATABASE`.                        |
-| Backend endpoint/database                 | `targets.<name>.host`, `port`, `database`; `engine: postgresql`, `tls.mode: disable` or `enable`. |
+| Backend endpoint/database                 | `targets.<name>.host`, `port`, `database`; `engine: postgresql` or `redshift`, `tls.mode: disable` or `enable`. |
 | Backend login                             | `targets.<name>.logins.<name>.username` and a `password_env` variable name.                       |
 | Result-cache Redis URL                    | The variable named by `cache.url_env`, required only when caching is enabled.                     |
 | Dataset Redis URL                         | The variable named by `application_contexts.url_env`, required when datasets are configured.      |
@@ -42,7 +42,17 @@ database. Use the same name for browsing because database-alias adaptation is no
 implemented. Ports must be nonzero. Each connection independently selects plaintext
 or verified TLS, including private-network endpoints. See [TLS setup](tls.md) for modes,
 certificate paths, outbound client identities, and library examples.
-Provision source logins with the intended PostgreSQL grants and RLS policy.
+Provision source logins with the intended engine's grants and row access policy.
+
+Redshift uses the existing endpoint, login and verified TLS fields; no additional
+Cargo feature is required for the backend. `PgWireEngine::Redshift` selects the
+same behavior for library hosts through `BackendConfig::with_engine`. PostgreSQL
+constructors retain their default behavior. The Redshift backend uses native
+read-only transactions, statement timeouts and verified `RESET ALL` cleanup.
+Password authentication is supported; acquiring temporary IAM credentials and the
+Redshift Data API are outside this adapter. See the
+[local Redshift setup](../dev/redshift/README.md) and
+[native compatibility contract](multi-engine.md#redshift-execution-and-values).
 
 ## Routing and pools
 
@@ -69,9 +79,10 @@ resolution. Custom policy remains application-owned.
 
 ### Optional compute types
 
-Only targets that use compute classes need a `compute` block. The PostgreSQL
-adapter supports configured local endpoints; other engines require their own
-adapters. Instances are tried in list order within the selected type.
+Only targets that use compute classes need a `compute` block. PostgreSQL and
+Redshift support configured endpoints. Redshift consumer clusters/workgroups must
+already expose the intended data and equivalent access; YASP does not provision
+them or establish data sharing. Instances are tried in list order within the selected type.
 
 ```yaml
 targets:
@@ -112,7 +123,7 @@ access under every credential binding.
 login and engine in the configured registry. Defaults are eight connections per
 pool/binding and sixteen total; pool maxima are not reserved at startup.
 
-PostgreSQL connections count while creating, executing, cleaning up or idle, until
+PostgreSQL and Redshift connections count while creating, executing, cleaning up or idle, until
 the socket closes. Each compute instance also enforces its shared `max_connections`
 and `max_in_flight` bounds. Snowflake SQL API sessions count from admission through
 fetching and release, including retained frontend transaction sessions and abandoned
@@ -152,7 +163,7 @@ organization-specific params stay outside the engine. See [extensions](extension
 
 | Setting under `gateway`    | Default          | Meaning                                                                                 |
 | -------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `protocol`                 | `postgresql`     | `postgresql` (SCRAM) or experimental `redshift` (password over required TLS).           |
+| `protocol`                 | `postgresql`     | `postgresql` (SCRAM) or `redshift` (password over required TLS).           |
 | `listen`                   | `127.0.0.1:6432` | IP address and nonzero port; TLS is selected independently with `enable` or `disable`.  |
 | `max_sessions`             | 32               | Normal frontend session capacity.                                                       |
 | `max_message_bytes`        | 8,388,608        | Incoming frontend frame bound; backend frames have a fixed 8 MiB bound.                 |
@@ -178,7 +189,7 @@ Prepared-statement and portal settings remain future configuration.
 
 The Redshift profile requires `tls.mode: enable`. It advertises version 8.0.2,
 implements simple-query framing, and leaves Redshift protocol extensions disabled.
-The YAML host supports PostgreSQL and optional Snowflake backends. Captured JDBC
+The YAML host supports PostgreSQL, Redshift and optional Snowflake backends. Captured JDBC
 and BI metadata queries have focused coverage; full query-builder compatibility remains
 unvalidated. See [multi-engine support](multi-engine.md).
 
@@ -453,8 +464,8 @@ connection after clearing any JDBC-only parameters.
 
 Connection testing, native SQL and the captured table/column/constraint reflection
 queries work with this local combination and a PostgreSQL discovery source.
-Snowflake discovery supports the captured reflection surface through normalized
-catalog facts; see [the local environment](../dev/snowflake/README.md).
+Redshift and Snowflake discovery support the captured reflection surface through
+normalized catalog facts; see the [local environments](../dev/README.md).
 The Redshift dialect queries fields such as `pg_class.reldiststyle`, late-binding
 view columns and external catalogs. YASP recognizes the complete captured SQL,
 accepts only bounded literal schema/table filters, and renders these requests from
@@ -462,9 +473,9 @@ the configured catalog snapshot. They bypass ordinary context, selection
 and result caching. Types, comments, defaults, view definitions, declared keys,
 owners and ACLs come from PostgreSQL; Redshift distribution, encoding and sort-key
 properties are NULL. Unknown SQL remains outside this compatibility surface.
-Both engines restrict reflection to the snapshot's imported schema list and captured
+All engines restrict reflection to the snapshot's imported schema list and captured
 discovery-role visibility. PostgreSQL retains native identifiers and source facts;
-Snowflake uses virtual identifiers and declared key definitions. Unknown source owners,
+Redshift and Snowflake use virtual identifiers and declared key definitions. Unknown source owners,
 privileges and physical Redshift properties remain NULL. Unknown catalog requests
 fail explicitly.
 
@@ -500,7 +511,7 @@ TimeZone `UTC`, IntervalStyle `postgres`, bytea output `hex`, extra float digits
 read-only mode on, and `read committed` isolation. `SHOW TRANSACTION ISOLATION LEVEL`
 also reports this fixed isolation level. Other settings, roles, and extended-query
 execution are unsupported. PostgreSQL startup probes the
-source version; restart after a source version upgrade. The experimental Redshift
+source version; restart after a source version upgrade. The Redshift
 profile accepts its driver's advisory `SET readonly=0/1` commands without changing
 the engine's read-only enforcement and advertises its compatibility version.
 

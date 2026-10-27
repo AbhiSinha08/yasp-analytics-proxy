@@ -148,8 +148,17 @@ impl GatewayConfig {
     }
 }
 
-/// One PostgreSQL login. The host owns secret loading and certificate paths.
+/// The native engine reached through PostgreSQL's wire transport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PgWireEngine {
+    #[default]
+    Postgresql,
+    Redshift,
+}
+
+/// One pgwire source login. The host owns secret loading and certificate paths.
 pub struct BackendConfig {
+    pub(crate) engine: PgWireEngine,
     pub(crate) tls: Option<std::sync::Arc<crate::tls::ClientTls>>,
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -159,6 +168,16 @@ pub struct BackendConfig {
 }
 
 impl BackendConfig {
+    /// Select the native source behavior; constructors default to PostgreSQL.
+    pub fn with_engine(mut self, engine: PgWireEngine) -> Self {
+        self.engine = engine;
+        self
+    }
+
+    pub fn engine(&self) -> PgWireEngine {
+        self.engine
+    }
+
     /// Connect without TLS to the configured endpoint, including private-network hosts.
     pub fn new(
         host: String,
@@ -209,6 +228,7 @@ impl BackendConfig {
                 .map_err(|_| ConfigError::InvalidTls)?;
         }
         Ok(Self {
+            engine: PgWireEngine::Postgresql,
             tls,
             host,
             port,

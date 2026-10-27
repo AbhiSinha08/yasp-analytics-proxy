@@ -29,7 +29,6 @@ impl Rows {
             facts: BTreeMap::new(),
         }
     }
-    #[cfg(feature = "snowflake")]
     pub(crate) fn facts(
         &mut self,
         relation: RelationId,
@@ -214,7 +213,7 @@ impl Rows {
         if let Some(pg) = &self.postgres {
             pg.validate_relations(&relations)?;
         }
-        if source.dialect == crate::query::SqlDialect::Snowflake {
+        if source.dialect != crate::query::SqlDialect::Postgresql {
             let ids = relations
                 .keys()
                 .map(|r| r.frontend_oid())

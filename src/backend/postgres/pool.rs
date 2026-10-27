@@ -1,13 +1,13 @@
 //! Physical connection creation, idle checks, and discard-on-drop leases.
 
 use super::connection::{PgConnection, connect_transport};
-use super::{CLEANUP_TIMEOUT, CONNECT_TIMEOUT, SESSION_DEFAULTS, error_response};
+use super::{CLEANUP_TIMEOUT, CONNECT_TIMEOUT, error_response};
 use crate::{
     backend::{
         ConnectionBudget,
         budget::{CapacityError, CapacityGroup},
     },
-    config::BackendConfig,
+    config::{BackendConfig, PgWireEngine},
     transport::FrameGuard,
 };
 use deadpool::{
@@ -61,6 +61,7 @@ pub(super) fn new(
         .dbname(config.database);
     wire.protocol_version(ProtocolVersion::PROTOCOL3_0);
     let manager = PgManager {
+        engine: config.engine,
         tls: config.tls,
         host: config.host,
         port: config.port,
@@ -103,6 +104,7 @@ pub(super) fn new(
 }
 
 pub(super) struct PgManager {
+    engine: PgWireEngine,
     tls: Option<Arc<crate::tls::ClientTls>>,
     host: String,
     port: u16,
@@ -160,7 +162,7 @@ impl Manager for PgManager {
                 break;
             }
         }
-        connection.control(SESSION_DEFAULTS).await?;
+        connection.control(self.engine.session_defaults()).await?;
         connection.clean = true;
         Ok(connection)
     }

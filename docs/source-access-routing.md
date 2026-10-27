@@ -42,9 +42,9 @@ replayed.
 Pools are partitioned by target, login, and physical instance and open on demand.
 Two logins on four instances create eight possible pools, without reserving all
 pool maxima. Instance work/connection limits cover all logins; the global budget
-covers every engine in the registry. PostgreSQL holds a slot until its physical
+covers every engine in the registry. PostgreSQL and Redshift hold a slot until the physical
 connection closes, including idle pooling and cleanup. Snowflake holds one through
-its admitted session and cleanup. Idle PostgreSQL connections can be reclaimed;
+its admitted session and cleanup. Idle PostgreSQL and Redshift connections can be reclaimed;
 active work cannot. See [capacity and waiting](configuration.md#capacity-and-waiting)
 for acquisition deadlines and cancellation.
 

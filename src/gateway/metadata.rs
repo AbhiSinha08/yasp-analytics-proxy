@@ -386,7 +386,7 @@ fn column_row(
     sequence: usize,
     native: Option<&crate::catalog::PostgresColumn>,
 ) -> ExecutionResult<Vec<Option<String>>> {
-    let t = FrontendType::column(c)?;
+    let t = FrontendType::for_profile(c, profile)?;
     let r = &c.id.relation;
     let prefix = vec![
         some(&r.database),

@@ -7,6 +7,7 @@ pub use budget::ConnectionBudget;
 pub(crate) mod discovery;
 pub(crate) mod execution;
 pub(crate) mod postgres;
+pub(crate) mod redshift;
 #[cfg(feature = "snowflake")]
 mod registry;
 pub(crate) mod result;

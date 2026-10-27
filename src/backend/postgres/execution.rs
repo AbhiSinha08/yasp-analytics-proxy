@@ -11,12 +11,15 @@ use std::fmt;
 impl PostgresBackend {
     pub(crate) fn execution_identity(&self) -> [u8; 32] {
         crate::backend::execution::identity(&[
-            "postgresql:text:v1",
+            match self.engine() {
+                crate::config::PgWireEngine::Postgresql => "postgresql:text:v1",
+                crate::config::PgWireEngine::Redshift => "redshift:text:v1",
+            },
             self.target(),
             self.database_user(),
             self.compute_type().unwrap_or(""),
             self.compute(),
-            super::SESSION_DEFAULTS,
+            self.engine().session_defaults(),
         ])
     }
 }
@@ -77,10 +80,65 @@ pub(super) fn validate_input(query: &crate::query::ParsedQuery) -> PgWireResult<
 }
 
 /// Replay only the bounded frontend settings; protected text settings stay fixed.
-pub(super) fn session_sql(session: &crate::discovery::SessionSettings) -> String {
+pub(super) fn session_sql(
+    engine: crate::config::PgWireEngine,
+    session: &crate::discovery::SessionSettings,
+) -> String {
+    let set_config = match engine {
+        crate::config::PgWireEngine::Postgresql => "pg_catalog.set_config",
+        crate::config::PgWireEngine::Redshift => "set_config",
+    };
+    let literal = |value: &str| {
+        let value = if engine == crate::config::PgWireEngine::Redshift {
+            // Redshift always interprets backslashes in ordinary SQL strings.
+            value.replace('\\', "\\\\")
+        } else {
+            value.to_owned()
+        };
+        value.replace('\'', "''")
+    };
     format!(
-        "SELECT pg_catalog.set_config('search_path', '{}', true); SET LOCAL application_name = '{}'",
-        session.search_path.replace('\'', "''"),
-        session.application_name.replace('\'', "''"),
+        "SELECT {set_config}('search_path', '{}', true); SET LOCAL application_name = '{}'",
+        literal(&session.search_path),
+        literal(&session.application_name),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redshift_session_values_cannot_escape_their_native_sql_literals() {
+        let session = crate::discovery::SessionSettings {
+            search_path: "\"a\\b'c\",public".into(),
+            application_name: "\\'; RESET ALL; SELECT '\\".into(),
+        };
+        let sql = session_sql(crate::config::PgWireEngine::Redshift, &session);
+        let parsed =
+            sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::RedshiftSqlDialect {}, &sql)
+                .unwrap();
+        assert_eq!(
+            parsed.len(),
+            2,
+            "labels remain values in the two controlled statements"
+        );
+        let sqlparser::ast::Statement::Query(query) = &parsed[0] else {
+            panic!("session function")
+        };
+        let sqlparser::ast::SetExpr::Select(select) = query.body.as_ref() else {
+            panic!("session function")
+        };
+        let sqlparser::ast::SelectItem::UnnamedExpr(sqlparser::ast::Expr::Function(function)) =
+            &select.projection[0]
+        else {
+            panic!("session function")
+        };
+        let sqlparser::ast::FunctionArguments::List(arguments) = &function.args else {
+            panic!("session arguments")
+        };
+        assert!(
+            matches!(&arguments.args[1], sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(sqlparser::ast::Expr::Value(value))) if value.value == sqlparser::ast::Value::SingleQuotedString(session.search_path))
+        );
+    }
 }

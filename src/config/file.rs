@@ -311,7 +311,7 @@ impl FileConfig {
                 validate_value(name, value)?;
             }
             match target.engine.as_str() {
-                "postgresql" if target.snowflake.is_none() => {}
+                "postgresql" | "redshift" if target.snowflake.is_none() => {}
                 "snowflake" => {
                     if !cfg!(feature = "snowflake") {
                         return Err(ConfigError::SnowflakeDisabled);
@@ -659,7 +659,7 @@ impl FileConfig {
         if target.logins.len() != 1 {
             return Err(ConfigError::UnsupportedTopology);
         }
-        if target.engine != "postgresql" {
+        if !matches!(target.engine.as_str(), "postgresql" | "redshift") {
             return Err(ConfigError::UnsupportedTarget);
         }
         target.tls.validate()?;

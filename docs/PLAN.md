@@ -44,9 +44,10 @@ a universal value model that loses source precision.
 The [architecture](architecture.md) and [multi-engine compatibility matrix](multi-engine.md)
 describe implemented behavior. The runtime includes bounded read-only simple queries,
 source-role routing, query context/modification, shared datasets/catalog, optional
-lineage/classification/result callbacks, and opt-in Redis result caching. PostgreSQL
-is the primary source; Snowflake and the Redshift frontend profile have explicit
-compatibility limits. TLS is configured independently for each connection.
+lineage/classification/result callbacks, and opt-in Redis result caching. PostgreSQL,
+Redshift and optional Snowflake sources serve both PostgreSQL and Redshift frontend
+profiles within the documented compatibility scope. TLS is configured independently
+for each connection.
 
 Prepared statements, binary results, lifecycle hooks, engine RBAC interpretation,
 mandatory masking, automatic translation, and management remain planned. Phase goals
@@ -222,7 +223,7 @@ authenticated management tools, and coordinated multi-instance deployments.
 | Configuration lifecycle | Activate coherent immutable policy/hook/model/settings generations; retire affected pools and drain or cancel pinned work.               |
 | Multi-instance YASP     | Coordinate Redis admission, shared connection pools and limits, schema snapshots, session ownership, configuration and recovery.           |
 
-Current Snowflake and frontend limits are in [multi-engine compatibility](multi-engine.md).
+Current backend and frontend limits are in [multi-engine compatibility](multi-engine.md).
 A native warehouse client protocol is a separate gateway capability.
 
 ### Execution milestones

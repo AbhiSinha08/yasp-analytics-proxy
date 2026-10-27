@@ -61,6 +61,12 @@ impl<'backend> QuerySession<'_, 'backend> {
             ));
         }
         let catalog = &self.source.catalog;
+        let request_id = || {
+            Sha256::digest(sql.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
         if let Some(request) = super::metadata::Request::recognize_snapshot(
             sql,
             self.source.profile,
@@ -68,10 +74,7 @@ impl<'backend> QuerySession<'_, 'backend> {
         )
         .or_else(|| super::metadata::Request::recognize(sql, self.source.profile))
         {
-            let query_id: String = Sha256::digest(sql.as_bytes())
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
+            let query_id = request_id();
             let result = async {
                 self.transaction
                     .check()
@@ -157,6 +160,12 @@ impl<'backend> QuerySession<'_, 'backend> {
                 return Ok(());
             }
             Err(error) => {
+                tracing::debug!(
+                    query_id = %request_id(),
+                    client_id = self.client_id,
+                    sql = ?crate::hooks::builtin::extractors::sql_without_observed_postgres_remark(sql),
+                    "query rejected during parsing"
+                );
                 tracing::error!(client_id = self.client_id, "query parsing failed");
                 return Err(query_error(error));
             }

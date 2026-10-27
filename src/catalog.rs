@@ -114,6 +114,7 @@ pub struct RefreshStatus {
 
 enum Source {
     Postgres(Arc<PostgresBackend>),
+    Redshift(Arc<PostgresBackend>),
     #[cfg(feature = "snowflake")]
     Snowflake(Arc<crate::backend::snowflake::SnowflakeBackend>),
 }
@@ -121,8 +122,12 @@ enum Source {
 impl Source {
     fn identity(&self) -> SourceIdentity {
         match self {
-            Self::Postgres(source) => SourceIdentity {
-                dialect: SqlDialect::Postgresql,
+            Self::Postgres(source) | Self::Redshift(source) => SourceIdentity {
+                dialect: if matches!(self, Self::Redshift(_)) {
+                    SqlDialect::Redshift
+                } else {
+                    SqlDialect::Postgresql
+                },
                 endpoint: source.target().into(),
                 principal: source.database_user().into(),
                 role: None,
@@ -136,6 +141,7 @@ impl Source {
     async fn read(&self, settings: &CatalogSettings) -> Result<Rows, CatalogError> {
         match self {
             Self::Postgres(source) => source.catalog_rows(settings).await,
+            Self::Redshift(source) => source.redshift_catalog_rows(settings).await,
             #[cfg(feature = "snowflake")]
             Self::Snowflake(source) => source.catalog_rows(settings).await,
         }
@@ -166,7 +172,20 @@ impl Catalog {
         source: Arc<PostgresBackend>,
         settings: CatalogSettings,
     ) -> Result<Arc<Self>, CatalogError> {
+        if source.engine() != crate::config::PgWireEngine::Postgresql {
+            return Err(CatalogError::InvalidSettings);
+        }
         Self::start(Source::Postgres(source), settings).await
+    }
+    /// Import native Redshift definitions through the configured pgwire binding.
+    pub async fn redshift(
+        source: Arc<PostgresBackend>,
+        settings: CatalogSettings,
+    ) -> Result<Arc<Self>, CatalogError> {
+        if source.engine() != crate::config::PgWireEngine::Redshift {
+            return Err(CatalogError::InvalidSettings);
+        }
+        Self::start(Source::Redshift(source), settings).await
     }
     #[cfg(feature = "snowflake")]
     pub async fn snowflake(

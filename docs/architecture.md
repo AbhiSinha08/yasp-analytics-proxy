@@ -1,8 +1,8 @@
 # Current architecture
 
-YASP accepts PostgreSQL clients over independently configured TLS or plaintext connections
-and offers an experimental Redshift password profile over TLS. Both execute supported read-only
-simple queries against configured PostgreSQL or optional Snowflake bindings.
+YASP accepts PostgreSQL and Redshift clients over independently configured TLS
+or plaintext connections. Both execute supported read-only
+simple queries against configured PostgreSQL, Redshift or optional Snowflake bindings.
 Source roles enforce access. Application-specific identity mapping and policy belong to
 the consuming host. See the [plan](PLAN.md) for the multi-engine product direction.
 
@@ -43,6 +43,7 @@ are indexed in [the documentation guide](README.md).
 | Backend boundary                | [backend.rs](../src/backend.rs), [backend/discovery.rs](../src/backend/discovery.rs)                           | Public PostgreSQL exports; concrete route/pinned-session dispatch in `backend/execution`; typed failures/events in `backend/result`; catalog source identity in `backend/discovery`.                        |
 | Backend capacity                | [backend/budget.rs](../src/backend/budget.rs)                                                                  | One occupied-capacity total, atomic local group limits, resource permits, wait notifications and adapter-owned idle reclamation.                                                                            |
 | PostgreSQL adapter              | [backend/postgres.rs](../src/backend/postgres.rs), [backend/postgres/](../src/backend/postgres)                | Read-only execution; native connection I/O, pooling/cleanup, metadata adaptation, and verified completion/source identity.                                                                                  |
+| Redshift adapter                | [backend/postgres/](../src/backend/postgres), [backend/redshift/](../src/backend/redshift)                     | Shared pgwire transport with native Redshift session settings, reset and isolation rules; bounded SVV/PG catalog discovery and frontend-specific SUPER/VARBYTE representations.                             |
 | Experimental Snowflake adapter  | [backend/snowflake.rs](../src/backend/snowflake.rs), [backend/snowflake/](../src/backend/snowflake)            | Optional public SQL API client, key-pair JWTs, bounded partition downloads, value conversion, autocommit transaction compatibility, and normalized schema provider. Mixed bindings use `backend::Backends`. |
 | Shared cache                    | [cache.rs](../src/cache.rs), [cache/](../src/cache)                                                            | Backend-independent eligibility/capture/replay, source scope, complete frontend response validation, bounded Redis storage, expiry and miss-on-error behavior.                                              |
 | Support                         | [wire.rs](../src/wire.rs), [transport.rs](../src/transport.rs), [logger.rs](../src/logger.rs)                  | Shared pgwire value encoding, frame bounds before payload allocation and redacted logging setup. `policy.rs` is a future component placeholder.                                                             |
@@ -63,7 +64,7 @@ flowchart LR
     Core --> Hooks
     Core --> Datasets
     Core --> Dispatch[Validated source route and session]
-    Dispatch --> Adapter[PostgreSQL adapter]
+    Dispatch --> Adapter[PostgreSQL / Redshift pgwire execution]
     Dispatch --> Snowflake[Optional Snowflake SQL API adapter]
     Adapter --> Budget[Shared occupied-capacity budget]
     Snowflake --> Budget
@@ -75,7 +76,7 @@ flowchart LR
     Cache --> Encode[Shared frontend response encoding]
     Encode --> Gateway
     Datasets -->|Verified TLS or plaintext| Redis[(Redis)]
-    Adapter -->|Verified TLS or plaintext| PG[(PostgreSQL)]
+    Adapter -->|Verified TLS or plaintext| PG[(PostgreSQL / Redshift)]
     Cache -->|Verified TLS or plaintext| Redis
 ```
 
@@ -85,8 +86,8 @@ state use typed `ExecutionRequest`, `SessionRequest`, `ResultEvent`, `ExecutionE
 source SQL, or native connection objects. The frontend owns authenticated password
 and TLS material and passes only identity and bounded services into execution.
 
-The PostgreSQL adapter owns native value/error representations, pool admission,
-read-only transaction setup and source cleanup. Its response/error values pass
+The PostgreSQL and Redshift pgwire adapter owns native value/error representations,
+pool admission, engine-specific read-only transaction setup and source cleanup. Its response/error values pass
 through the shared layer opaquely, retaining native field metadata and text without
 JSON conversion. Shared frontend encoding also handles converted source events; the
 engine captures that response only when caching is enabled and budget is available. Existing public PostgreSQL library entry points retain their
@@ -179,16 +180,16 @@ engine-owned and never changes those decisions. Login-specific pools preserve
 source authentication while instance limits cover all logins together.
 
 One `backend::ConnectionBudget` covers every adapter in a configured registry.
-It atomically checks the total and the allocation group's local ceiling. PostgreSQL
+It atomically checks the total and the allocation group's local ceiling. PostgreSQL and Redshift
 connections retain their permits through creation, use, cleanup and idle pooling.
 Snowflake sessions retain theirs through fetching, frontend transaction blocks and
 abandoned-operation cleanup. Permits are released only when their resource ownership
 ends; an HTTP transport socket is not an admitted Snowflake session.
 
-PostgreSQL registers weak idle-pool reclamation callbacks with the common budget.
-A blocked Snowflake binding can reclaim an idle PostgreSQL connection. Callbacks
+Pgwire pools register weak idle-pool reclamation callbacks with the common budget.
+A blocked binding can reclaim an idle PostgreSQL or Redshift connection. Callbacks
 run outside accounting locks; active resources are never reclaimed. Returning a
-PostgreSQL lease to idle wakes waiters even though its physical permit stays held.
+pgwire lease to idle wakes waiters even though its physical permit stays held.
 
 Queries wait asynchronously under one `gateway.queue_timeout_ms` deadline, then
 receive `53300`. Closing a binding stops its waiters without releasing active or
@@ -207,7 +208,7 @@ flowchart TD
     Idle -->|no| Wait[Wait under acquisition deadline]
     Wait -->|capacity notification| Total
     Wait -->|deadline| Busy[SQLSTATE 53300]
-    Permit --> PG[PostgreSQL connection through idle pooling and cleanup]
+    Permit --> PG[PostgreSQL / Redshift connection through idle pooling and cleanup]
     Permit --> SF[Snowflake session through fetching and retained cleanup]
     PG --> Release[Resource ownership ends and wakes waiters]
     SF --> Release
@@ -215,7 +216,7 @@ flowchart TD
 
 ## Discovery and frontend state
 
-The required [shared catalog](catalog.md) imports bounded PostgreSQL or Snowflake
+The required [shared catalog](catalog.md) imports bounded PostgreSQL, Redshift or Snowflake
 schema definitions and periodically publishes immutable generations. Captured JDBC,
 Metabase, Redash and SQLAlchemy requests use frontend-specific snapshot responses
 before general parsing. The YAML host requires `schema_discovery.catalog` with an
@@ -225,7 +226,9 @@ the configured discovery source identity.
 Providers own native metadata SQL and source-specific facts. PostgreSQL collects a
 consistent generation in one admitted read-only repeatable-read transaction; it
 retains native identifiers, owners, ACLs, keys, views, indexes, types and identity
-options. Snowflake retains normalized facts and stable virtual frontend identifiers.
+options. Redshift reads SVV definitions and PG catalog keys and privileges in an
+admitted read-only transaction using the database's native isolation setting.
+Redshift and Snowflake retain normalized facts and stable virtual frontend identifiers.
 Shared catalog code owns bounds, immutable publication, refresh, expiry and status.
 Frontend metadata modules recognize reviewed statement templates and encode the
 client response. The source version is captured during loading, without a separate
@@ -264,8 +267,8 @@ sequenceDiagram
     participant Client
     participant Session as Frontend session
     participant Catalog as Schema catalog
-    participant Adapter as PostgreSQL adapter
-    participant PG as PostgreSQL
+    participant Adapter as PostgreSQL / Redshift execution
+    participant PG as PostgreSQL / Redshift
     Client->>Session: SSLRequest and TLS handshake when enabled
     Client->>Session: Startup and profile authentication (PostgreSQL SCRAM or Redshift TLS password)
     Session-->>Client: Backend key and ReadyForQuery
@@ -306,19 +309,20 @@ deadline; no verification failure falls back to plaintext. See [TLS setup](tls.m
 
 The gateway admits bounded extra cancel-only connections even when normal session
 slots are occupied. Cancellation can stop context, selection, cache waits, or active
-backend work; PostgreSQL cancellation uses a separate source connection. Snowflake
+backend work; PostgreSQL and Redshift cancellation use a separate source connection. Snowflake
 uses best-effort SQL API cancellation for known handles and retains admission
-through cleanup or the submitted server timeout when the handle is unavailable. A cancelled PostgreSQL
+through cleanup or the submitted server timeout when the handle is unavailable. A cancelled pgwire
 lease is discarded, preventing a delayed cancel from reaching a future borrower.
 Cancellation reports `57014`; explicit transactions require rollback before further
 queries. The message-read deadline bounds idle and partial-message transactions,
 including pending transactions. A disconnect
 abandons its active execution; interrupted or unhealthy leases are discarded.
 
-Reusable leases require rollback, `DISCARD ALL`, restoration of fixed settings,
+Reusable pgwire leases require rollback, `DISCARD ALL` (PostgreSQL) or `RESET ALL`
+(Redshift), restoration of fixed settings,
 idle-state verification, and a health query. Unsupported ParameterStatus changes,
 unread protocol messages, cleanup failures, and cancellation prevent unsafe reuse.
-PostgreSQL success completion follows cleanup. Shutdown stops admission, stops hook admission,
+Pgwire success completion follows cleanup. Shutdown stops admission, stops hook admission,
 drains sessions to the configured deadline, then closes pools and cache resources.
 
 Snowflake bindings submit fixed identity, role, warehouse and output settings on
@@ -334,7 +338,10 @@ reused. Supported values and remaining acceptance gates are documented in
 PostgreSQL column metadata and text rows stream without conversion through JSON or
 a Rust numeric model. NULLs, type identifiers, and text values retain their native
 representation. The adapter validates text row framing. `wire.rs` encodes both
-frontend profiles; `cache/execution.rs` owns cache policy/scope and
+frontend profiles. Redshift preserves native SUPER text without JSON parsing;
+its native SUPER/VARBYTE identifiers are translated to JSON/bytea for PostgreSQL
+clients, including the bytea text prefix. See [value compatibility](multi-engine.md#redshift-execution-and-values).
+`cache/execution.rs` owns cache policy/scope and
 `cache/response.rs` captures, validates and replays the complete frontend response
 for every backend. Adapters supply source identity and verified completion, with
 no per-backend cache switch.

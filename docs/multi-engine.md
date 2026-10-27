@@ -1,9 +1,9 @@
 # Multi-engine compatibility
 
-YASP provides PostgreSQL and experimental Redshift profiles on shared pgwire
-transport. PostgreSQL and optional Snowflake backends share routing, read-only
-inspection, transactions, deadlines and cancellation. Snowflake executes native
-and frontend-generated data SQL unchanged; dialect translation remains separate work.
+YASP provides production-ready PostgreSQL and Redshift profiles on shared pgwire
+transport. PostgreSQL, Redshift and optional Snowflake backends share routing,
+read-only inspection, transactions, deadlines and cancellation. Adapters execute
+native and frontend-generated data SQL unchanged; dialect translation remains separate work.
 
 ## Supported contract
 
@@ -28,7 +28,7 @@ the gateway. Metabase explicit native remarks use the common target dialect or a
 explicit provider param; MBQL and unknown remarks use the gateway. Redash defaults
 to the gateway and supports an explicit dialect override for valid remarks.
 
-Parsing and read-only validation use that incoming dialect. Current PostgreSQL
+Parsing and read-only validation use that incoming dialect. PostgreSQL, Redshift
 and Snowflake adapters forward validated effective data SQL after optional application
 modification. A syntactically valid query may therefore fail on a different backend dialect. Query context, modification, route
 authorization, and result processing run on raw cache hits as well as misses.
@@ -56,7 +56,40 @@ Preserve original SQL separately; cache scope must include the execution/transla
 revision. Different target schemas additionally require target-scoped catalogs.
 Translation remains future work; no translation configuration or runtime is active.
 
-## SQL API execution and values
+## Redshift execution and values
+
+`engine: redshift` uses the existing pgwire transport, pool admission and physical
+connection budgets with native Redshift session behavior. Both frontend profiles
+can query it. Source queries use `BEGIN READ ONLY` and statement timeouts;
+transactions retain their selected connection. Cleanup rolls back or commits,
+resets session parameters, restores fixed settings, and verifies the idle state.
+Connections with interrupted or unverifiable cleanup are discarded.
+
+Standard scalar text values remain unchanged. Native Redshift SUPER (OID 4000)
+remains SUPER for the Redshift profile and is advertised as JSON for PostgreSQL.
+JSON documents are not parsed and reserialized, so exact numeric text survives.
+VARBYTE remains native for Redshift; the PostgreSQL profile receives `bytea` with
+the required hex prefix. Result descriptors omit source relation identifiers that
+cannot resolve against the frontend's virtual catalog. Binary source transfer is unsupported. Existing frame,
+query, frontend write and cache bounds still apply to large SUPER documents.
+
+The [Oblako development environment](../dev/redshift/README.md) runs the latest
+published image without modifying its engine or libraries. The normal runner
+records direct Amazon-connector qualification in
+`target/compatibility/redshift-emulator.json`. Its passing baseline covers actual
+local SQL, metadata, grants and TLS; the full report retains every failed native
+conformance case. Native wire tests independently exercise SUPER OID 4000,
+cancellation, backpressure and cleanup rather than changing the emulator's OIDs.
+
+The tested image reports bare SUPER as PostgreSQL `jsonb` (OID 3802), has incomplete
+PartiQL iteration, and returns SQL NULL for `JSON_SERIALIZE(NULL::SUPER)`. YASP
+does not turn those responses into fake native success. Restart-related navigation
+limits are recorded by the persistence check. These limits qualify the local
+backend evidence; they do not change the production status of the frontend
+profiles. AWS IAM, MPP behavior and complete native semantics require a real
+Redshift deployment to validate.
+
+## Snowflake SQL API execution and values
 
 Each statement is independently autocommitted. Frontend read-only `BEGIN`,
 `COMMIT` and `ROLLBACK` blocks retain route affinity and normal I/T/E failure
@@ -72,7 +105,7 @@ metadata); exceeding it fails explicitly. JSON decoding and frontend encoding ad
 bounded copies, so this is not a process RSS limit. Partition size is chosen by
 Snowflake; larger partitions require a larger configured bound.
 
-All bindings share one occupied-capacity budget with PostgreSQL. Binding limits
+All bindings share one occupied-capacity budget with PostgreSQL and Redshift. Binding limits
 remain additional local bounds. Registry registration attaches an unused adapter to
 that shared budget before discovery or execution; an adapter already attached to a
 different budget is rejected. On timeout, cancellation or disconnect, a known
@@ -117,10 +150,11 @@ python3 scripts/test.py --full
 ```
 
 This runs the default/Python functional and documentation matrices, then combined
-Snowflake/client coverage sequentially. Requesting the Snowflake feature automatically
+Snowflake/Redshift/client coverage sequentially. Requesting the Snowflake feature automatically
 creates a temporary signing key and an isolated Docker network fixture. External clients use
 pinned images without requiring running BI applications. Missing requested
-prerequisites fail explicitly. Persistent developer data is never used by tests.
+prerequisites fail explicitly. The default runner provisions disposable services;
+configured Redshift runs create isolated databases on the persistent development server.
 
 Cache scope includes frontend profile, incoming dialect, the unchanged-SQL
 execution revision, actual source identity/role/warehouse, session settings and

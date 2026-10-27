@@ -1,6 +1,7 @@
 //! Snapshot-only reflection remains usable without a reachable PostgreSQL source.
 mod support;
 use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -10,7 +11,7 @@ use std::{
 use yasp::{
     backend::PostgresBackend,
     catalog::{Catalog, CatalogSettings},
-    config::GatewaySettings,
+    config::{GatewaySettings, GatewayTls},
     hooks::bind_query_context,
 };
 
@@ -60,7 +61,7 @@ async fn postgres_reflection_pins_source_facts_and_never_falls_back() {
             calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Ok(Default::default()) })
         }));
-    let server = support::GatewayServer::fixed(config, backend);
+    let server = support::GatewayServer::fixed(config, backend.clone());
     let client = env.gateway().connection(server.address);
     let columns = include_str!("../src/gateway/metadata/queries/sqlalchemy_postgresql_columns.sql")
         .replace("'__YASP_OID__'", &oid);
@@ -123,6 +124,75 @@ async fn postgres_reflection_pins_source_facts_and_never_falls_back() {
     let unknown = client.query("SELECT relname FROM pg_catalog.pg_class");
     assert!(String::from_utf8_lossy(&unknown.stderr).contains("0A000"));
     assert_eq!(invoked.load(Ordering::SeqCst), 0);
+
+    let redshift_calls = Arc::new(AtomicUsize::new(0));
+    let tls = PathBuf::from(std::env::var_os("YASP_TEST_TLS_DIR").unwrap());
+    let config = env
+        .gateway()
+        .gateway_config()
+        .with_catalog(catalog.clone())
+        .with_settings(GatewaySettings {
+            protocol: "redshift".into(),
+            query_timeout_ms: 1000,
+            tls: GatewayTls {
+                mode: "enable".into(),
+                cert_file: Some(tls.join("server.crt")),
+                key_file: Some(tls.join("server.key")),
+            },
+            ..Default::default()
+        })
+        .unwrap()
+        .with_query_context_hook(bind_query_context(redshift_calls.clone(), |_, calls| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Default::default()) })
+        }));
+    let redshift = support::GatewayServer::fixed(config, backend);
+    let redshift_client = env.gateway().connection(redshift.address);
+    let query = |sql: &str| {
+        redshift_client
+            .command()
+            .env("PGSSLMODE", "verify-full")
+            .env("PGSSLROOTCERT", tls.join("ca.crt"))
+            .args(["-v", "ON_ERROR_STOP=1", "-c", sql])
+            .output()
+            .unwrap()
+    };
+    let filtered =
+        include_str!("../src/gateway/metadata/queries/metabase_foreign_keys_filtered.sql");
+    let keys = query(&filtered.replace("'__YASP_SCHEMAS__'", "('analytics'), ('public')"));
+    support::assert_success(
+        &keys,
+        "Redshift-profile FK metadata with unavailable source",
+    );
+    let keys = String::from_utf8_lossy(&keys.stdout);
+    assert!(
+        keys.contains("public|child|parent_id|public|parent|id"),
+        "{keys}"
+    );
+    assert!(
+        keys.contains("public|child|parent2_id|public|parent|id"),
+        "{keys}"
+    );
+    let absent = query(&filtered.replace("__YASP_SCHEMAS__", "absent"));
+    support::assert_success(&absent, "absent FK schema");
+    assert!(absent.stdout.is_empty());
+    for (sql, expected) in [
+        ("SHOW timezone;", "UTC"),
+        ("SHOW transaction isolation level", "read committed"),
+    ] {
+        let result = query(sql);
+        support::assert_success(&result, "local frontend setting with unavailable source");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), expected);
+    }
+    assert_eq!(redshift_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        !query("SELECT parent_id FROM public.child LIMIT 10000")
+            .status
+            .success()
+    );
+    assert_eq!(redshift_calls.load(Ordering::SeqCst), 1);
+    redshift.stop();
+
     let result = client.queries(&[
         "BEGIN",
         "SELECT relname FROM pg_catalog.pg_class",

@@ -5,8 +5,8 @@ periodically. Providers read metadata through the real backend adapters, using t
 configured discovery identity, admission limits, deadlines and cleanup. Catalogs
 contain no application rows and require no additional database service or disk snapshot.
 
-Construct `Catalog::postgres` or feature-gated `Catalog::snowflake`, then attach its
-`Arc` with `GatewayConfig::with_catalog`. The YAML host constructs either provider
+Construct `Catalog::postgres`, `Catalog::redshift` or feature-gated `Catalog::snowflake`, then attach its
+`Arc` with `GatewayConfig::with_catalog`. The YAML host constructs the provider
 from `schema_discovery`; a Snowflake-only host needs no PostgreSQL discovery binding.
 `Backends::catalog` exposes the same configured-source construction to library hosts.
 One handle serves frontend listeners and optional AST lineage analysis.
@@ -14,18 +14,18 @@ One handle serves frontend listeners and optional AST lineage analysis.
 ## Scope and source facts
 
 Each catalog has an explicit schema list preserving source spelling and one source
-identity. PostgreSQL identifies endpoint/database and principal. Snowflake identifies
+identity. PostgreSQL and Redshift identify their engine, endpoint/database and principal. Snowflake identifies
 account or emulator endpoint/database, principal, role, warehouse and default schema.
 Catalog identities are not implicitly shared across roles or warehouses. PostgreSQL
-catalogs must match PostgreSQL discovery; a Snowflake discovery binding must match
+and Redshift catalogs must match their engine and discovery identity; a Snowflake discovery binding must match
 its catalog before the listener starts.
 
-Both providers import schemas, relations, kinds, comments, columns, ordinals,
+The providers import schemas, relations, kinds, comments, columns, ordinals,
 nullability, defaults, and native type details including available length/precision/
 scale. PostgreSQL reports native OIDs/modifiers, declared primary-key membership,
 and whole-relation SELECT privilege. Its source grants also filter schemas/columns.
 
-Both providers import view definitions and declared primary, unique and
+The providers import view definitions and declared primary, unique and
 foreign keys, with ordered local/referenced columns and referential actions. These
 are declarations, not enforcement guarantees. Snowflake datetime precision and
 generated-column status remain unknown; its information-schema datetime precision
@@ -34,6 +34,17 @@ source: role-visible metadata alone is insufficient. The explicit local emulator
 has unrestricted visibility and SELECT access; those facts do not establish real
 Snowflake grants. Physical PostgreSQL indexes, owners, ACLs, distribution, encoding,
 sort properties and row statistics are not fabricated.
+
+Redshift imports native `SVV_*` definitions and declared keys into the same
+normalized snapshot without PostgreSQL-specific catalog facts. Privilege queries
+run separately against leader-node catalog interfaces; they are not combined with
+`SVV_*` queries that may execute on compute nodes. A discovery login's accessible
+schemas and whole-relation SELECT grants bound the imported relations. Native
+SUPER/VARBYTE names are preserved even when their frontend representations differ.
+Unknown view numeric precision, generated status and unavailable native facts
+remain unknown. Key discovery follows the PG catalog interfaces used by the
+[Amazon Redshift JDBC driver](https://github.com/aws/amazon-redshift-jdbc-driver/blob/master/src/main/java/com/amazon/redshift/jdbc/RedshiftDatabaseMetaData.java).
+Real Redshift does not enforce its declared primary/foreign keys.
 
 `RelationId` is the exact `(database, schema, relation)` coordinate. `ColumnId` adds
 the column name. Virtual frontend schema/relation OIDs derive from these coordinates;
@@ -56,15 +67,17 @@ schema_discovery:
     max_bytes: 16777216
 ```
 
-`schemas` is required for both engines. Other fields above are defaults.
-`catalog` is required for both PostgreSQL and Snowflake discovery. Missing or empty
+`schemas` is required for all engines. Other fields above are defaults.
+`catalog` is required for PostgreSQL, Redshift and Snowflake discovery. Missing or empty
 schema scope prevents startup. Library hosts must attach a matching loaded catalog
 with `GatewayConfig::with_catalog` before calling any serving entry point. Scope is
 exact and bounded to 256 schema names, not an application access policy.
 
 Initial loading must succeed before accepting clients. PostgreSQL collects shared
 definitions and typed source-specific facts in one admitted, read-only repeatable-read
-transaction. Its statements share row/byte bounds and a refresh deadline. Snowflake
+transaction. Redshift uses one admitted read-only transaction with the database's
+native isolation level; PostgreSQL repeatable-read DDL semantics are not promised.
+Provider statements share row/byte bounds and a refresh deadline. Snowflake
 reads definitions and scoped SHOW KEYS using one admitted SQL API binding, with
 independent autocommit requests. Row/byte bounds cover the combined candidate. Only a complete,
 validated result becomes a generation; this does not promise stronger DDL consistency
@@ -95,7 +108,14 @@ Metabase's Redshift driver lowercases schema/table filters for field discovery.
 For Snowflake catalogs, these handlers resolve those filters against source names
 without changing returned identifiers. Case-distinct names that make a folded
 filter ambiguous fail explicitly. PostgreSQL-backed matching remains exact.
-Both frontend profiles support the driver's inherited bulk foreign-key query.
+Both frontend profiles support the driver's inherited bulk foreign-key query,
+including schema-filtered sync requests. These read declared keys from the snapshot
+for every source engine.
+
+BI tools may also sample application rows during schema sync to fingerprint fields
+or populate filter values. Those are data queries and use ordinary authorization,
+backend selection and source execution. Frontend `SET` and supported `SHOW` probes
+are handled locally without source execution.
 
 Capture slots accept designated bounded literal strings/IN lists. SQLAlchemy's
 virtual relation OID slot accepts only a bounded unsigned integer. Nested SQL,

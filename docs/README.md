@@ -12,7 +12,7 @@ Use the references below for exact settings and contracts.
 | [TLS](tls.md)                          | Certificates and encrypted frontend, source, and Redis connections.              |
 | [Development](development.md)          | Toolchain, source tour, Rust conventions, dependencies, and Python embedding.    |
 | [Tests](../tests/README.md)            | Disposable services, feature matrices, fixtures, and focused test commands.      |
-| [Local environments](../dev/README.md) | Persistent BI tools, decision model, and Snowflake emulator.                     |
+| [Local environments](../dev/README.md) | Persistent BI tools, decision model, Snowflake and Redshift emulators.           |
 
 ## Implementation reference
 

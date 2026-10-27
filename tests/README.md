@@ -84,7 +84,7 @@ and session scope, cancellation, disconnects, and idle/partial-message deadlines
 The captured psycopg2/SQLAlchemy driver sequence is replayed by `gateway`.
 Captured protocol replay does not establish full BI-client compatibility.
 `python3 scripts/test.py --full` runs default/Python functional and documentation
-checks, then combined Snowflake and external-client checks, sequentially. Python
+checks, then combined Snowflake, Redshift and external-client checks, sequentially. Python
 runs use `PYO3_PYTHON` when set, otherwise the runner's interpreter, and expose its
 matching shared-library directory to subprocesses.
 
@@ -104,6 +104,16 @@ client containers. No running BI application is required. Capture manifests and
 workloads live under `fixtures/clients`; client-specific SQL regressions remain in
 the corresponding BI test module. Captured metadata/native-read acceptance does
 not establish arbitrary query-builder or real Snowflake compatibility.
+
+The test-only `redshift-tests` feature provisions the latest unmodified Oblako
+image with application fixtures and an isolated official Python connector. It
+writes a full native capability report and gates the supported baseline; known
+SUPER/PartiQL gaps remain failures in the full conformance result. The
+`redshift_emulator` test recreates an owned container without reseeding, verifies
+persisted data and metadata, and reports native navigation separately. Configured
+runs use the persisted development server with separate test databases; default
+runs own and remove a disposable container. See the
+[Redshift setup and validation limits](../dev/redshift/README.md).
 
 The `connection_budget` test covers PostgreSQL/Snowflake contention in both
 directions, idle reclamation, cached reads and catalog refresh under saturation.

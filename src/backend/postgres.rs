@@ -2,6 +2,7 @@
 //! the pool returns only verified idle sessions for reuse.
 
 mod catalog;
+pub(crate) use catalog::decode_row;
 mod connection;
 mod execution;
 mod pool;
@@ -15,7 +16,7 @@ use super::ConnectionBudget;
 use pool::{InstanceState, PgManager};
 
 use crate::{
-    config::{BackendConfig, BackendSettings, GatewaySettings},
+    config::{BackendConfig, BackendSettings, GatewaySettings, PgWireEngine},
     hooks::{BackendDecision, BackendSelection, SelectionError},
     query::ParsedQuery,
 };
@@ -39,11 +40,36 @@ use tokio::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET standard_conforming_strings = on; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET IntervalStyle = 'postgres'; SET bytea_output = 'hex'; SET extra_float_digits = 3; SET default_transaction_read_only = on; SET default_transaction_isolation = 'read committed'; SET client_connection_check_interval = '1s'";
+const REDSHIFT_SESSION_DEFAULTS: &str = "SET client_encoding = 'UTF8'; SET DateStyle = 'ISO, MDY'; SET TimeZone = 'UTC'; SET extra_float_digits = 2";
+
+impl PgWireEngine {
+    pub(crate) fn dialect(self) -> crate::query::SqlDialect {
+        match self {
+            Self::Postgresql => crate::query::SqlDialect::Postgresql,
+            Self::Redshift => crate::query::SqlDialect::Redshift,
+        }
+    }
+
+    fn session_defaults(self) -> &'static str {
+        match self {
+            Self::Postgresql => SESSION_DEFAULTS,
+            Self::Redshift => REDSHIFT_SESSION_DEFAULTS,
+        }
+    }
+
+    fn reset_sql(self) -> &'static str {
+        match self {
+            Self::Postgresql => "DISCARD ALL",
+            Self::Redshift => "RESET ALL",
+        }
+    }
+}
 
 /// One target/login pool. Clones share the pool, admission counters and budgets.
 /// No organization routing or callback policy is embedded.
 #[derive(Clone)]
 pub struct PostgresBackend {
+    engine: PgWireEngine,
     pool: Pool<PgManager>,
     target: String,
     database_user: String,
@@ -104,9 +130,11 @@ impl PostgresBackend {
             ..
         } = binding;
         let target = format!("{}:{}/{}", config.host, config.port, config.database);
+        let engine = config.engine;
         let database_user = config.username.clone();
         let pool = pool::new(config, capacity, instance.clone())?;
         Ok(Self {
+            engine,
             pool,
             target,
             database_user,
@@ -122,6 +150,10 @@ impl PostgresBackend {
 
     pub(crate) fn target(&self) -> &str {
         &self.target
+    }
+
+    pub fn engine(&self) -> PgWireEngine {
+        self.engine
     }
 
     pub(crate) fn database_user(&self) -> &str {
@@ -380,6 +412,14 @@ impl Drop for BackendLease<'_> {
 }
 
 impl PostgresBackends {
+    pub(crate) fn default_target_dialect(&self) -> Option<crate::query::SqlDialect> {
+        let mut sources = self.pools.values().flatten();
+        let dialect = sources.next()?.engine().dialect();
+        sources
+            .all(|source| source.engine().dialect() == dialect)
+            .then_some(dialect)
+    }
+
     /// Resolve the configured metadata binding, or the sole configured target.
     pub fn discovery_route(
         &self,
@@ -473,7 +513,17 @@ impl PostgresBackends {
         let mut instances = HashMap::<String, Arc<InstanceState>>::new();
         let mut pools = BTreeMap::<BackendSelection, Vec<PostgresBackend>>::new();
         let mut identities = std::collections::BTreeSet::new();
+        let mut engines = HashMap::new();
         for binding in bindings {
+            if engines
+                .insert(binding.selection.target.clone(), binding.config.engine)
+                .is_some_and(|engine| engine != binding.config.engine)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "one target cannot contain different native engines",
+                ));
+            }
             let identity = format!(
                 "{}\0{}\0{}",
                 binding.selection.target,
@@ -637,4 +687,78 @@ pub(super) fn error_response(code: &str, message: &str) -> PgWireError {
         code.into(),
         message.into(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(engine: PgWireEngine) -> BackendConfig {
+        BackendConfig::new(
+            "127.0.0.1".into(),
+            5439,
+            "reader".into(),
+            "test".into(),
+            "analytics".into(),
+        )
+        .unwrap()
+        .with_engine(engine)
+    }
+
+    #[tokio::test]
+    async fn native_engine_controls_dialect_identity_and_target_registration() {
+        let pg = PostgresBackend::new(config(PgWireEngine::Postgresql)).unwrap();
+        let redshift = PostgresBackend::new(config(PgWireEngine::Redshift)).unwrap();
+        assert_ne!(pg.execution_identity(), redshift.execution_identity());
+        assert_eq!(redshift.engine(), PgWireEngine::Redshift);
+        let selection = |target: &str, login: &str| BackendSelection {
+            target: target.into(),
+            backend_login: login.into(),
+        };
+        let redshift_only = PostgresBackends::new(
+            BTreeMap::from([(
+                selection("warehouse", "reader"),
+                config(PgWireEngine::Redshift),
+            )]),
+            BackendSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            redshift_only.default_target_dialect(),
+            Some(crate::query::SqlDialect::Redshift)
+        );
+
+        let mixed = PostgresBackends::new(
+            BTreeMap::from([
+                (
+                    selection("warehouse", "reader"),
+                    config(PgWireEngine::Redshift),
+                ),
+                (
+                    selection("operational", "reader"),
+                    config(PgWireEngine::Postgresql),
+                ),
+            ]),
+            BackendSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(mixed.default_target_dialect(), None);
+
+        assert!(
+            PostgresBackends::new(
+                BTreeMap::from([
+                    (
+                        selection("warehouse", "reader"),
+                        config(PgWireEngine::Redshift)
+                    ),
+                    (
+                        selection("warehouse", "other"),
+                        config(PgWireEngine::Postgresql)
+                    ),
+                ]),
+                BackendSettings::default()
+            )
+            .is_err()
+        );
+    }
 }

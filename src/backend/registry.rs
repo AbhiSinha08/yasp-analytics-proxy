@@ -45,14 +45,9 @@ impl Backends {
     }
 
     pub(crate) fn default_target_dialect(&self) -> Option<crate::query::SqlDialect> {
-        match (
-            self.postgres
-                .as_ref()
-                .is_some_and(|pg| pg.selections().next().is_some()),
-            !self.snowflake.is_empty(),
-        ) {
-            (true, false) => Some(crate::query::SqlDialect::Postgresql),
-            (false, true) => Some(crate::query::SqlDialect::Snowflake),
+        match (self.postgres.as_ref(), self.snowflake.is_empty()) {
+            (Some(pg), true) => pg.default_target_dialect(),
+            (None, false) => Some(crate::query::SqlDialect::Snowflake),
             _ => None,
         }
     }
@@ -118,7 +113,14 @@ impl Backends {
             .as_ref()
             .and_then(|pg| pg.get_discovery(selection, compute))
             .ok_or(crate::catalog::CatalogError::InvalidSettings)?;
-        crate::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await
+        match source.engine() {
+            crate::config::PgWireEngine::Postgresql => {
+                crate::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await
+            }
+            crate::config::PgWireEngine::Redshift => {
+                crate::catalog::Catalog::redshift(Arc::new(source.clone()), settings).await
+            }
+        }
     }
 
     pub fn with_snowflake(

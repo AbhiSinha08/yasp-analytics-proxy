@@ -30,12 +30,22 @@ pub(super) fn run_metabase(
     identity: &support::Identity,
     address: std::net::SocketAddr,
 ) -> serde_json::Value {
+    run_metabase_for(profile, identity, address, "PUBLIC", "USERS")
+}
+
+pub(super) fn run_metabase_for(
+    profile: &str,
+    identity: &support::Identity,
+    address: std::net::SocketAddr,
+    schema: &str,
+    table: &str,
+) -> serde_json::Value {
     run_workload(
         profile,
         identity,
         address,
-        "PUBLIC",
-        "USERS",
+        schema,
+        table,
         false,
         include_bytes!("../fixtures/clients/metabase_connect.clj"),
     )

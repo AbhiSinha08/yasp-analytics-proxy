@@ -254,7 +254,10 @@ impl Request {
     where
         S: Sink<ResultEvent, Error = ExecutionError> + Send + Unpin,
     {
-        if matches!(self.kind, Kind::CurrentSchema) && snapshot.postgres.is_some() {
+        if matches!(self.kind, Kind::CurrentSchema)
+            && (snapshot.postgres.is_some()
+                || snapshot.source.dialect == crate::query::SqlDialect::Redshift)
+        {
             let tokens = sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, search_path)
                 .tokenize()
                 .map_err(|_| ExecutionError::rejected("0A000", "invalid metadata search path"))?;
@@ -526,7 +529,7 @@ fn sqlalchemy_rows(
             .columns
             .iter()
             .map(|c| {
-                let t = FrontendType::column(c)?;
+                let t = FrontendType::for_profile(c, FrontendProfile::Redshift)?;
                 Ok(vec![
                     some(&r.id.schema),
                     some(&r.id.name),
@@ -600,6 +603,33 @@ fn sqlalchemy_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metabase_filtered_keys_capture_only_bounded_literal_schema_lists() {
+        let template = include_str!("queries/metabase_foreign_keys_filtered.sql");
+        let captured = template.replace("'__YASP_SCHEMAS__'", "('analytics'), ('public')");
+        for profile in [FrontendProfile::Postgres, FrontendProfile::Redshift] {
+            let request = Request::recognize(&captured, profile).unwrap();
+            assert!(matches!(request.kind, Kind::Metabase(3)));
+            assert_eq!(request.schemas, ["analytics", "public"]);
+            for altered in [
+                format!("{captured}; SELECT * FROM public.users"),
+                format!("{captured} UNION ALL SELECT * FROM public.users"),
+                captured.replace("\"pg_constraint\"", "\"public\".\"users\""),
+                template.replace("'__YASP_SCHEMAS__'", "(SELECT secret FROM public.users)"),
+                template.replace("'__YASP_SCHEMAS__'", "'public', NULL"),
+                template.replace("'__YASP_SCHEMAS__'", &["'public'"; 257].join(",")),
+            ] {
+                assert!(Request::recognize(&altered, profile).is_none(), "{altered}");
+            }
+            for sample in [
+                r#"SELECT "analytics"."metadata_types"."amount" AS "amount", SUBSTRING("analytics"."metadata_types"."mixedcase", 1, 1234) AS "substring2151", SUBSTRING("analytics"."metadata_types"."nullable_text", 1, 1234) AS "substring2152" FROM "analytics"."metadata_types" LIMIT 10000"#,
+                r#"SELECT "analytics"."type_references"."tenant_id" AS "tenant_id", "analytics"."type_references"."type_id" AS "type_id" FROM "analytics"."type_references" LIMIT 10000"#,
+            ] {
+                assert!(Request::recognize(sample, profile).is_none());
+            }
+        }
+    }
     #[test]
     fn integer_connection_probe_accepts_no_application_reads_or_expressions() {
         for profile in [FrontendProfile::Postgres, FrontendProfile::Redshift] {

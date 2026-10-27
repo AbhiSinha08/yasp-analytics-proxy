@@ -119,7 +119,14 @@ pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let source = backends
                     .get_discovery(&discovery, discovery_compute.as_deref())
                     .ok_or_else(|| io::Error::other("catalog discovery binding is unavailable"))?;
-                yasp::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await?
+                match source.engine() {
+                    yasp::config::PgWireEngine::Postgresql => {
+                        yasp::catalog::Catalog::postgres(Arc::new(source.clone()), settings).await?
+                    }
+                    yasp::config::PgWireEngine::Redshift => {
+                        yasp::catalog::Catalog::redshift(Arc::new(source.clone()), settings).await?
+                    }
+                }
             };
             let gateway = gateway.with_catalog(catalog.clone());
             let serving = async {

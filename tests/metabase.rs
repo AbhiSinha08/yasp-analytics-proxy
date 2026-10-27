@@ -160,6 +160,36 @@ fn metabase_schema_definitions_use_snowflake_in_both_profiles() {
                         .success()
                 );
             }
+            let filtered_keys =
+                include_str!("../src/gateway/metadata/queries/metabase_foreign_keys_filtered.sql");
+            let filtered = |schemas: &str| {
+                let output = query(&filtered_keys.replace("'__YASP_SCHEMAS__'", schemas));
+                support::assert_success(&output, "schema-filtered Metabase foreign keys");
+                String::from_utf8(output.stdout).unwrap()
+            };
+            let public = filtered("'PUBLIC'");
+            assert!(public.contains("PUBLIC|ORDERS|USER_ID|PUBLIC|USERS|ID"));
+            assert!(public.lines().all(|row| row.starts_with("PUBLIC|")));
+            let analytics = filtered("'ANALYTICS'");
+            assert_eq!(
+                analytics,
+                "ANALYTICS|TYPE_REFERENCES|TENANT_ID|ANALYTICS|METADATA_TYPES|TENANT_ID\n\
+                 ANALYTICS|TYPE_REFERENCES|TYPE_ID|ANALYTICS|METADATA_TYPES|ID\n"
+            );
+            assert_eq!(
+                filtered("('PUBLIC'), ('ANALYTICS')"),
+                format!("{analytics}{public}")
+            );
+            assert_eq!(filtered("('ANALYTICS'), ('ABSENT')"), analytics);
+            assert!(filtered("'ABSENT'").is_empty());
+            for (sql, expected) in [
+                ("SHOW timezone", "UTC"),
+                ("SHOW transaction isolation level", "read committed"),
+            ] {
+                let output = query(sql);
+                support::assert_success(&output, "frontend setting probe");
+                assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+            }
         });
     }
 }
@@ -258,6 +288,7 @@ fn bundled_metabase_connection_and_metadata_accept_both_snowflake_frontends() {
             );
             if profile == "redshift" {
                 let metadata = &report["metadata"];
+                assert_eq!(metadata["filtered_foreign_keys"], metadata["foreign_keys"]);
                 let fields = metadata["public_fields"].as_array().unwrap();
                 assert!(
                     fields.iter().any(|field| field["table-name"] == "ORDERS"

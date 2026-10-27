@@ -205,7 +205,7 @@ def requested_features(arguments):
     features = set()
     for i, argument in enumerate(arguments):
         if argument == "--all-features":
-            features.update(["python", "snowflake", "client-tests"])
+            features.update(["python", "snowflake", "client-tests", "redshift-tests"])
         elif argument == "--features" and i + 1 < len(arguments):
             features.update(arguments[i + 1].replace(",", " ").split())
         elif argument.startswith("--features="):
@@ -214,9 +214,9 @@ def requested_features(arguments):
 
 
 @contextlib.contextmanager
-def external_services(environment, features):
+def external_services(environment, features, configured=False):
     """Own only this run's Docker resources; never touch the developer volume."""
-    if not features.intersection({"snowflake", "client-tests"}):
+    if not features.intersection({"snowflake", "client-tests", "redshift-tests"}):
         yield environment
         return
     subprocess.run(["docker", "info"], check=True, stdout=subprocess.DEVNULL)
@@ -225,6 +225,64 @@ def external_services(environment, features):
     container = None
     images = []
     try:
+        if "redshift-tests" in features:
+            if configured:
+                container = environment.get("YASP_REDSHIFT_CONTAINER") or subprocess.check_output([
+                    "docker", "compose", "-f", "dev/redshift/compose.yml", "ps", "-q", "redshift",
+                ], cwd=ROOT, text=True).strip()
+                if not container:
+                    raise RuntimeError("start dev/redshift/compose.yml or set YASP_REDSHIFT_CONTAINER")
+                tls = Path(environment.get("YASP_REDSHIFT_CA_FILE", ROOT / "config/local-tls/ca.crt"))
+            else:
+                image = "yasp-redshift-test:" + run_id
+                images.append(image)
+                subprocess.run(["docker", "build", "--pull", "-f", "dev/redshift/Dockerfile", "-t", image, "."], cwd=ROOT, check=True)
+                container = "yasp-redshift-test-" + run_id
+                tls = Path(environment["YASP_TEST_TLS_DIR"]) / "ca.crt"
+                subprocess.run([
+                    "docker", "run", "-d", "--name", container, "--label", "yasp.compatibility=" + run_id,
+                    "-p", "127.0.0.1::5439", "--mount", "type=bind,src=" + str(tls.parent.resolve()) + ",dst=/yasp/tls,readonly",
+                    "-e", "POSTGRES_USER=yasp_admin", "-e", "POSTGRES_PASSWORD=yasp_local_password",
+                    "-e", "POSTGRES_DB=yasp_demo", "-e", "POSTGRES_HOST_AUTH_METHOD=md5",
+                    "-e", "OBLAKO_SSL_CERT=/yasp/tls/server.crt", "-e", "OBLAKO_SSL_KEY=/yasp/tls/server.key",
+                    "-e", "SSL_CERT_FILE=/yasp/tls/ca.crt", image,
+                ], check=True, stdout=subprocess.DEVNULL)
+                deadline = time.monotonic() + 90
+                while subprocess.run([
+                    "docker", "exec", container, "python3", "/yasp/qualify.py", "seed",
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20).returncode:
+                    if time.monotonic() >= deadline:
+                        subprocess.run(["docker", "logs", container], check=False)
+                        raise RuntimeError("disposable Redshift fixture did not become ready")
+                    time.sleep(0.2)
+            details = json.loads(subprocess.check_output(["docker", "inspect", container], text=True))[0]
+            settings = dict(item.split("=", 1) for item in details["Config"]["Env"] if "=" in item)
+            port = details["NetworkSettings"]["Ports"].get("5439/tcp")
+            if not port or not tls.is_file():
+                raise RuntimeError("Redshift fixture needs a published port and its issuing CA file")
+            environment |= {
+                "YASP_REDSHIFT_CONTAINER": container,
+                "YASP_REDSHIFT_IMAGE": details["Config"]["Image"],
+                "YASP_REDSHIFT_HOST": environment.get("YASP_REDSHIFT_HOST", "localhost"),
+                "YASP_REDSHIFT_PORT": environment.get("YASP_REDSHIFT_PORT", port[0]["HostPort"]),
+                "YASP_REDSHIFT_USER": environment.get("YASP_REDSHIFT_USER", settings["POSTGRES_USER"]),
+                "YASP_REDSHIFT_PASSWORD": environment.get("YASP_REDSHIFT_PASSWORD", settings["POSTGRES_PASSWORD"]),
+                "YASP_REDSHIFT_DATABASE": environment.get("YASP_REDSHIFT_DATABASE", settings["POSTGRES_DB"]),
+                "YASP_REDSHIFT_CA_FILE": str(tls.resolve()),
+                "YASP_REDSHIFT_READER_PASSWORD": environment.get("YASP_REDSHIFT_READER_PASSWORD", "yasp_reader_password"),
+                "YASP_REDSHIFT_DENIED_PASSWORD": environment.get("YASP_REDSHIFT_DENIED_PASSWORD", "yasp_denied_password"),
+            }
+            report = subprocess.run([
+                "docker", "exec", container, "python3", "/yasp/qualify.py", "check", "--baseline",
+            ], text=True, capture_output=True, timeout=90)
+            destination = ROOT / "target/compatibility/redshift-emulator.json"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(report.stdout)
+            if report.returncode:
+                raise RuntimeError("Redshift baseline qualification failed: " + report.stdout + report.stderr)
+            capabilities = json.loads(report.stdout)
+            print("Redshift baseline passed; full native validation gaps:", ", ".join(capabilities["validation_gaps"]) or "none", flush=True)
+            environment["YASP_REDSHIFT_QUALIFICATION"] = str(destination)
         if "client-tests" in features:
             inventory = json.loads((ROOT / "tests/fixtures/clients/clients.json").read_text())
             image = inventory["metabase"]["image_digests"][0]
@@ -284,7 +342,7 @@ def external_services(environment, features):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--configured", action="store_true", help="use existing PostgreSQL/Redis services and YASP_TEST_CONFIG/.env")
-    parser.add_argument("--full", action="store_true", help="default, Python, Snowflake and pinned JDBC functional/documentation matrix")
+    parser.add_argument("--full", action="store_true", help="default, Python, Snowflake, Redshift and pinned JDBC functional/documentation matrix")
     parser.add_argument("cargo_arguments", nargs=argparse.REMAINDER, help="cargo test arguments after --")
     arguments = parser.parse_args()
     cargo_arguments = arguments.cargo_arguments
@@ -303,7 +361,7 @@ def main():
             library = subprocess.check_output([interpreter, "-c", "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"], text=True).strip()
             environment |= {"PYO3_PYTHON": interpreter,
                 "LD_LIBRARY_PATH": library + (":" + environment["LD_LIBRARY_PATH"] if environment.get("LD_LIBRARY_PATH") else "")}
-        environment = stack.enter_context(external_services(environment, features))
+        environment = stack.enter_context(external_services(environment, features, arguments.configured))
         for args in matrix:
             result = run_tests(args, environment)
             if result:

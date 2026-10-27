@@ -1,0 +1,6 @@
+**
+!dev/
+!dev/redshift/
+!dev/redshift/Dockerfile
+!dev/redshift/qualify.py
+!dev/redshift/seed.sql

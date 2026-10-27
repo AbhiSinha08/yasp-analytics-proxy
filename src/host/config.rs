@@ -3,7 +3,7 @@
 use std::{collections::HashMap, env, io, path::Path};
 use yasp::{
     backend::PostgresBinding,
-    config::{BackendConfig, FileConfig, GatewayConfig},
+    config::{BackendConfig, FileConfig, GatewayConfig, PgWireEngine},
     hooks::BackendSelection,
 };
 
@@ -145,7 +145,7 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
             continue;
         }
         let make_backend = |host, port, username, password| {
-            if target.tls.mode == "enable" {
+            let config = if target.tls.mode == "enable" {
                 BackendConfig::new_with_tls(
                     host,
                     port,
@@ -156,7 +156,11 @@ pub(super) fn load_config(path: &Path) -> Result<HostConfig, Box<dyn std::error:
                 )
             } else {
                 BackendConfig::new(host, port, username, password, target.database.clone())
-            }
+            }?;
+            Ok::<_, yasp::config::ConfigError>(config.with_engine(match target.engine.as_str() {
+                "redshift" => PgWireEngine::Redshift,
+                _ => PgWireEngine::Postgresql,
+            }))
         };
         for (login_name, login) in &target.logins {
             let route = BackendSelection {

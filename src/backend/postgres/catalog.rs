@@ -121,35 +121,9 @@ struct Collector {
     facts: bool,
 }
 impl Collector {
-    fn row(&mut self, mut row: pgwire::messages::data::DataRow) -> Result<(), CatalogError> {
+    fn row(&mut self, row: pgwire::messages::data::DataRow) -> Result<(), CatalogError> {
         let count = if self.facts { 3 } else { 22 };
-        if row.field_count != count {
-            return Err(CatalogError::InvalidMetadata);
-        }
-        let mut values = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            if row.data.remaining() < 4 {
-                return Err(CatalogError::InvalidMetadata);
-            }
-            let size = row.data.get_i32();
-            if size == -1 {
-                values.push(None);
-                continue;
-            }
-            let size = usize::try_from(size).map_err(|_| CatalogError::InvalidMetadata)?;
-            if size > row.data.remaining() {
-                return Err(CatalogError::InvalidMetadata);
-            }
-            let value = row.data.split_to(size);
-            values.push(Some(
-                std::str::from_utf8(&value)
-                    .map_err(|_| CatalogError::InvalidMetadata)?
-                    .to_owned(),
-            ));
-        }
-        if row.data.has_remaining() {
-            return Err(CatalogError::InvalidMetadata);
-        }
+        let values = decode_row(row, count)?;
         if self.facts {
             let field = |n: usize| values[n].as_deref().ok_or(CatalogError::InvalidMetadata);
             self.rows.postgres_row(
@@ -163,6 +137,41 @@ impl Collector {
             self.rows.push(values)
         }
     }
+}
+
+/// Decode a bounded text-protocol catalog row without interpreting native OIDs.
+pub(crate) fn decode_row(
+    mut row: pgwire::messages::data::DataRow,
+    count: i16,
+) -> Result<Vec<Option<String>>, CatalogError> {
+    if row.field_count != count {
+        return Err(CatalogError::InvalidMetadata);
+    }
+    let mut values = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        if row.data.remaining() < 4 {
+            return Err(CatalogError::InvalidMetadata);
+        }
+        let size = row.data.get_i32();
+        if size == -1 {
+            values.push(None);
+            continue;
+        }
+        let size = usize::try_from(size).map_err(|_| CatalogError::InvalidMetadata)?;
+        if size > row.data.remaining() {
+            return Err(CatalogError::InvalidMetadata);
+        }
+        let value = row.data.split_to(size);
+        values.push(Some(
+            std::str::from_utf8(&value)
+                .map_err(|_| CatalogError::InvalidMetadata)?
+                .to_owned(),
+        ));
+    }
+    if row.data.has_remaining() {
+        return Err(CatalogError::InvalidMetadata);
+    }
+    Ok(values)
 }
 impl Sink<PgWireBackendMessage> for Collector {
     type Error = PgWireError;
