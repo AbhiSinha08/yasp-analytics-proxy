@@ -1,0 +1,632 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "explainer",
+  "quality": "showcase",
+  "startedAt": "2026-10-28T17:50:35.100Z",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.archify.md",
+    "sha256": "2e7a150e4247a88dc22c051f0e01488604849451ebb9819e6d959c64c3559acf",
+    "bytes": 6043
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+    "sha256": "f765eb18d8660b588eeeeede48c007e637e328fa38921629b27627cd22598bbb",
+    "bytes": 1333300
+  },
+  "stages": {
+    "browser-check": {
+      "status": "not-run",
+      "execution": "not-requested"
+    },
+    "validate": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": null,
+      "execution": "embedded-in-deliver",
+      "command": [
+        "/usr/bin/node",
+        "/home/abhisinha08/.agents/skills/archify/bin/archify.mjs",
+        "deliver",
+        "explainer",
+        "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.archify.md",
+        "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "/home/abhisinha08/code/yasp",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "validate",
+        "specification": {
+          "sha256": "2e7a150e4247a88dc22c051f0e01488604849451ebb9819e6d959c64c3559acf",
+          "bytes": 6043
+        },
+        "validation": {
+          "checksPassed": 4,
+          "checkCount": 4,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        }
+      }
+    },
+    "deliver": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 838,
+      "command": [
+        "/usr/bin/node",
+        "/home/abhisinha08/.agents/skills/archify/bin/archify.mjs",
+        "deliver",
+        "explainer",
+        "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.archify.md",
+        "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "/home/abhisinha08/code/yasp",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "9688a8b0-d9a6-4f91-8495-3be4dcd15b8d",
+        "ok": true,
+        "command": "deliver",
+        "type": "explainer",
+        "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.archify.md",
+        "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+        "explainer": {
+          "preparedSha256": "835e2fbba8e52d4bddbbcc7a8850993c879e5d04c6f4ba863e5c728cc7fabbd6",
+          "dependencies": [
+            {
+              "kind": "diagram-spec",
+              "id": "system-picture",
+              "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/system-map.json",
+              "relativePath": "system-map.json",
+              "sha256": "bf8695098cdf7776f95ad3af4cb1090e39ed695f853c980f6bc2c8e4a8412794",
+              "bytes": 6068
+            },
+            {
+              "kind": "diagram-spec",
+              "id": "assembly-picture",
+              "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/library-assembly.json",
+              "relativePath": "library-assembly.json",
+              "sha256": "47ea0954445f9e3b0f968ad2d231418cf0619fd856530d61ec3fdb10e6a6688c",
+              "bytes": 4108
+            },
+            {
+              "kind": "diagram-spec",
+              "id": "journey-picture",
+              "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-journey.json",
+              "relativePath": "query-journey.json",
+              "sha256": "ba59cf4354f698513632b24773d36b5d2785da07efa78d14e77f1bcada43e835",
+              "bytes": 5655
+            }
+          ]
+        },
+        "specification": {
+          "sha256": "2e7a150e4247a88dc22c051f0e01488604849451ebb9819e6d959c64c3559acf",
+          "bytes": 6043
+        },
+        "artifact": {
+          "sha256": "f765eb18d8660b588eeeeede48c007e637e328fa38921629b27627cd22598bbb",
+          "bytes": 1333300
+        },
+        "validation": {
+          "checksPassed": 4,
+          "checkCount": 4,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        },
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      }
+    },
+    "check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 384,
+      "command": [
+        "/usr/bin/node",
+        "/home/abhisinha08/.agents/skills/archify/bin/archify.mjs",
+        "check",
+        "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+        "--require-provenance"
+      ],
+      "receipt": {
+        "ok": true,
+        "file": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+        "family": "explainer",
+        "artifact": {
+          "sha256": "f765eb18d8660b588eeeeede48c007e637e328fa38921629b27627cd22598bbb",
+          "bytes": 1333300
+        },
+        "checks": [
+          {
+            "name": "explainer_structure",
+            "ok": true,
+            "details": [
+              "93 unique DOM IDs"
+            ]
+          },
+          {
+            "name": "explainer_payload_identity",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "explainer_dependencies",
+            "ok": true,
+            "details": [
+              "3 frozen dependencies"
+            ]
+          },
+          {
+            "name": "explainer_native_diagrams",
+            "ok": true,
+            "details": [
+              "system-picture: pass",
+              "assembly-picture: pass",
+              "journey-picture: pass"
+            ]
+          }
+        ],
+        "composition": {
+          "schemaVersion": 1,
+          "profile": "showcase",
+          "status": "pass",
+          "summary": {
+            "errors": 0,
+            "warnings": 0
+          },
+          "issues": [],
+          "nativeDiagrams": [
+            {
+              "id": "system-picture",
+              "receipt": {
+                "ok": true,
+                "file": "/tmp/archify-explainer-check-8GBaxs/child.html",
+                "artifact": {
+                  "sha256": "465c2d95f365f6d80ad0b914379d7b1dbdceddc7f80e0c336086e51401affb9f",
+                  "bytes": 820965
+                },
+                "checks": [
+                  {
+                    "name": "single_svg",
+                    "ok": true,
+                    "details": [
+                      "found 1 <svg> block(s)"
+                    ]
+                  },
+                  {
+                    "name": "finite_svg",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "orthogonal_arrows",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "label_route_clearance",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_crossings",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_corridors",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "container_border_runs",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "route_rhythm",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "legend_clearance",
+                    "ok": true,
+                    "details": []
+                  }
+                ],
+                "composition": {
+                  "schemaVersion": 1,
+                  "profile": "showcase",
+                  "status": "pass",
+                  "summary": {
+                    "errors": 0,
+                    "warnings": 0
+                  },
+                  "metrics": {
+                    "properCrossings": 0,
+                    "resolvedCrossovers": 0,
+                    "ambiguousCorridors": 0,
+                    "arrowheadCollisions": 0,
+                    "containerBorderRuns": 0,
+                    "labelRouteClearanceIssues": 0,
+                    "labelCanvasOverflowIssues": 0,
+                    "minLabelRouteClearance": 108.2,
+                    "desktopReadabilityIssues": 0,
+                    "viewportHeightIssues": 0,
+                    "minProjectedNodeTextPx": 7.5,
+                    "maxBends": 0,
+                    "routesOverSuggestedBends": 0,
+                    "maxStretch": 1,
+                    "routesOverSuggestedStretch": 0,
+                    "minSegmentPx": 140,
+                    "minInteriorSegmentPx": null,
+                    "shortSegmentCount": 0,
+                    "shortEndpointSegmentCount": 0,
+                    "shortInteriorSegmentCount": 0,
+                    "microSegmentCount": 0
+                  },
+                  "suggestedLimits": {
+                    "bendsPerRelationship": 2,
+                    "stretch": 1.35,
+                    "segmentPx": 16,
+                    "microSegmentPx": 8
+                  },
+                  "routeReview": {
+                    "crossings": [],
+                    "detours": []
+                  },
+                  "leadingSpace": {
+                    "measured": true,
+                    "emptyTopPx": 40,
+                    "emptyTopRatio": 0.098,
+                    "occupiedTop": 40,
+                    "viewBoxTop": 0,
+                    "canvasHeight": 410,
+                    "typicalNodeHeight": 72,
+                    "reviewSuggested": false
+                  },
+                  "desktopReadability": {
+                    "budgetBasis": "recognized-declared-wide",
+                    "readerContract": "declared-wide-v1",
+                    "availableDiagramWidth": 1190.625,
+                    "actualBudgetPx": 1190.625,
+                    "actualReaderWidth": 1220.625,
+                    "desiredReaderWidth": 1220.625,
+                    "viewportCap": 1376,
+                    "limit": "source-size",
+                    "requestedTargetPx": 7.5,
+                    "requestedTargetMet": true,
+                    "hardFloorPx": 6,
+                    "hardFloorMet": true,
+                    "minimumOwner": {
+                      "kind": "edge",
+                      "id": "client-to-gateway",
+                      "from": "client",
+                      "to": "gateway"
+                    },
+                    "minimumSourceTextPx": 8,
+                    "minimumProjectedTextPx": 7.5,
+                    "semanticTextCount": 20
+                  },
+                  "issues": []
+                }
+              }
+            },
+            {
+              "id": "assembly-picture",
+              "receipt": {
+                "ok": true,
+                "file": "/tmp/archify-explainer-check-LtmvJv/child.html",
+                "artifact": {
+                  "sha256": "c69574372201f77bf117b00f43a0bc4178ff07a5c53222a66f3c1898e9c1c6c5",
+                  "bytes": 813859
+                },
+                "checks": [
+                  {
+                    "name": "single_svg",
+                    "ok": true,
+                    "details": [
+                      "found 1 <svg> block(s)"
+                    ]
+                  },
+                  {
+                    "name": "finite_svg",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "orthogonal_arrows",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "label_route_clearance",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_crossings",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_corridors",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "container_border_runs",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "route_rhythm",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "legend_clearance",
+                    "ok": true,
+                    "details": []
+                  }
+                ],
+                "composition": {
+                  "schemaVersion": 1,
+                  "profile": "showcase",
+                  "status": "pass",
+                  "summary": {
+                    "errors": 0,
+                    "warnings": 0
+                  },
+                  "metrics": {
+                    "properCrossings": 0,
+                    "resolvedCrossovers": 0,
+                    "ambiguousCorridors": 0,
+                    "arrowheadCollisions": 0,
+                    "containerBorderRuns": 0,
+                    "labelRouteClearanceIssues": 0,
+                    "labelCanvasOverflowIssues": 0,
+                    "minLabelRouteClearance": null,
+                    "desktopReadabilityIssues": 0,
+                    "viewportHeightIssues": 0,
+                    "minProjectedNodeTextPx": 6.1,
+                    "maxBends": 0,
+                    "routesOverSuggestedBends": 0,
+                    "maxStretch": 1,
+                    "routesOverSuggestedStretch": 0,
+                    "minSegmentPx": 32,
+                    "minInteriorSegmentPx": null,
+                    "shortSegmentCount": 0,
+                    "shortEndpointSegmentCount": 0,
+                    "shortInteriorSegmentCount": 0,
+                    "microSegmentCount": 0
+                  },
+                  "suggestedLimits": {
+                    "bendsPerRelationship": 2,
+                    "stretch": 1.35,
+                    "segmentPx": 16,
+                    "microSegmentPx": 8
+                  },
+                  "routeReview": {
+                    "crossings": [],
+                    "detours": []
+                  },
+                  "leadingSpace": {
+                    "measured": false,
+                    "reviewSuggested": false
+                  },
+                  "desktopReadability": {
+                    "budgetBasis": "legacy-930",
+                    "readerContract": "declared-wide-v1",
+                    "availableDiagramWidth": 930,
+                    "actualBudgetPx": 930,
+                    "limit": "legacy",
+                    "requestedTargetPx": null,
+                    "requestedTargetMet": null,
+                    "hardFloorPx": 6,
+                    "hardFloorMet": true,
+                    "minimumOwner": {
+                      "kind": "node",
+                      "id": "settings"
+                    },
+                    "minimumSourceTextPx": 6.1,
+                    "minimumProjectedTextPx": 6.1,
+                    "semanticTextCount": 12
+                  },
+                  "issues": []
+                }
+              }
+            },
+            {
+              "id": "journey-picture",
+              "receipt": {
+                "ok": true,
+                "file": "/tmp/archify-explainer-check-w3lG46/child.html",
+                "artifact": {
+                  "sha256": "276026c52f81869dadaf3ac37c849508e887d31e533eed1e1bede7b544949d02",
+                  "bytes": 816987
+                },
+                "checks": [
+                  {
+                    "name": "single_svg",
+                    "ok": true,
+                    "details": [
+                      "found 1 <svg> block(s)"
+                    ]
+                  },
+                  {
+                    "name": "finite_svg",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "orthogonal_arrows",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "label_route_clearance",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_crossings",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "relationship_corridors",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "container_border_runs",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "route_rhythm",
+                    "ok": true,
+                    "details": []
+                  },
+                  {
+                    "name": "legend_clearance",
+                    "ok": true,
+                    "details": []
+                  }
+                ],
+                "composition": {
+                  "schemaVersion": 1,
+                  "profile": "showcase",
+                  "status": "pass",
+                  "summary": {
+                    "errors": 0,
+                    "warnings": 0
+                  },
+                  "metrics": {
+                    "properCrossings": 0,
+                    "resolvedCrossovers": 0,
+                    "ambiguousCorridors": 0,
+                    "arrowheadCollisions": 0,
+                    "containerBorderRuns": 0,
+                    "labelRouteClearanceIssues": 0,
+                    "labelCanvasOverflowIssues": 0,
+                    "minLabelRouteClearance": 15,
+                    "desktopReadabilityIssues": 0,
+                    "viewportHeightIssues": 0,
+                    "minProjectedNodeTextPx": 7,
+                    "maxBends": 0,
+                    "routesOverSuggestedBends": 0,
+                    "maxStretch": 1,
+                    "routesOverSuggestedStretch": 0,
+                    "minSegmentPx": 156.8,
+                    "minInteriorSegmentPx": null,
+                    "shortSegmentCount": 0,
+                    "shortEndpointSegmentCount": 0,
+                    "shortInteriorSegmentCount": 0,
+                    "microSegmentCount": 0
+                  },
+                  "suggestedLimits": {
+                    "bendsPerRelationship": 2,
+                    "stretch": 1.35,
+                    "segmentPx": 16,
+                    "microSegmentPx": 8
+                  },
+                  "routeReview": {
+                    "crossings": [],
+                    "detours": []
+                  },
+                  "leadingSpace": {
+                    "measured": false,
+                    "reviewSuggested": false
+                  },
+                  "sequenceColumnSpace": {
+                    "measured": true,
+                    "columnFit": "spread",
+                    "participantCount": 5,
+                    "occupiedRight": 880,
+                    "viewBoxLeft": 0,
+                    "canvasWidth": 920,
+                    "emptyRightPx": 40,
+                    "emptyRightRatio": 0.043,
+                    "typicalParticipantWidth": 135,
+                    "reviewSuggested": false
+                  },
+                  "desktopReadability": {
+                    "budgetBasis": "legacy-930",
+                    "readerContract": "declared-wide-v1",
+                    "availableDiagramWidth": 930,
+                    "actualBudgetPx": 930,
+                    "limit": "legacy",
+                    "requestedTargetPx": null,
+                    "requestedTargetMet": null,
+                    "hardFloorPx": 6,
+                    "hardFloorMet": true,
+                    "minimumOwner": {
+                      "kind": "edge",
+                      "id": "dispatch",
+                      "from": "gateway",
+                      "to": "engine"
+                    },
+                    "minimumSourceTextPx": 7,
+                    "minimumProjectedTextPx": 7,
+                    "semanticTextCount": 20
+                  },
+                  "issues": []
+                }
+              }
+            }
+          ]
+        },
+        "diagnostics": [],
+        "provenance": "current",
+        "deliveryReceiptId": "9688a8b0-d9a6-4f91-8495-3be4dcd15b8d"
+      }
+    }
+  },
+  "browserCheck": {
+    "requested": false,
+    "ran": false
+  },
+  "diagnostics": [],
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/overview-final/overview.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/overview-final/overview.finalize-summary.json"
+  },
+  "visualReview": "not-requested",
+  "finishedAt": "2026-10-28T17:50:36.401Z",
+  "durationMs": 1300,
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  }
+}

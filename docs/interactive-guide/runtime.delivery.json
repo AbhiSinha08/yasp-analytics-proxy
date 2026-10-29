@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "7af8b378-5ec8-4a05-b6ca-b18dfc3fa6cc",
+  "status": "current",
+  "command": "deliver",
+  "type": "explainer",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime.archify.md",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime.html",
+  "specification": {
+    "sha256": "bf6079c67d5e9a9e55008601ce9409d3ae9ee1aeeb49f9b06a36e3e827f4eb71",
+    "bytes": 8326
+  },
+  "artifact": {
+    "sha256": "d8befb3444226ffc1c967e7f016ab58d1ddb98e0800910889d5388e487914c47",
+    "bytes": 1762450
+  },
+  "explainer": {
+    "preparedSha256": "72a05c0957fe97d577a5f8c89d8534401628bc292f5a1d94d15c9744b58577c8",
+    "dependencies": [
+      {
+        "kind": "diagram-spec",
+        "id": "schema-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/schema-lineage.json",
+        "relativePath": "schema-lineage.json",
+        "sha256": "1b23267348e1447ae26cb29184a211aeb55e388f2985a6c30568c4174efbd0cb",
+        "bytes": 6112
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "datasets-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/application-datasets.json",
+        "relativePath": "application-datasets.json",
+        "sha256": "33c9b9c0dfcb8a73ed787f6e68564bb05fe23ff9781ba84e70e5215f44013948",
+        "bytes": 4697
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "cache-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/raw-cache.json",
+        "relativePath": "raw-cache.json",
+        "sha256": "c36e7cd1f66247bdad741d4c7fced6b28247e073ebf50eb58b4c01e78c8df320",
+        "bytes": 4424
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "sessions-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/capacity-sessions.json",
+        "relativePath": "capacity-sessions.json",
+        "sha256": "2710fca1300d1a28230ee235d60136c73acbb617c5e51447fbab3e5d2b034390",
+        "bytes": 6340
+      }
+    ]
+  }
+}

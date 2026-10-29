@@ -1,0 +1,261 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Schema facts support discovery and output lineage",
+    "output": "docs/interactive-guide/schema-lineage.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "catalog",
+      "label": "Schema generation"
+    },
+    {
+      "id": "readers",
+      "label": "Independent readers"
+    },
+    {
+      "id": "query",
+      "label": "Effective query analysis"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "load",
+      "lane": "catalog",
+      "col": 0,
+      "type": "database",
+      "label": "Load source facts",
+      "sublabel": "Configured discovery identity",
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 248,
+          "label": "Load and read a bounded snapshot"
+        }
+      ]
+    },
+    {
+      "id": "publish",
+      "lane": "catalog",
+      "col": 1,
+      "type": "backend",
+      "label": "Publish snapshot",
+      "sublabel": "Complete immutable generation",
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 282,
+          "end_line": 329,
+          "label": "Publish complete generations"
+        }
+      ]
+    },
+    {
+      "id": "metadata",
+      "lane": "catalog",
+      "col": 2,
+      "type": "frontend",
+      "label": "Answer discovery",
+      "sublabel": "Fresh captured metadata",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 70,
+          "end_line": 107
+        }
+      ]
+    },
+    {
+      "id": "ast",
+      "lane": "readers",
+      "col": 0,
+      "type": "backend",
+      "label": "Effective SQL tree",
+      "sublabel": "After optional replacement",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        }
+      ]
+    },
+    {
+      "id": "analyze",
+      "lane": "readers",
+      "col": 1,
+      "type": "backend",
+      "label": "Resolve output sources",
+      "sublabel": "Catalog + structured SQL",
+      "sources": [
+        {
+          "path": "src/lineage.rs",
+          "line": 110,
+          "end_line": 175,
+          "label": "Resolve and align output sources"
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "lane": "readers",
+      "col": 2,
+      "type": "backend",
+      "label": "Keep unknowns",
+      "sublabel": "Missing or unsupported facts",
+      "sources": [
+        {
+          "path": "src/lineage.rs",
+          "line": 90,
+          "end_line": 123
+        }
+      ]
+    },
+    {
+      "id": "align",
+      "lane": "query",
+      "col": 1,
+      "type": "backend",
+      "label": "Align with columns",
+      "sublabel": "Use actual output ordinals",
+      "sources": [
+        {
+          "path": "src/lineage.rs",
+          "line": 125,
+          "end_line": 175
+        }
+      ]
+    },
+    {
+      "id": "consume",
+      "lane": "query",
+      "col": 2,
+      "type": "backend",
+      "label": "Supply result context",
+      "sublabel": "Aligned raw-output facts",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 178,
+          "end_line": 191
+        }
+      ]
+    },
+    {
+      "id": "selection",
+      "lane": "query",
+      "col": 0,
+      "type": "security",
+      "label": "Supply selection facts",
+      "sublabel": "Static AST before execution",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 149
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "load-to-publish",
+      "from": "load",
+      "to": "publish",
+      "variant": "default"
+    },
+    {
+      "id": "publish-to-metadata",
+      "from": "publish",
+      "to": "metadata",
+      "variant": "default",
+      "label": "Fresh"
+    },
+    {
+      "id": "publish-to-analyze",
+      "from": "publish",
+      "to": "analyze",
+      "variant": "default",
+      "label": "Facts"
+    },
+    {
+      "id": "ast-to-analyze",
+      "from": "ast",
+      "to": "analyze",
+      "variant": "default",
+      "label": "AST"
+    },
+    {
+      "id": "analyze-to-unknown",
+      "from": "analyze",
+      "to": "unknown",
+      "variant": "default",
+      "role": "branch",
+      "label": "Unresolved"
+    },
+    {
+      "id": "analyze-to-align",
+      "from": "analyze",
+      "to": "align",
+      "variant": "default",
+      "label": "Sources"
+    },
+    {
+      "id": "unknown-to-align",
+      "from": "unknown",
+      "to": "align",
+      "variant": "default",
+      "label": "Uncertainty"
+    },
+    {
+      "id": "align-to-consume",
+      "from": "align",
+      "to": "consume",
+      "variant": "emphasis",
+      "label": "Aligned"
+    },
+    {
+      "id": "analyze-to-selection",
+      "from": "analyze",
+      "to": "selection",
+      "label": "Before execution"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Example output lineage",
+      "items": [
+        "SELECT o.total AS revenue FROM reporting.orders_v2 AS o",
+        "Output ordinal 0, revenue, traces to the source column reporting.orders_v2.total.",
+        "Known source coordinates include database, schema, relation and column."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Schema and context differ",
+      "items": [
+        "The catalog contains source facts: relations, columns, native types and reported keys.",
+        "Application datasets contain mappings such as users and roles. Derived query context contains per-query app values."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Freshness and limits",
+      "items": [
+        "Failed refresh retains the previous catalog generation without resetting its age. Expired metadata is rejected.",
+        "Unknown lineage stays explicit; schema facts and model outputs do not establish access rights."
+      ]
+    }
+  ]
+}

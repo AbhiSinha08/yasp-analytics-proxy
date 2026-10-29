@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/schema-lineage.json",
+    "sha256": "1b23267348e1447ae26cb29184a211aeb55e388f2985a6c30568c4174efbd0cb",
+    "bytes": 6112
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/schema-lineage.html",
+    "sha256": "1d0d27a40e023eeee47bf9f8f27697fa4406f14850800a8ccbd0b3d7ca61561f",
+    "bytes": 823837
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/schema-lineage-review-2/schema-lineage.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/schema-lineage-review-2/schema-lineage.finalize-summary.json",
+    "browserCheckReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/schema-lineage-review-2/schema-lineage.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1844,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

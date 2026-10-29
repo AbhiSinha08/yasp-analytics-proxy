@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/sql-replacement.json",
+    "sha256": "bcac61ca1f4e6be1a5aab621989b2479a3765e7a9d2832e05fa6e52b64f9a3cb",
+    "bytes": 5635
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/sql-replacement.html",
+    "sha256": "ead715ce46588e44ddeb2204ae38686d245f67034bdde1f5e6677d05165fbe01",
+    "bytes": 819760
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/sql-replacement-final/sql-replacement.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/sql-replacement-final/sql-replacement.finalize-summary.json",
+    "browserCheckReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/sql-replacement-final/sql-replacement.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2109,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

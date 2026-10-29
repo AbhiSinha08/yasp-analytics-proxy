@@ -1,0 +1,60 @@
+{
+  "status": "pass",
+  "checks": "Desktop/narrow containment, interactive reader opening, no runtime exceptions",
+  "results": [
+    {
+      "slug": "overview",
+      "desktop": {
+        "title": "YASP puts application decisions in the query path · Archify",
+        "width": 1440,
+        "scrollWidth": 1425,
+        "diagrams": 3,
+        "body": "Skip to content\nYASP puts application decisions in the query path\nSystem\nLight\nDark\nClean\nExport\nA\nAnswer\nAsk\n\nYASP gives analytics clients "
+      },
+      "interactiveReader": {
+        "frames": 1,
+        "dialogs": 1
+      },
+      "mobile": {
+        "width": 417,
+        "scrollWidth": 417
+      }
+    },
+    {
+      "slug": "query-hooks",
+      "desktop": {
+        "title": "Application hooks shape the query and its results · Archify",
+        "width": 1440,
+        "scrollWidth": 1425,
+        "diagrams": 3,
+        "body": "Skip to content\nApplication hooks shape the query and its results\nSystem\nLight\nDark\nClean\nExport\nA\nAnswer\nAsk\n\nApplications can derive conte"
+      },
+      "interactiveReader": {
+        "frames": 1,
+        "dialogs": 1
+      },
+      "mobile": {
+        "width": 417,
+        "scrollWidth": 417
+      }
+    },
+    {
+      "slug": "runtime",
+      "desktop": {
+        "title": "Shared facts and bounded resources support each query · Archify",
+        "width": 1440,
+        "scrollWidth": 1425,
+        "diagrams": 4,
+        "body": "Skip to content\nShared facts and bounded resources support each query\nSystem\nLight\nDark\nClean\nExport\nA\nAnswer\nAsk\n\nYASP shares schema facts "
+      },
+      "interactiveReader": {
+        "frames": 1,
+        "dialogs": 1
+      },
+      "mobile": {
+        "width": 417,
+        "scrollWidth": 417
+      }
+    }
+  ]
+}

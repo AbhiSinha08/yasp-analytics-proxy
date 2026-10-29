@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/compute-routing.json",
+    "sha256": "3823f3e43765fac4372c74fa0f0fbe2d37b3447338f0f05190a180013c09f44a",
+    "bytes": 5313
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/compute-routing.html",
+    "sha256": "a607675304a41f5784d511241af3245a7866bd9a3ee70881893879e9ad5b3afe",
+    "bytes": 820868
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/compute-routing-embedded-revision-2/compute-routing.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/compute-routing-embedded-revision-2/compute-routing.finalize-summary.json",
+    "browserCheckReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/compute-routing-embedded-revision-2/compute-routing.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1743,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

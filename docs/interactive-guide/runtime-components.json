@@ -1,0 +1,316 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Runtime components and calls",
+    "output": "docs/interactive-guide/runtime-components.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "SQL requests",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        130,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 50,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "frontend",
+      "label": "Gateway",
+      "sublabel": "Postgres / Redshift",
+      "pos": [
+        230,
+        40
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 38,
+          "end_line": 62
+        },
+        {
+          "path": "src/gateway/query.rs",
+          "line": 70,
+          "end_line": 107
+        }
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Query stages",
+      "sublabel": "Parsing / decisions / rows",
+      "pos": [
+        430,
+        40
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 181
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 173,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "adapter",
+      "type": "backend",
+      "label": "Backend adapter",
+      "sublabel": "Credentials / sessions",
+      "pos": [
+        630,
+        40
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 280,
+          "end_line": 305
+        },
+        {
+          "path": "docs/PLAN.md",
+          "line": 24,
+          "end_line": 27
+        }
+      ]
+    },
+    {
+      "id": "source",
+      "type": "database",
+      "label": "Source bindings",
+      "sublabel": "Multiple targets / logins",
+      "pos": [
+        630,
+        205
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "docs/PLAN.md",
+          "line": 5,
+          "end_line": 15
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Schema catalog",
+      "sublabel": "Tables / columns / types",
+      "pos": [
+        230,
+        205
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 248
+        },
+        {
+          "path": "src/lineage.rs",
+          "line": 110,
+          "end_line": 123
+        }
+      ]
+    },
+    {
+      "id": "hooks",
+      "type": "backend",
+      "label": "Callbacks",
+      "sublabel": "Query / result behavior",
+      "pos": [
+        430,
+        205
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 322
+        },
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 173,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "database",
+      "label": "Redis result cache",
+      "sublabel": "Raw rows / data context",
+      "pos": [
+        630,
+        370
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 35,
+          "end_line": 62
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 190,
+          "end_line": 225
+        }
+      ]
+    },
+    {
+      "id": "datasets",
+      "type": "database",
+      "label": "Application dataset",
+      "sublabel": "Users / role mappings",
+      "pos": [
+        430,
+        370
+      ],
+      "size": [
+        150,
+        68
+      ],
+      "sources": [
+        {
+          "path": "hooks/examples/dataset_selector.rs",
+          "line": 18,
+          "end_line": 49
+        },
+        {
+          "path": "src/datasets.rs",
+          "line": 148,
+          "end_line": 207
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-gateway",
+      "from": "client",
+      "to": "gateway",
+      "variant": "emphasis",
+      "label": "SQL"
+    },
+    {
+      "id": "gateway-to-pipeline",
+      "from": "gateway",
+      "to": "pipeline",
+      "variant": "emphasis",
+      "label": "SQL"
+    },
+    {
+      "id": "pipeline-to-adapter",
+      "from": "pipeline",
+      "to": "adapter",
+      "variant": "emphasis",
+      "label": "Run"
+    },
+    {
+      "id": "adapter-to-source",
+      "from": "adapter",
+      "to": "source",
+      "variant": "emphasis",
+      "label": "Read-only"
+    },
+    {
+      "id": "gateway-to-catalog",
+      "from": "gateway",
+      "to": "catalog",
+      "variant": "default",
+      "label": "Metadata"
+    },
+    {
+      "id": "pipeline-to-catalog",
+      "from": "pipeline",
+      "to": "catalog",
+      "variant": "default",
+      "label": "Lineage"
+    },
+    {
+      "id": "pipeline-to-hooks",
+      "from": "pipeline",
+      "to": "hooks",
+      "variant": "default",
+      "label": "Invoke"
+    },
+    {
+      "id": "hooks-to-datasets",
+      "from": "hooks",
+      "to": "datasets",
+      "variant": "default",
+      "label": "Lookups"
+    },
+    {
+      "id": "pipeline-to-cache",
+      "from": "pipeline",
+      "to": "cache",
+      "variant": "default",
+      "label": "Opt-in"
+    }
+  ]
+}

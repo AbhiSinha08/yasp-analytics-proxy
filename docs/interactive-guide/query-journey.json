@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "An ordinary query from SQL to client rows",
+    "output": "docs/interactive-guide/query-journey.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "participants": [
+    {
+      "id": "client",
+      "label": "Client",
+      "type": "external",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 50,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "label": "Gateway",
+      "type": "frontend",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 181,
+          "label": "Context, parsing and replacement"
+        },
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 290,
+          "label": "Bound and reparse replacement SQL"
+        }
+      ]
+    },
+    {
+      "id": "app",
+      "label": "App hooks",
+      "type": "security",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322,
+          "label": "Derive context once"
+        },
+        {
+          "path": "src/hooks/selection.rs",
+          "line": 16,
+          "end_line": 34
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 156,
+          "end_line": 240,
+          "label": "Invoke hook and validate output"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "label": "Engine",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 219,
+          "end_line": 233
+        }
+      ]
+    },
+    {
+      "id": "source",
+      "label": "Source route",
+      "type": "database",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 144,
+          "end_line": 225,
+          "label": "Raw capture and clean publication"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "submit",
+      "from": "client",
+      "to": "gateway",
+      "y": 160,
+      "label": "Submit SQL",
+      "variant": "emphasis"
+    },
+    {
+      "id": "derive",
+      "from": "gateway",
+      "to": "app",
+      "y": 200,
+      "label": "Derive query context",
+      "variant": "default"
+    },
+    {
+      "id": "context",
+      "from": "app",
+      "to": "gateway",
+      "y": 235,
+      "label": "Values + input dialect",
+      "variant": "return"
+    },
+    {
+      "id": "modify",
+      "from": "gateway",
+      "to": "app",
+      "y": 275,
+      "label": "Parsed SQL: optional modifier",
+      "variant": "default"
+    },
+    {
+      "id": "effective",
+      "from": "app",
+      "to": "gateway",
+      "y": 310,
+      "label": "Replacement or no change",
+      "variant": "return"
+    },
+    {
+      "id": "dispatch",
+      "from": "gateway",
+      "to": "engine",
+      "y": 350,
+      "label": "Validated effective query",
+      "variant": "emphasis",
+      "note": "Generate ID and optional lineage after modification."
+    },
+    {
+      "id": "select",
+      "from": "engine",
+      "to": "app",
+      "y": 420,
+      "label": "Choose target / login / class",
+      "variant": "security"
+    },
+    {
+      "id": "decision",
+      "from": "app",
+      "to": "engine",
+      "y": 455,
+      "label": "Application route decision",
+      "variant": "return"
+    },
+    {
+      "id": "execute",
+      "from": "engine",
+      "to": "source",
+      "y": 495,
+      "label": "Resolve bounds; execute on miss",
+      "variant": "emphasis"
+    },
+    {
+      "id": "raw",
+      "from": "source",
+      "to": "engine",
+      "y": 530,
+      "label": "Raw columns + rows",
+      "variant": "return"
+    },
+    {
+      "id": "process",
+      "from": "engine",
+      "to": "app",
+      "y": 570,
+      "label": "Optional bounded result batch",
+      "variant": "default"
+    },
+    {
+      "id": "edits",
+      "from": "app",
+      "to": "engine",
+      "y": 605,
+      "label": "Text / NULL edits or row filter",
+      "variant": "return"
+    },
+    {
+      "id": "output",
+      "from": "engine",
+      "to": "gateway",
+      "y": 645,
+      "label": "Validated output chunks",
+      "variant": "return"
+    },
+    {
+      "id": "rows",
+      "from": "gateway",
+      "to": "client",
+      "y": 680,
+      "label": "Rows + emitted row count",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Scope",
+      "items": [
+        "Ordinary read-only simple query, outside an explicit transaction, shown on a cache miss.",
+        "Context, modification and result processing are optional. Configured routing invokes the selector."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Before this path",
+      "items": [
+        "Recognized metadata uses the catalog. Frontend setup and transaction controls use their own handling.",
+        "These paths bypass ordinary query context, modification, selection and result callbacks."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Streaming",
+      "items": [
+        "The processing exchange repeats per bounded batch; it does not collect the entire result.",
+        "Optional classification runs on a bounded raw prefix before result callbacks."
+      ]
+    }
+  ]
+}

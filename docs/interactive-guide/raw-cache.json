@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "A raw cache hit still uses current application decisions",
+    "output": "docs/interactive-guide/raw-cache.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "participants": [
+    {
+      "id": "query",
+      "label": "Effective query",
+      "type": "frontend",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 181,
+          "label": "Context, parsing and replacement"
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        }
+      ]
+    },
+    {
+      "id": "route",
+      "label": "Route validation",
+      "type": "security",
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119,
+          "label": "Resolve configured selection"
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 35,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "cache",
+      "label": "Raw cache",
+      "type": "database",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 35,
+          "end_line": 62,
+          "label": "Validated raw cache lookup"
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 229,
+          "end_line": 249
+        }
+      ]
+    },
+    {
+      "id": "process",
+      "label": "Current processing",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 85,
+          "end_line": 130,
+          "label": "Replay through current processing"
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 156,
+          "end_line": 240,
+          "label": "Invoke hook and validate output"
+        }
+      ]
+    },
+    {
+      "id": "client",
+      "label": "Client",
+      "type": "external",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 221,
+          "end_line": 240
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "current-route",
+      "from": "query",
+      "to": "route",
+      "y": 160,
+      "label": "Select with current context",
+      "variant": "security"
+    },
+    {
+      "id": "lookup",
+      "from": "route",
+      "to": "cache",
+      "y": 210,
+      "label": "Eligible? Probe validated scope",
+      "variant": "default",
+      "note": "Scope includes source, role, identity, session and effective query."
+    },
+    {
+      "id": "raw",
+      "from": "cache",
+      "to": "process",
+      "y": 295,
+      "label": "Valid raw hit + associated decisions",
+      "variant": "return",
+      "note": "No source execution or source capacity is acquired on a hit."
+    },
+    {
+      "id": "output",
+      "from": "process",
+      "to": "client",
+      "y": 380,
+      "label": "Apply current result hook; stream",
+      "variant": "emphasis",
+      "note": "Replay does not reuse a previous caller\u2019s transformed rows."
+    },
+    {
+      "id": "done",
+      "from": "process",
+      "to": "client",
+      "y": 465,
+      "label": "Complete with emitted row count",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "On a miss",
+      "items": [
+        "Execute the validated route and optionally capture raw results before result callbacks.",
+        "Publish only a bounded, complete, clean result under the physical source actually used."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Policy boundary",
+      "items": [
+        "Hits bypass source grants and source row policies until expiry; current route validation still runs.",
+        "Application context and hook versions are not automatically part of raw cache identity."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safe example scope",
+      "items": [
+        "Different source-side tenant filters must appear in effective SQL or the validated route/scope.",
+        "A tenant tag only in a SQL comment does not isolate raw cached results."
+      ]
+    }
+  ]
+}

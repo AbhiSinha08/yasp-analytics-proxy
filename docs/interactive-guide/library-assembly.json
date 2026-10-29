@@ -1,0 +1,172 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Assemble YASP inside a consuming application",
+    "output": "docs/interactive-guide/library-assembly.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "host",
+      "label": "Application assembly"
+    },
+    {
+      "id": "startup",
+      "label": "Startup readiness"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "settings",
+      "lane": "host",
+      "col": 0,
+      "type": "backend",
+      "label": "Resolve settings",
+      "sublabel": "Secrets, routes and bounds",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 30,
+          "end_line": 40
+        }
+      ]
+    },
+    {
+      "id": "callbacks",
+      "lane": "host",
+      "col": 1,
+      "type": "backend",
+      "label": "Bind callbacks",
+      "sublabel": "Compiled Rust or trusted Python",
+      "sources": [
+        {
+          "path": "docs/extensions.md",
+          "line": 27,
+          "end_line": 48
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "lane": "startup",
+      "col": 2,
+      "type": "backend",
+      "label": "Build services",
+      "sublabel": "Adapters share one budget",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 75,
+          "end_line": 84
+        }
+      ]
+    },
+    {
+      "id": "datasets",
+      "lane": "host",
+      "col": 2,
+      "type": "backend",
+      "label": "Load datasets",
+      "sublabel": "Optional application mappings",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 148,
+          "end_line": 207,
+          "label": "Startup and scheduled dataset loads"
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "lane": "startup",
+      "col": 1,
+      "type": "backend",
+      "label": "Load catalog",
+      "sublabel": "Required schema generation",
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 248,
+          "label": "Load and read a bounded snapshot"
+        }
+      ]
+    },
+    {
+      "id": "listen",
+      "lane": "startup",
+      "col": 0,
+      "type": "frontend",
+      "label": "Start serving",
+      "sublabel": "Attach services and listen",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 131,
+          "end_line": 156
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "settings-to-callbacks",
+      "from": "settings",
+      "to": "callbacks"
+    },
+    {
+      "id": "callbacks-to-datasets",
+      "from": "callbacks",
+      "to": "datasets"
+    },
+    {
+      "id": "datasets-to-services",
+      "from": "datasets",
+      "to": "services"
+    },
+    {
+      "id": "services-to-catalog",
+      "from": "services",
+      "to": "catalog"
+    },
+    {
+      "id": "catalog-to-listen",
+      "from": "catalog",
+      "to": "listen"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Application code stays outside core",
+      "items": [
+        "Bind application state to narrow callback contracts; register names and params at startup.",
+        "Rust extensions compile with the consuming application. Python files are supplied before startup."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Readiness and failure",
+      "items": [
+        "Configured dataset load failures and initial catalog load failures prevent serving.",
+        "Dataset refresh failures retain the last good data. Catalog refresh failures retain the last generation without extending its age."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Logical prerequisites",
+      "items": [
+        "Datasets load before adapter construction. The catalog is loaded before the listener starts.",
+        "Optional cache, lineage, classification and result hooks are attached only when configured."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/application-datasets.json",
+    "sha256": "33c9b9c0dfcb8a73ed787f6e68564bb05fe23ff9781ba84e70e5215f44013948",
+    "bytes": 4697
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/application-datasets.html",
+    "sha256": "50db7faefb7d09c808649879794876026c2a1ca7eee3bd842fed6d98daea36ed",
+    "bytes": 818181
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/application-datasets-final/application-datasets.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/application-datasets-final/application-datasets.finalize-summary.json",
+    "browserCheckReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/application-datasets-final/application-datasets.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1879,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

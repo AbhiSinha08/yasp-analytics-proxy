@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "d98f1f33-d7d7-4249-b358-273686d1eed9",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/result-processing.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/result-processing.html",
+  "specification": {
+    "sha256": "1bf6fd52160de04e81ab5d0a546c35f55190c66eff64ca7fc5d33ccf487e504a",
+    "bytes": 5881
+  },
+  "artifact": {
+    "sha256": "8b4fb2a6bc42ae8192a0ff1c050a14d23226cdc0df25b235d08b7342073adf9d",
+    "bytes": 820758
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "6a94e8ea-441e-49e7-aef0-8e4bd7966d39",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/data-query-flow.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/data-query-flow.html",
+  "specification": {
+    "sha256": "6b5f3ae701cc2c7fce9644b63797fac3d1de517f920abc121238bf1a1f02a945",
+    "bytes": 6823
+  },
+  "artifact": {
+    "sha256": "78e84fb2759f45c178c74dec57e6c7df05c65661a4057cbabb9c0aedf942dbbe",
+    "bytes": 826897
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime-components.json",
+    "sha256": "68d6785231b29aceec1cf29ac730bee6a42454bc218ef5a784366f8b8c40444e",
+    "bytes": 6140
+  },
+  "artifact": {
+    "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime-components.html",
+    "sha256": "4baba76301ad23797d24301f6835e156271d67265d11468130f9f48f79968cc4",
+    "bytes": 825100
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/runtime-components-embedded-revision/runtime-components.finalize.json",
+    "summaryReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/runtime-components-embedded-revision/runtime-components.finalize-summary.json",
+    "browserCheckReceipt": "/home/abhisinha08/code/yasp/docs/interactive-guide/evidence/runtime-components-embedded-revision/runtime-components.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-28T17:44:12.347Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1822,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

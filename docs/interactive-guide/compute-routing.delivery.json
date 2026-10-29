@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "a25a5ed6-21c7-4fa3-a69f-9d803954c71e",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/compute-routing.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/compute-routing.html",
+  "specification": {
+    "sha256": "3823f3e43765fac4372c74fa0f0fbe2d37b3447338f0f05190a180013c09f44a",
+    "bytes": 5313
+  },
+  "artifact": {
+    "sha256": "a607675304a41f5784d511241af3245a7866bd9a3ee70881893879e9ad5b3afe",
+    "bytes": 820868
+  }
+}

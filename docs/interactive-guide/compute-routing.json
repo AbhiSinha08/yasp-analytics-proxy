@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Compute class selection and source connection pools",
+    "output": "docs/interactive-guide/compute-routing.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "selector",
+      "type": "backend",
+      "label": "Backend selection",
+      "sublabel": "Target / login / compute class",
+      "pos": [
+        40,
+        170
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/hooks/selection.rs",
+          "line": 16,
+          "end_line": 34
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "login",
+      "type": "backend",
+      "label": "Login / role",
+      "sublabel": "finance_reader / audit_reader",
+      "pos": [
+        350,
+        170
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/hooks/selection.rs",
+          "line": 16,
+          "end_line": 34
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "light",
+      "type": "backend",
+      "label": "Light query",
+      "sublabel": "compute_type: light_query",
+      "pos": [
+        680,
+        40
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 32
+        }
+      ]
+    },
+    {
+      "id": "heavy",
+      "type": "backend",
+      "label": "Heavy query",
+      "sublabel": "compute_type: heavy_query",
+      "pos": [
+        680,
+        300
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 32
+        }
+      ]
+    },
+    {
+      "id": "small_a",
+      "type": "database",
+      "label": "Small instance a",
+      "sublabel": "Selected target + login",
+      "pos": [
+        1000,
+        40
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/backend/postgres.rs",
+          "line": 293,
+          "end_line": 315
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 34,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "small_b",
+      "type": "database",
+      "label": "Small instance b",
+      "sublabel": "Same target + login + class",
+      "pos": [
+        1330,
+        40
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/backend/postgres.rs",
+          "line": 293,
+          "end_line": 315
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 34,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "large_a",
+      "type": "database",
+      "label": "Large instance a",
+      "sublabel": "Selected target + login",
+      "pos": [
+        1000,
+        300
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/backend/postgres.rs",
+          "line": 293,
+          "end_line": 315
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 34,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "large_b",
+      "type": "database",
+      "label": "Large instance b",
+      "sublabel": "Same target + login + class",
+      "pos": [
+        1330,
+        300
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/backend/postgres.rs",
+          "line": 293,
+          "end_line": 315
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 34,
+          "end_line": 49
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "selector-to-login",
+      "from": "selector",
+      "to": "login",
+      "label": "Chosen login",
+      "variant": "emphasis"
+    },
+    {
+      "id": "login-to-light",
+      "from": "login",
+      "to": "light",
+      "label": "Light workload",
+      "variant": "default"
+    },
+    {
+      "id": "login-to-heavy",
+      "from": "login",
+      "to": "heavy",
+      "label": "Heavy workload",
+      "variant": "default"
+    },
+    {
+      "id": "light-to-small_a",
+      "from": "light",
+      "to": "small_a",
+      "label": "First eligible",
+      "variant": "emphasis"
+    },
+    {
+      "id": "small_a-to-small_b",
+      "from": "small_a",
+      "to": "small_b",
+      "label": "If a is full",
+      "variant": "default"
+    },
+    {
+      "id": "heavy-to-large_a",
+      "from": "heavy",
+      "to": "large_a",
+      "label": "First eligible",
+      "variant": "emphasis"
+    },
+    {
+      "id": "large_a-to-large_b",
+      "from": "large_a",
+      "to": "large_b",
+      "label": "If a is full",
+      "variant": "default"
+    }
+  ]
+}

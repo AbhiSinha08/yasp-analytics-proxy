@@ -1,0 +1,237 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Change SQL before query IDs, lineage and routing",
+    "output": "docs/interactive-guide/sql-replacement.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "application",
+      "label": "Original SQL and application rule"
+    },
+    {
+      "id": "validation",
+      "label": "Engine validation"
+    },
+    {
+      "id": "downstream",
+      "label": "Effective query"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "original",
+      "lane": "application",
+      "col": 0,
+      "type": "backend",
+      "label": "Original query",
+      "sublabel": "SQL + resolved input dialect",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 181,
+          "label": "Context, parsing and replacement"
+        }
+      ]
+    },
+    {
+      "id": "modifier",
+      "lane": "application",
+      "col": 1,
+      "type": "backend",
+      "label": "Invoke modifier",
+      "sublabel": "AST, context and datasets",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 290,
+          "label": "Bound and reparse replacement SQL"
+        }
+      ]
+    },
+    {
+      "id": "replacement",
+      "lane": "application",
+      "col": 2,
+      "type": "backend",
+      "label": "Return decision",
+      "sublabel": "Keep, replace or fail",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 267,
+          "end_line": 289
+        }
+      ]
+    },
+    {
+      "id": "parse",
+      "lane": "validation",
+      "col": 2,
+      "type": "backend",
+      "label": "Reparse replacement",
+      "sublabel": "New immutable syntax tree",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 284,
+          "end_line": 289
+        }
+      ]
+    },
+    {
+      "id": "check",
+      "lane": "validation",
+      "col": 1,
+      "type": "security",
+      "label": "Check read-only SQL",
+      "sublabel": "Bounded supported statement",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 173,
+          "end_line": 182
+        }
+      ]
+    },
+    {
+      "id": "effective",
+      "lane": "validation",
+      "col": 0,
+      "type": "backend",
+      "label": "Finalize query ID",
+      "sublabel": "ID reflects effective SQL",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 173,
+          "end_line": 182
+        }
+      ]
+    },
+    {
+      "id": "route",
+      "lane": "downstream",
+      "col": 0,
+      "type": "backend",
+      "label": "Lineage and routing",
+      "sublabel": "Use the effective query",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        }
+      ]
+    },
+    {
+      "id": "reject",
+      "lane": "downstream",
+      "col": 2,
+      "type": "security",
+      "label": "Reject request",
+      "sublabel": "No original-SQL fallback",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 267,
+          "end_line": 282
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "original-to-modifier",
+      "from": "original",
+      "to": "modifier",
+      "variant": "default"
+    },
+    {
+      "id": "modifier-to-replacement",
+      "from": "modifier",
+      "to": "replacement",
+      "variant": "default"
+    },
+    {
+      "id": "replacement-to-parse",
+      "from": "replacement",
+      "to": "parse",
+      "variant": "default",
+      "label": "Replace"
+    },
+    {
+      "id": "replacement-to-check",
+      "from": "replacement",
+      "to": "check",
+      "variant": "default",
+      "role": "branch",
+      "label": "Keep"
+    },
+    {
+      "id": "parse-to-check",
+      "from": "parse",
+      "to": "check",
+      "variant": "default"
+    },
+    {
+      "id": "check-to-effective",
+      "from": "check",
+      "to": "effective",
+      "variant": "default"
+    },
+    {
+      "id": "effective-to-route",
+      "from": "effective",
+      "to": "route",
+      "variant": "emphasis",
+      "label": "Then"
+    },
+    {
+      "id": "replacement-to-reject",
+      "from": "replacement",
+      "to": "reject",
+      "variant": "security",
+      "role": "error",
+      "label": "Failure"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Existing Rust example",
+      "items": [
+        "SELECT o.id, o.total FROM logical.orders AS o",
+        "becomes SELECT o.id, o.total FROM reporting.orders_v2 AS o.",
+        "The table-rename callback preserves explicit aliases and rejects matching tables without an alias."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Context stays stable",
+      "items": [
+        "Context is derived once from original SQL. Rewriting does not derive it again or change its resolved dialect.",
+        "The modifier receives no final query ID, lineage, selected route or result classifications."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Policy belongs to the application",
+      "items": [
+        "The engine validates execution syntax and configured bounds; the app owns transformation meaning.",
+        "Automatic cross-dialect translation is planned. A configured replacement is already available."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "179e1941-acec-43f3-ab14-e2c3e8f25a69",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/data-context-sources.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/data-context-sources.html",
+  "specification": {
+    "sha256": "e2f00542639e15df454513b962796ae3c120d5f40f14f0fb18f925e42c83baac",
+    "bytes": 5137
+  },
+  "artifact": {
+    "sha256": "b1822b4d16688fd52db99a1d4bc2718e80697d1f4cf5340685018d8c441a5c92",
+    "bytes": 822300
+  }
+}

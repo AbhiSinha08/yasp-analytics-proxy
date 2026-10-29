@@ -1,0 +1,245 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Process raw results immediately before client output",
+    "output": "docs/interactive-guide/result-processing.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "raw",
+      "label": "Raw results and data contexts"
+    },
+    {
+      "id": "hook",
+      "label": "Optional application processing"
+    },
+    {
+      "id": "output",
+      "label": "Validated client stream"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "raw",
+      "lane": "raw",
+      "col": 0,
+      "type": "database",
+      "label": "Receive raw rows",
+      "sublabel": "Source execution or cache replay",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 144,
+          "end_line": 225,
+          "label": "Raw capture and clean publication"
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 85,
+          "end_line": 130,
+          "label": "Replay through current processing"
+        }
+      ]
+    },
+    {
+      "id": "classify",
+      "lane": "raw",
+      "col": 1,
+      "type": "backend",
+      "label": "Optional classification",
+      "sublabel": "Bounded raw prefix + model",
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 212,
+          "end_line": 269
+        }
+      ]
+    },
+    {
+      "id": "batch",
+      "lane": "hook",
+      "col": 2,
+      "type": "backend",
+      "label": "Build bounded batch",
+      "sublabel": "Rows, columns and data contexts",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 102,
+          "end_line": 147
+        }
+      ]
+    },
+    {
+      "id": "configured",
+      "lane": "raw",
+      "col": 2,
+      "type": "security",
+      "label": "Result hook enabled?",
+      "sublabel": "Configured at startup",
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 137,
+          "end_line": 159
+        }
+      ]
+    },
+    {
+      "id": "edit",
+      "lane": "hook",
+      "col": 1,
+      "type": "backend",
+      "label": "Apply application edits",
+      "sublabel": "Text, SQL NULLs, row filtering",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 156,
+          "end_line": 240,
+          "label": "Invoke hook and validate output"
+        }
+      ]
+    },
+    {
+      "id": "validate",
+      "lane": "hook",
+      "col": 0,
+      "type": "security",
+      "label": "Validate batch",
+      "sublabel": "Schema, types and byte bounds",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 221,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "output",
+      "lane": "output",
+      "col": 0,
+      "type": "frontend",
+      "label": "Stream client rows",
+      "sublabel": "Backpressure + emitted count",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 144,
+          "end_line": 147
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 227,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "direct",
+      "lane": "output",
+      "col": 2,
+      "type": "backend",
+      "label": "Forward raw frames",
+      "sublabel": "When no result hook",
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 137,
+          "end_line": 159
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "raw-to-classify",
+      "from": "raw",
+      "to": "classify",
+      "variant": "default"
+    },
+    {
+      "id": "classify-to-configured",
+      "from": "classify",
+      "to": "configured",
+      "variant": "default"
+    },
+    {
+      "id": "batch-to-edit",
+      "from": "batch",
+      "to": "edit",
+      "variant": "default"
+    },
+    {
+      "id": "configured-to-batch",
+      "from": "configured",
+      "to": "batch",
+      "variant": "default",
+      "label": "Yes"
+    },
+    {
+      "id": "edit-to-validate",
+      "from": "edit",
+      "to": "validate",
+      "variant": "default"
+    },
+    {
+      "id": "validate-to-output",
+      "from": "validate",
+      "to": "output",
+      "variant": "emphasis",
+      "label": "Valid"
+    },
+    {
+      "id": "configured-to-direct",
+      "from": "configured",
+      "to": "direct",
+      "variant": "default",
+      "role": "branch",
+      "label": "No"
+    },
+    {
+      "id": "direct-to-output",
+      "from": "direct",
+      "to": "output",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Concrete edits",
+      "items": [
+        "Text: customer_name \"Ada\" becomes \"ADA\". Any cell may become SQL NULL.",
+        "An application policy may set email to NULL and filter rows with retain_rows.",
+        "No inserted rows, schema changes or reordering of retained rows are allowed."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Classification is optional evidence",
+      "items": [
+        "Raw output lineage and optional column classifications are provided to the callback.",
+        "Unavailable classification remains explicit. Application hooks interpret it; mandatory engine masking remains planned."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Failure and cache behavior",
+      "items": [
+        "An invalid or failed batch is rejected without sending its raw fallback. Earlier chunks cannot be retracted.",
+        "Cache entries contain original source rows. Current result processing runs on every replay."
+      ]
+    }
+  ]
+}

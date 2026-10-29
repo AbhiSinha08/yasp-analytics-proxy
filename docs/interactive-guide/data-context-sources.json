@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Data context from lineage and the decision model",
+    "output": "docs/interactive-guide/data-context-sources.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "sql",
+      "type": "backend",
+      "label": "Effective SQL",
+      "sublabel": "SQL B / parsed tree",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 129
+        }
+      ]
+    },
+    {
+      "id": "lineage",
+      "type": "backend",
+      "label": "Lineage analysis",
+      "sublabel": "Resolve output origins",
+      "pos": [
+        320,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/lineage.rs",
+          "line": 110,
+          "end_line": 175
+        }
+      ]
+    },
+    {
+      "id": "ast",
+      "type": "backend",
+      "label": "AST data context",
+      "sublabel": "data_contexts.ast",
+      "pos": [
+        600,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/lineage.rs",
+          "line": 81,
+          "end_line": 107
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 129
+        }
+      ]
+    },
+    {
+      "id": "schema",
+      "type": "database",
+      "label": "Schema catalog",
+      "sublabel": "Source structure",
+      "pos": [
+        40,
+        240
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 243,
+          "end_line": 248
+        }
+      ]
+    },
+    {
+      "id": "qc",
+      "type": "backend",
+      "label": "Query context",
+      "sublabel": "User / policy / workload",
+      "pos": [
+        900,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/hooks/query_context.rs",
+          "line": 14,
+          "end_line": 31
+        }
+      ]
+    },
+    {
+      "id": "result",
+      "type": "backend",
+      "label": "Process result",
+      "sublabel": "Query + raw data context",
+      "pos": [
+        900,
+        240
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 178,
+          "end_line": 191
+        }
+      ]
+    },
+    {
+      "id": "samples",
+      "type": "backend",
+      "label": "Column samples",
+      "sublabel": "Metadata + raw values",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 212,
+          "end_line": 255
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "Decision model",
+      "sublabel": "Endpoint / questions",
+      "pos": [
+        320,
+        440
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/decision_model/client.rs",
+          "line": 104,
+          "end_line": 131
+        }
+      ]
+    },
+    {
+      "id": "decisions",
+      "type": "backend",
+      "label": "Model data context",
+      "sublabel": "data_contexts.decision_model",
+      "pos": [
+        600,
+        440
+      ],
+      "size": [
+        220,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/decision_model.rs",
+          "line": 104,
+          "end_line": 138
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "sql-to-lineage",
+      "from": "sql",
+      "to": "lineage",
+      "label": "Parsed SQL",
+      "variant": "emphasis"
+    },
+    {
+      "id": "schema-to-lineage",
+      "from": "schema",
+      "to": "lineage",
+      "label": "Schema facts",
+      "variant": "default"
+    },
+    {
+      "id": "lineage-to-ast",
+      "from": "lineage",
+      "to": "ast",
+      "label": "Origins",
+      "variant": "emphasis"
+    },
+    {
+      "id": "samples-to-model",
+      "from": "samples",
+      "to": "model",
+      "label": "Samples",
+      "variant": "emphasis"
+    },
+    {
+      "id": "model-to-decisions",
+      "from": "model",
+      "to": "decisions",
+      "label": "Answers + scores",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ast-to-result",
+      "from": "ast",
+      "to": "result",
+      "label": "Aligned origins",
+      "variant": "default"
+    },
+    {
+      "id": "decisions-to-result",
+      "from": "decisions",
+      "to": "result",
+      "label": "Classification",
+      "variant": "default"
+    },
+    {
+      "id": "qc-to-result",
+      "from": "qc",
+      "to": "result",
+      "label": "App values",
+      "variant": "default"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "79beb037-2d9e-4930-8231-af89e442b8e5",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/system-map.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/system-map.html",
+  "specification": {
+    "sha256": "bf8695098cdf7776f95ad3af4cb1090e39ed695f853c980f6bc2c8e4a8412794",
+    "bytes": 6068
+  },
+  "artifact": {
+    "sha256": "465c2d95f365f6d80ad0b914379d7b1dbdceddc7f80e0c336086e51401affb9f",
+    "bytes": 820965
+  }
+}

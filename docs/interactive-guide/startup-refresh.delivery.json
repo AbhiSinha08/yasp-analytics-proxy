@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "7f6076c8-84c0-4d94-89f4-f53caf28878b",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/startup-refresh.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/startup-refresh.html",
+  "specification": {
+    "sha256": "7d9f01c62433f2827682d54726a7355938acf02cf9f435ca7d228dd263fcb0a7",
+    "bytes": 3982
+  },
+  "artifact": {
+    "sha256": "038ccb7be6bfcfae524d31e0a1d8a8acc668e720bb4f2cade16ecd70cf8c0dc1",
+    "bytes": 815582
+  }
+}

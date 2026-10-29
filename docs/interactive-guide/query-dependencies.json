@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Query execution: callbacks, shared context and source options",
+    "output": "docs/interactive-guide/query-dependencies.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "frontend",
+      "label": "Client SQL A",
+      "sublabel": "SQL + context comments",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 145
+        }
+      ]
+    },
+    {
+      "id": "context",
+      "type": "backend",
+      "label": "Query context",
+      "sublabel": "Extract hints / lookup user",
+      "pos": [
+        310,
+        40
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322
+        },
+        {
+          "path": "src/hooks/query_context.rs",
+          "line": 14,
+          "end_line": 31
+        }
+      ]
+    },
+    {
+      "id": "modify",
+      "type": "backend",
+      "label": "Modify query",
+      "sublabel": "SQL A -> SQL B",
+      "pos": [
+        580,
+        40
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 290
+        }
+      ]
+    },
+    {
+      "id": "dataset",
+      "type": "database",
+      "label": "Application dataset",
+      "sublabel": "users / table mappings",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 148,
+          "end_line": 207
+        },
+        {
+          "path": "hooks/examples/dataset_selector.rs",
+          "line": 18,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "id": "lineage",
+      "type": "backend",
+      "label": "Lineage analysis",
+      "sublabel": "SQL B + schema catalog",
+      "pos": [
+        310,
+        250
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 149
+        },
+        {
+          "path": "src/lineage.rs",
+          "line": 110,
+          "end_line": 175
+        }
+      ]
+    },
+    {
+      "id": "select",
+      "type": "backend",
+      "label": "Select source",
+      "sublabel": "Target / login / class",
+      "pos": [
+        580,
+        250
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/hooks/selection.rs",
+          "line": 16,
+          "end_line": 34
+        },
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Schema catalog",
+      "sublabel": "Source tables / columns",
+      "pos": [
+        40,
+        470
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 248
+        }
+      ]
+    },
+    {
+      "id": "raw",
+      "type": "backend",
+      "label": "Raw result",
+      "sublabel": "email / total",
+      "pos": [
+        950,
+        510
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 144,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "id": "process",
+      "type": "backend",
+      "label": "Process result",
+      "sublabel": "Query context + data context",
+      "pos": [
+        580,
+        510
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 173,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "output",
+      "type": "frontend",
+      "label": "Client result",
+      "sublabel": "NULL / 42.50",
+      "pos": [
+        250,
+        510
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 221,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "Decision model",
+      "sublabel": "Column metadata + samples",
+      "pos": [
+        950,
+        750
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 212,
+          "end_line": 269
+        },
+        {
+          "path": "src/decision_model/client.rs",
+          "line": 89,
+          "end_line": 178
+        }
+      ]
+    },
+    {
+      "id": "sources",
+      "type": "database",
+      "label": "Source execution",
+      "sublabel": "Multiple targets / logins",
+      "pos": [
+        950,
+        250
+      ],
+      "size": [
+        230,
+        100
+      ],
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 280,
+          "end_line": 305
+        },
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 30
+        },
+        {
+          "path": "docs/multi-engine.md",
+          "line": 37,
+          "end_line": 57
+        }
+      ],
+      "icon": "database"
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-context",
+      "from": "client",
+      "to": "context",
+      "label": "SQL A",
+      "variant": "emphasis"
+    },
+    {
+      "id": "context-to-modify",
+      "from": "context",
+      "to": "modify",
+      "label": "Context",
+      "variant": "emphasis"
+    },
+    {
+      "id": "context-to-dataset",
+      "from": "context",
+      "to": "dataset",
+      "label": "User lookup",
+      "variant": "default"
+    },
+    {
+      "id": "dataset-to-context",
+      "from": "dataset",
+      "to": "context",
+      "label": "User mapping",
+      "variant": "default"
+    },
+    {
+      "id": "modify-to-lineage",
+      "from": "modify",
+      "to": "lineage",
+      "label": "SQL B",
+      "variant": "default"
+    },
+    {
+      "id": "lineage-to-catalog",
+      "from": "lineage",
+      "to": "catalog",
+      "label": "Read schema",
+      "variant": "default"
+    },
+    {
+      "id": "catalog-to-lineage",
+      "from": "catalog",
+      "to": "lineage",
+      "label": "Schema facts",
+      "variant": "default"
+    },
+    {
+      "id": "modify-to-select",
+      "from": "modify",
+      "to": "select",
+      "label": "SQL B",
+      "variant": "emphasis"
+    },
+    {
+      "id": "raw-to-process",
+      "from": "raw",
+      "to": "process",
+      "label": "Raw rows",
+      "variant": "emphasis"
+    },
+    {
+      "id": "raw-to-model",
+      "from": "raw",
+      "to": "model",
+      "label": "Column samples",
+      "variant": "default"
+    },
+    {
+      "id": "model-to-process",
+      "from": "model",
+      "to": "process",
+      "label": "Model data context",
+      "variant": "default"
+    },
+    {
+      "id": "lineage-to-process",
+      "from": "lineage",
+      "to": "process",
+      "label": "AST data context",
+      "variant": "default"
+    },
+    {
+      "id": "process-to-output",
+      "from": "process",
+      "to": "output",
+      "label": "Processed rows",
+      "variant": "emphasis"
+    },
+    {
+      "id": "select-to-sources",
+      "from": "select",
+      "to": "sources",
+      "label": "SQL B",
+      "variant": "emphasis"
+    },
+    {
+      "id": "translate-to-source",
+      "from": "select",
+      "to": "sources",
+      "label": "Dialect translation (planned)",
+      "variant": "default"
+    },
+    {
+      "id": "sources-to-raw",
+      "from": "sources",
+      "to": "raw",
+      "label": "Rows",
+      "variant": "default"
+    }
+  ]
+}

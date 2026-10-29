@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ac168780-61b6-4011-8d1a-1df1259c9d43",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/sql-replacement.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/sql-replacement.html",
+  "specification": {
+    "sha256": "1e79719f62cfd6eea9a9b01c15724df528275306e9ba86b679a9ee095b6f1e1c",
+    "bytes": 5636
+  },
+  "artifact": {
+    "sha256": "66c05f68c3ddd8901d0b4bd34d5759cd6ac2c89375908fa398be1ae21558bb40",
+    "bytes": 819763
+  }
+}

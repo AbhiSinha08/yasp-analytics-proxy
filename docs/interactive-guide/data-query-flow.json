@@ -1,0 +1,320 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Ordinary data query: execution and raw cache replay",
+    "output": "docs/interactive-guide/data-query-flow.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "prepare",
+      "label": "Prepare the effective query"
+    },
+    {
+      "id": "route",
+      "label": "Resolve source access"
+    },
+    {
+      "id": "deliver",
+      "label": "Read and deliver results"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "input",
+      "lane": "prepare",
+      "col": 0,
+      "type": "frontend",
+      "label": "Client SQL",
+      "sublabel": "Authenticated connection",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 145
+        }
+      ]
+    },
+    {
+      "id": "context",
+      "lane": "prepare",
+      "col": 1,
+      "type": "backend",
+      "label": "Derive context",
+      "sublabel": "Original SQL + app values",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322
+        }
+      ],
+      "tag": "Optional app hook"
+    },
+    {
+      "id": "modify",
+      "lane": "prepare",
+      "col": 2,
+      "type": "backend",
+      "label": "Parse / modify",
+      "sublabel": "Reparse replacement SQL",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 290
+        }
+      ],
+      "tag": "Optional app hook"
+    },
+    {
+      "id": "validate",
+      "lane": "prepare",
+      "col": 3,
+      "type": "security",
+      "label": "Validate query",
+      "sublabel": "Read-only + effective ID",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 173,
+          "end_line": 182
+        }
+      ]
+    },
+    {
+      "id": "lineage",
+      "lane": "route",
+      "col": 3,
+      "type": "backend",
+      "label": "Analyze lineage",
+      "sublabel": "Effective tree + catalog",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 129
+        }
+      ],
+      "tag": "Optional"
+    },
+    {
+      "id": "select",
+      "lane": "route",
+      "col": 2,
+      "type": "backend",
+      "label": "Select route",
+      "sublabel": "Target / login / class",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 134,
+          "end_line": 149
+        },
+        {
+          "path": "hooks/examples/dataset_selector.rs",
+          "line": 18,
+          "end_line": 49
+        }
+      ],
+      "tag": "Application hook"
+    },
+    {
+      "id": "bounds",
+      "lane": "route",
+      "col": 1,
+      "type": "security",
+      "label": "Validate route",
+      "sublabel": "Configured choices only",
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 35,
+          "end_line": 37
+        }
+      ]
+    },
+    {
+      "id": "lookup",
+      "lane": "route",
+      "col": 0,
+      "type": "database",
+      "label": "Cache lookup",
+      "sublabel": "Eligibility + raw scope",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 35,
+          "end_line": 62
+        }
+      ],
+      "tag": "Opt-in"
+    },
+    {
+      "id": "read",
+      "lane": "deliver",
+      "col": 0,
+      "type": "backend",
+      "label": "Source execution",
+      "sublabel": "Admitted source session",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 144,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "id": "raw",
+      "lane": "deliver",
+      "col": 1,
+      "type": "backend",
+      "label": "Raw rows",
+      "sublabel": "Source or raw replay",
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 85,
+          "end_line": 130
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 155,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "id": "process",
+      "lane": "deliver",
+      "col": 2,
+      "type": "backend",
+      "label": "Process results",
+      "sublabel": "Classify / app row edits",
+      "sources": [
+        {
+          "path": "src/execution/classification.rs",
+          "line": 212,
+          "end_line": 269
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 173,
+          "end_line": 240
+        }
+      ],
+      "tag": "Optional stages"
+    },
+    {
+      "id": "output",
+      "lane": "deliver",
+      "col": 3,
+      "type": "frontend",
+      "label": "Client output",
+      "sublabel": "Validated rows + count",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 221,
+          "end_line": 240
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 144,
+          "end_line": 147
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "input-to-context",
+      "from": "input",
+      "to": "context",
+      "variant": "default"
+    },
+    {
+      "id": "context-to-modify",
+      "from": "context",
+      "to": "modify",
+      "variant": "default"
+    },
+    {
+      "id": "modify-to-validate",
+      "from": "modify",
+      "to": "validate",
+      "variant": "default"
+    },
+    {
+      "id": "validate-to-lineage",
+      "from": "validate",
+      "to": "lineage",
+      "variant": "default",
+      "label": "Read-only"
+    },
+    {
+      "id": "lineage-to-select",
+      "from": "lineage",
+      "to": "select",
+      "variant": "default"
+    },
+    {
+      "id": "select-to-bounds",
+      "from": "select",
+      "to": "bounds",
+      "variant": "default"
+    },
+    {
+      "id": "bounds-to-lookup",
+      "from": "bounds",
+      "to": "lookup",
+      "variant": "security",
+      "label": "Allowed"
+    },
+    {
+      "id": "lookup-to-read",
+      "from": "lookup",
+      "to": "read",
+      "variant": "default",
+      "label": "Miss / off"
+    },
+    {
+      "id": "lookup-to-raw",
+      "from": "lookup",
+      "to": "raw",
+      "variant": "default",
+      "label": "Valid hit"
+    },
+    {
+      "id": "read-to-raw",
+      "from": "read",
+      "to": "raw",
+      "variant": "default"
+    },
+    {
+      "id": "raw-to-process",
+      "from": "raw",
+      "to": "process",
+      "variant": "default"
+    },
+    {
+      "id": "process-to-output",
+      "from": "process",
+      "to": "output",
+      "variant": "default"
+    }
+  ]
+}

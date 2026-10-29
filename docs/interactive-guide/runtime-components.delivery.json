@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c2a975bc-375d-4982-84d2-a359d6c8cba6",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime-components.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/runtime-components.html",
+  "specification": {
+    "sha256": "68d6785231b29aceec1cf29ac730bee6a42454bc218ef5a784366f8b8c40444e",
+    "bytes": 6140
+  },
+  "artifact": {
+    "sha256": "4baba76301ad23797d24301f6835e156271d67265d11468130f9f48f79968cc4",
+    "bytes": 825100
+  }
+}

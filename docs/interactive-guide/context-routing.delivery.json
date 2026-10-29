@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "185d4d42-e38e-496b-bc49-7860a3b2022c",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/context-routing.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/context-routing.html",
+  "specification": {
+    "sha256": "26d2816f41f466e7470f16b4e3c2bd3a4c55bbfe57545969f4bba688b8130fb5",
+    "bytes": 5839
+  },
+  "artifact": {
+    "sha256": "07f7f3e909d5e83bda0390f16ee302ea5fc3fe6df37ccd4ab6ded62b153060db",
+    "bytes": 818525
+  }
+}

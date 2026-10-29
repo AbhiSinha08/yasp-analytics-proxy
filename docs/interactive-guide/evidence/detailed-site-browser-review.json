@@ -1,0 +1,33 @@
+{
+  "status": "pass",
+  "htmlSha256": "8b13c7ee5a4aeae3858104d1496b8c4916abf7829122bea8ac7c36e14b78a692",
+  "queryStates": 9,
+  "diagramNodeClicks": 5,
+  "previousNext": true,
+  "visibleSupportPanel": 1,
+  "supportPanels": [
+    "panel-startup",
+    "panel-compute",
+    "panel-data"
+  ],
+  "keyboardTabs": true,
+  "layouts": [
+    {
+      "width": 1440,
+      "content": 1425
+    },
+    {
+      "width": 1600,
+      "content": 1585
+    },
+    {
+      "width": 768,
+      "content": 753
+    },
+    {
+      "width": 390,
+      "content": 375
+    }
+  ],
+  "runtimeErrors": 0
+}

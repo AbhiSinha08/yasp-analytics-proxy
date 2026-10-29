@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "YASP: one connection, application-defined behavior",
+    "output": "docs/interactive-guide/system-map.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    },
+    "views": [
+      {
+        "id": "journey",
+        "label": "Query journey",
+        "focus": [
+          "client",
+          "gateway",
+          "core",
+          "adapter",
+          "source"
+        ]
+      },
+      {
+        "id": "customize",
+        "label": "Application boundary",
+        "focus": [
+          "core",
+          "callbacks"
+        ]
+      },
+      {
+        "id": "schema",
+        "label": "Schema discovery",
+        "focus": [
+          "gateway",
+          "catalog"
+        ]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Analytics client",
+      "sublabel": "One connection configuration",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docs/PLAN.md",
+          "line": 68,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "frontend",
+      "label": "Client gateway",
+      "sublabel": "Identity, setup, metadata",
+      "pos": [
+        370,
+        40
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 50,
+          "end_line": 88
+        },
+        {
+          "path": "src/gateway/query.rs",
+          "line": 119,
+          "end_line": 181,
+          "label": "Context, parsing and replacement"
+        }
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "Shared query engine",
+      "sublabel": "Validate, route, cache, process",
+      "pos": [
+        710,
+        40
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 219,
+          "end_line": 233
+        }
+      ]
+    },
+    {
+      "id": "callbacks",
+      "type": "security",
+      "label": "Application callbacks",
+      "sublabel": "Context, policy, SQL and rows",
+      "pos": [
+        1040,
+        40
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docs/PLAN.md",
+          "line": 29,
+          "end_line": 40
+        },
+        {
+          "path": "src/execution/processing.rs",
+          "line": 156,
+          "end_line": 240,
+          "label": "Invoke hook and validate output"
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Schema catalog",
+      "sublabel": "Immutable source facts",
+      "pos": [
+        370,
+        270
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 248,
+          "label": "Load and read a bounded snapshot"
+        }
+      ]
+    },
+    {
+      "id": "adapter",
+      "type": "backend",
+      "label": "Backend adapter",
+      "sublabel": "Credentials, sessions, values",
+      "pos": [
+        710,
+        270
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docs/PLAN.md",
+          "line": 24,
+          "end_line": 27
+        },
+        {
+          "path": "src/backend/execution.rs",
+          "line": 280,
+          "end_line": 305
+        }
+      ]
+    },
+    {
+      "id": "source",
+      "type": "database",
+      "label": "Selected source",
+      "sublabel": "Source-role access enforcement",
+      "pos": [
+        1040,
+        270
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docs/PLAN.md",
+          "line": 5,
+          "end_line": 15
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-gateway",
+      "from": "client",
+      "to": "gateway",
+      "variant": "emphasis",
+      "label": "SQL"
+    },
+    {
+      "id": "gateway-to-core",
+      "from": "gateway",
+      "to": "core",
+      "variant": "emphasis",
+      "label": "Data query"
+    },
+    {
+      "id": "core-to-callbacks",
+      "from": "core",
+      "to": "callbacks",
+      "variant": "security",
+      "label": "Invoke hooks"
+    },
+    {
+      "id": "gateway-to-catalog",
+      "from": "gateway",
+      "to": "catalog",
+      "variant": "default",
+      "label": "Metadata"
+    },
+    {
+      "id": "core-to-adapter",
+      "from": "core",
+      "to": "adapter",
+      "variant": "emphasis",
+      "label": "Validated route"
+    },
+    {
+      "id": "adapter-to-source",
+      "from": "adapter",
+      "to": "source",
+      "variant": "emphasis",
+      "label": "Read-only SQL"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Reusable library + host",
+      "items": [
+        "The consuming application registers callbacks and supplies configuration before listening.",
+        "The engine owns invocation, validation, adapters and resource limits."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Optional paths",
+      "items": [
+        "Raw result caching is opt-in. Hits still select a current route and run current result processing.",
+        "Catalog metadata and frontend controls bypass ordinary query callbacks."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Expansion boundary",
+      "items": [
+        "Client protocol, source adapter and SQL translation are separate capabilities.",
+        "Automatic translation, lifecycle callbacks and mandatory engine masking remain planned."
+      ]
+    }
+  ]
+}

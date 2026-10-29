@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c499c5e9-1ca8-46c0-93dc-d8ca8722dee9",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/capacity-sessions.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/capacity-sessions.html",
+  "specification": {
+    "sha256": "2710fca1300d1a28230ee235d60136c73acbb617c5e51447fbab3e5d2b034390",
+    "bytes": 6340
+  },
+  "artifact": {
+    "sha256": "d414ae09161819a2440375a37bc4a38cbc9da0870d7965f4b91d3e38f34a7153",
+    "bytes": 823240
+  }
+}

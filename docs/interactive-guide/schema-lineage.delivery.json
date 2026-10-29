@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "11eaaf40-9682-4774-a9aa-451b246e2510",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/schema-lineage.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/schema-lineage.html",
+  "specification": {
+    "sha256": "1b23267348e1447ae26cb29184a211aeb55e388f2985a6c30568c4174efbd0cb",
+    "bytes": 6112
+  },
+  "artifact": {
+    "sha256": "1d0d27a40e023eeee47bf9f8f27697fa4406f14850800a8ccbd0b3d7ca61561f",
+    "bytes": 823837
+  }
+}

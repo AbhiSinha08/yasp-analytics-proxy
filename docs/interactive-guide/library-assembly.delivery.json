@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "741b597d-f68c-4093-b10d-2ac46de6ebad",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/library-assembly.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/library-assembly.html",
+  "specification": {
+    "sha256": "47ea0954445f9e3b0f968ad2d231418cf0619fd856530d61ec3fdb10e6a6688c",
+    "bytes": 4108
+  },
+  "artifact": {
+    "sha256": "c69574372201f77bf117b00f43a0bc4178ff07a5c53222a66f3c1898e9c1c6c5",
+    "bytes": 813859
+  }
+}

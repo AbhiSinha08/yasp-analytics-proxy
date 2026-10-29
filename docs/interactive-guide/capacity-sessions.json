@@ -1,0 +1,263 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Capacity and transaction affinity stay engine-owned",
+    "output": "docs/interactive-guide/capacity-sessions.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "route",
+      "label": "Per-query selection"
+    },
+    {
+      "id": "capacity",
+      "label": "Admitted resource ownership"
+    },
+    {
+      "id": "session",
+      "label": "Retained session and cleanup"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "route",
+      "lane": "route",
+      "col": 0,
+      "type": "security",
+      "label": "Validate current route",
+      "sublabel": "Selection runs per data query",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        }
+      ]
+    },
+    {
+      "id": "tx",
+      "lane": "route",
+      "col": 1,
+      "type": "security",
+      "label": "Transaction active?",
+      "sublabel": "Cache bypass inside a block",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 161,
+          "end_line": 218
+        }
+      ]
+    },
+    {
+      "id": "affinity",
+      "lane": "route",
+      "col": 2,
+      "type": "security",
+      "label": "Check pinned route",
+      "sublabel": "Reject incompatible decisions",
+      "sources": [
+        {
+          "path": "src/execution/transaction.rs",
+          "line": 133,
+          "end_line": 168,
+          "label": "Retain and check the source route"
+        }
+      ]
+    },
+    {
+      "id": "capacity",
+      "lane": "capacity",
+      "col": 0,
+      "type": "backend",
+      "label": "Acquire or reuse",
+      "sublabel": "Reuse or wait within deadline",
+      "sources": [
+        {
+          "path": "src/backend/budget.rs",
+          "line": 156,
+          "end_line": 191,
+          "label": "Global and local admission"
+        }
+      ]
+    },
+    {
+      "id": "execute",
+      "lane": "capacity",
+      "col": 1,
+      "type": "backend",
+      "label": "Execute read-only SQL",
+      "sublabel": "Adapter owns native session",
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 280,
+          "end_line": 305
+        }
+      ]
+    },
+    {
+      "id": "retain",
+      "lane": "capacity",
+      "col": 2,
+      "type": "backend",
+      "label": "Retain source session",
+      "sublabel": "Until block end or interruption",
+      "sources": [
+        {
+          "path": "src/execution/transaction.rs",
+          "line": 133,
+          "end_line": 168,
+          "label": "Retain and check the source route"
+        }
+      ]
+    },
+    {
+      "id": "cleanup",
+      "lane": "session",
+      "col": 1,
+      "type": "backend",
+      "label": "Clean source resource",
+      "sublabel": "Adapter reset or disposal",
+      "sources": [
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 34,
+          "end_line": 63
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "lane": "session",
+      "col": 2,
+      "type": "backend",
+      "label": "Release capacity",
+      "sublabel": "When resource ownership ends",
+      "sources": [
+        {
+          "path": "src/backend/budget.rs",
+          "line": 218,
+          "end_line": 226
+        }
+      ]
+    },
+    {
+      "id": "wait",
+      "lane": "session",
+      "col": 0,
+      "type": "backend",
+      "label": "Acquisition fails",
+      "sublabel": "Deadline or cancellation",
+      "sources": [
+        {
+          "path": "src/backend/budget.rs",
+          "line": 156,
+          "end_line": 191,
+          "label": "Global and local admission"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "route-to-tx",
+      "from": "route",
+      "to": "tx",
+      "variant": "default"
+    },
+    {
+      "id": "tx-to-affinity",
+      "from": "tx",
+      "to": "affinity",
+      "variant": "default",
+      "label": "Yes"
+    },
+    {
+      "id": "tx-to-capacity",
+      "from": "tx",
+      "to": "capacity",
+      "variant": "default",
+      "label": "No / source miss"
+    },
+    {
+      "id": "affinity-to-retain",
+      "from": "affinity",
+      "to": "retain",
+      "variant": "default",
+      "label": "Compatible"
+    },
+    {
+      "id": "capacity-to-execute",
+      "from": "capacity",
+      "to": "execute",
+      "variant": "default",
+      "label": "Admitted"
+    },
+    {
+      "id": "capacity-to-wait",
+      "from": "capacity",
+      "to": "wait",
+      "variant": "default",
+      "role": "branch",
+      "label": "No admission"
+    },
+    {
+      "id": "execute-to-cleanup",
+      "from": "execute",
+      "to": "cleanup",
+      "variant": "default"
+    },
+    {
+      "id": "retain-to-cleanup",
+      "from": "retain",
+      "to": "cleanup",
+      "variant": "default",
+      "label": "Block end"
+    },
+    {
+      "id": "cleanup-to-release",
+      "from": "cleanup",
+      "to": "release",
+      "variant": "emphasis",
+      "label": "Close / dispose"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Compute class is a bound",
+      "items": [
+        "The selector chooses a configured target, login and optional compute type.",
+        "Overflow stays within that type and never escalates to another login or target."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Occupied capacity",
+      "items": [
+        "One shared budget covers adapters, catalog loading and cleanup.",
+        "Idle pooled physical connections can still occupy capacity and may be reclaimed. Active work is not reclaimed.",
+        "Acquisition waits and retries within its deadline; the failure branch represents a timeout or cancellation."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Transaction example",
+      "items": [
+        "BEGIN; first data query retains route reporting / finance_reader.",
+        "Later data queries still select a route. A conflicting route is rejected. Cache is bypassed.",
+        "After a query failure, roll back before more queries. COMMIT or ROLLBACK ends the retained block."
+      ]
+    }
+  ]
+}

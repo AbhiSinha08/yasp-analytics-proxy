@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "28e14aec-9841-481a-9f0f-5df14df576a5",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-dependencies.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-dependencies.html",
+  "specification": {
+    "sha256": "fdf1c85365b1caa402dabcfe85aad9a021d0fe20b1a193b0d494308904594d3a",
+    "bytes": 8216
+  },
+  "artifact": {
+    "sha256": "2e1d1ce94705e3fc7901d5c6e87c70a296f855726983bd4cff9b31de92864527",
+    "bytes": 836362
+  }
+}

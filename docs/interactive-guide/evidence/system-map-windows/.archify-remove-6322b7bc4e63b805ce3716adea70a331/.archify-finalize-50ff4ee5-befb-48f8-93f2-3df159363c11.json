@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "running",
+  "type": "architecture",
+  "quality": "showcase",
+  "startedAt": "2026-10-28T17:45:18.735Z",
+  "specification": {
+    "path": "\\\\wsl.localhost\\Debian\\home\\abhisinha08\\code\\yasp\\docs\\interactive-guide\\system-map.json",
+    "sha256": "bf8695098cdf7776f95ad3af4cb1090e39ed695f853c980f6bc2c8e4a8412794",
+    "bytes": 6068
+  },
+  "artifact": {
+    "path": "\\\\wsl.localhost\\Debian\\home\\abhisinha08\\code\\yasp\\docs\\interactive-guide\\system-map.html"
+  },
+  "stages": {},
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  },
+  "diagnostics": [],
+  "evidence": {
+    "receipt": "\\\\wsl.localhost\\Debian\\home\\abhisinha08\\code\\yasp\\docs\\interactive-guide\\evidence\\system-map-windows\\system-map.finalize.json",
+    "summaryReceipt": "\\\\wsl.localhost\\Debian\\home\\abhisinha08\\code\\yasp\\docs\\interactive-guide\\evidence\\system-map-windows\\system-map.finalize-summary.json"
+  },
+  "visualReview": "not-requested"
+}

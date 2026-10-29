@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ed922ca9-289b-483e-89a1-135f8d21147f",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/raw-cache.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/raw-cache.html",
+  "specification": {
+    "sha256": "c36e7cd1f66247bdad741d4c7fced6b28247e073ebf50eb58b4c01e78c8df320",
+    "bytes": 4424
+  },
+  "artifact": {
+    "sha256": "fba9136015d87bdfcffbcbf7b8c4dcf2139d9129cd9a78ea6d4efa9cd7a5efd1",
+    "bytes": 811144
+  }
+}

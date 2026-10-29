@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "5343ff45-1263-4f35-a33f-f40157323ebf",
+  "status": "current",
+  "command": "deliver",
+  "type": "explainer",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-hooks.archify.md",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-hooks.html",
+  "specification": {
+    "sha256": "c5906753053690f7d00056e87ff037e26af09a5c0bae6001a1e4eaddf11286bb",
+    "bytes": 8008
+  },
+  "artifact": {
+    "sha256": "2352e122e6fd34e8c72f032c29bda626f0434289736e99166fb7ac0faa2e5d99",
+    "bytes": 1367601
+  },
+  "explainer": {
+    "preparedSha256": "60abe5c932c2d629dc066a1dbb62a631428e715cf061bcd7db666ad73a7076a6",
+    "dependencies": [
+      {
+        "kind": "diagram-spec",
+        "id": "context-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/context-routing.json",
+        "relativePath": "context-routing.json",
+        "sha256": "26d2816f41f466e7470f16b4e3c2bd3a4c55bbfe57545969f4bba688b8130fb5",
+        "bytes": 5839
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "rewrite-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/sql-replacement.json",
+        "relativePath": "sql-replacement.json",
+        "sha256": "1e79719f62cfd6eea9a9b01c15724df528275306e9ba86b679a9ee095b6f1e1c",
+        "bytes": 5636
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "result-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/result-processing.json",
+        "relativePath": "result-processing.json",
+        "sha256": "1bf6fd52160de04e81ab5d0a546c35f55190c66eff64ca7fc5d33ccf487e504a",
+        "bytes": 5881
+      }
+    ]
+  }
+}

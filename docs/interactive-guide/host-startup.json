@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Host assembly before accepting clients",
+    "output": "docs/interactive-guide/host-startup.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "host",
+      "label": "Application startup"
+    },
+    {
+      "id": "ready",
+      "label": "Catalog readiness before listening"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "config",
+      "lane": "host",
+      "col": 0,
+      "type": "backend",
+      "label": "Config + hooks",
+      "sublabel": "Secrets / functions / params",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 30,
+          "end_line": 40
+        }
+      ]
+    },
+    {
+      "id": "datasets",
+      "lane": "host",
+      "col": 1,
+      "type": "backend",
+      "label": "App datasets",
+      "sublabel": "Load configured mappings",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 35,
+          "end_line": 40
+        },
+        {
+          "path": "src/datasets.rs",
+          "line": 148,
+          "end_line": 169
+        }
+      ]
+    },
+    {
+      "id": "adapters",
+      "lane": "host",
+      "col": 2,
+      "type": "backend",
+      "label": "Adapters",
+      "sublabel": "Shared capacity budget",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 75,
+          "end_line": 104
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "lane": "ready",
+      "col": 2,
+      "type": "backend",
+      "label": "Load catalog",
+      "sublabel": "Load discovery snapshot",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 106,
+          "end_line": 131
+        }
+      ]
+    },
+    {
+      "id": "listener",
+      "lane": "ready",
+      "col": 1,
+      "type": "frontend",
+      "label": "Listener",
+      "sublabel": "Accept client connections",
+      "sources": [
+        {
+          "path": "src/host/mod.rs",
+          "line": 131,
+          "end_line": 156
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "config-to-datasets",
+      "from": "config",
+      "to": "datasets",
+      "variant": "default"
+    },
+    {
+      "id": "datasets-to-adapters",
+      "from": "datasets",
+      "to": "adapters",
+      "variant": "default"
+    },
+    {
+      "id": "adapters-to-catalog",
+      "from": "adapters",
+      "to": "catalog",
+      "variant": "default"
+    },
+    {
+      "id": "catalog-to-listener",
+      "from": "catalog",
+      "to": "listener",
+      "variant": "default"
+    }
+  ]
+}

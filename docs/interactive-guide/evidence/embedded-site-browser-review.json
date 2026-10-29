@@ -1,0 +1,147 @@
+{
+  "status": "pass",
+  "reviewedAt": "2026-10-28T21:07:01.536Z",
+  "artifact": "index.html",
+  "sha256": "31ae9f1e2ba1539d9a3d037049674f2289d9794b0ab3fe747e9565b386427b64",
+  "initial": {
+    "frames": 5,
+    "objects": 0,
+    "newLinks": 0,
+    "loaded": true,
+    "badges": 0
+  },
+  "examples": [
+    {
+      "step": "Client SQL",
+      "anchor": "client",
+      "inside": true,
+      "marker": "Engine stage"
+    },
+    {
+      "step": "Query context",
+      "anchor": "context",
+      "inside": true,
+      "marker": "Configurable Callback"
+    },
+    {
+      "step": "Modify query",
+      "anchor": "modify",
+      "inside": true,
+      "marker": "Configurable Callback"
+    },
+    {
+      "step": "AST data context",
+      "anchor": "lineage",
+      "inside": true,
+      "marker": "Engine stage"
+    },
+    {
+      "step": "Select source",
+      "anchor": "select",
+      "inside": true,
+      "marker": "Configurable Callback"
+    },
+    {
+      "step": "Dialect translation (planned)",
+      "anchor": "translate-to-source",
+      "inside": true,
+      "marker": "Planned function"
+    },
+    {
+      "step": "Source execution",
+      "anchor": "sources",
+      "inside": true,
+      "marker": "Engine stage"
+    },
+    {
+      "step": "Model data context",
+      "anchor": "raw",
+      "inside": true,
+      "marker": "Configurable settings"
+    },
+    {
+      "step": "Process result",
+      "anchor": "process",
+      "inside": true,
+      "marker": "Configurable Callback"
+    }
+  ],
+  "click": {
+    "step": "1",
+    "visible": true,
+    "callback": "Configurable Callback",
+    "inputs": true,
+    "example": true,
+    "escape": true,
+    "arrowStep": "5",
+    "closed": true,
+    "icons": 3,
+    "noTranslationNode": true,
+    "singleSource": true,
+    "noAstArrow": true
+  },
+  "controls": {
+    "changed": true,
+    "toggled": true,
+    "exported": true,
+    "zoomExists": true
+  },
+  "tabs": [
+    {
+      "name": "startup",
+      "visible": 1,
+      "selected": "true",
+      "width": 1269
+    },
+    {
+      "name": "compute",
+      "visible": 1,
+      "selected": "true",
+      "width": 1269
+    },
+    {
+      "name": "data",
+      "visible": 1,
+      "selected": "true",
+      "width": 1269
+    }
+  ],
+  "compute": {
+    "full": 2,
+    "light": "\n          Light query · compute_type: light_query · Architecture component\n          \n          \n          \n            \n          \n          Light query\n        compute_type: light_query\n        ",
+    "heavy": "\n          Heavy query · compute_type: heavy_query · Architecture component\n          \n          \n          \n            \n          \n          Heavy query\n        compute_type: heavy_query\n        ",
+    "login": "\n          Login / role · finance_reader / audit_reader · Architecture component\n          \n          \n          \n            \n          \n          Login / role\n        finance_reader / audit_reader\n        "
+  },
+  "desktop": {
+    "viewport": 1440,
+    "width": 1425
+  },
+  "mobile": [
+    {
+      "name": "startup",
+      "viewport": 390,
+      "width": 390
+    },
+    {
+      "name": "compute",
+      "viewport": 390,
+      "width": 390
+    },
+    {
+      "name": "data",
+      "viewport": 390,
+      "width": 390
+    }
+  ],
+  "mobileNote": {
+    "left": 34,
+    "right": 356,
+    "viewport": 390
+  },
+  "browserExceptions": [],
+  "screenshots": [
+    "/tmp/yasp-embedded-query-final.png",
+    "/tmp/yasp-embed-compute.png",
+    "/tmp/yasp-embedded-mobile-final.png"
+  ]
+}

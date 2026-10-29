@@ -1,0 +1,252 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Turn application context into a bounded source route",
+    "output": "docs/interactive-guide/context-routing.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    },
+    "views": [
+      {
+        "id": "context",
+        "label": "Context fields",
+        "focus": [
+          "input",
+          "derive"
+        ]
+      },
+      {
+        "id": "decision",
+        "label": "Route decision",
+        "focus": [
+          "policy",
+          "resolve",
+          "valid"
+        ]
+      },
+      {
+        "id": "bounds",
+        "label": "Configured bounds",
+        "focus": [
+          "valid",
+          "execute",
+          "deny"
+        ]
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "context",
+      "label": "Context and policy"
+    },
+    {
+      "id": "engine",
+      "label": "Configured route resolution"
+    },
+    {
+      "id": "outcome",
+      "label": "Execution or rejection"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "input",
+      "lane": "context",
+      "col": 0,
+      "type": "frontend",
+      "label": "Receive request",
+      "sublabel": "Authenticated integration + SQL",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322,
+          "label": "Derive context once"
+        }
+      ]
+    },
+    {
+      "id": "derive",
+      "lane": "context",
+      "col": 1,
+      "type": "backend",
+      "label": "Derive context",
+      "sublabel": "Values and optional dialect",
+      "sources": [
+        {
+          "path": "src/hooks/query_context.rs",
+          "line": 14,
+          "end_line": 31
+        },
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322,
+          "label": "Derive context once"
+        }
+      ]
+    },
+    {
+      "id": "policy",
+      "lane": "context",
+      "col": 2,
+      "type": "security",
+      "label": "Select route",
+      "sublabel": "App mappings + effective query",
+      "sources": [
+        {
+          "path": "hooks/examples/dataset_selector.rs",
+          "line": 18,
+          "end_line": 49
+        },
+        {
+          "path": "src/execution.rs",
+          "line": 112,
+          "end_line": 150,
+          "label": "Lineage and current route"
+        }
+      ]
+    },
+    {
+      "id": "resolve",
+      "lane": "engine",
+      "col": 2,
+      "type": "security",
+      "label": "Resolve decision",
+      "sublabel": "Target, login, compute type",
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119,
+          "label": "Resolve configured selection"
+        },
+        {
+          "path": "src/hooks/selection.rs",
+          "line": 27,
+          "end_line": 52
+        }
+      ]
+    },
+    {
+      "id": "valid",
+      "lane": "engine",
+      "col": 1,
+      "type": "security",
+      "label": "Configured choice?",
+      "sublabel": "Fill only unambiguous defaults",
+      "sources": [
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 9,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "execute",
+      "lane": "engine",
+      "col": 0,
+      "type": "database",
+      "label": "Use source role",
+      "sublabel": "Adapter retains credentials",
+      "sources": [
+        {
+          "path": "docs/source-access-routing.md",
+          "line": 23,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "deny",
+      "lane": "outcome",
+      "col": 1,
+      "type": "security",
+      "label": "Reject request",
+      "sublabel": "Denied, unknown or ambiguous",
+      "sources": [
+        {
+          "path": "src/backend/execution.rs",
+          "line": 94,
+          "end_line": 119,
+          "label": "Resolve configured selection"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "input-to-derive",
+      "from": "input",
+      "to": "derive",
+      "variant": "default"
+    },
+    {
+      "id": "derive-to-policy",
+      "from": "derive",
+      "to": "policy",
+      "variant": "default"
+    },
+    {
+      "id": "policy-to-resolve",
+      "from": "policy",
+      "to": "resolve",
+      "variant": "default",
+      "label": "Decision"
+    },
+    {
+      "id": "resolve-to-valid",
+      "from": "resolve",
+      "to": "valid",
+      "variant": "default"
+    },
+    {
+      "id": "valid-to-execute",
+      "from": "valid",
+      "to": "execute",
+      "variant": "emphasis",
+      "label": "Yes"
+    },
+    {
+      "id": "valid-to-deny",
+      "from": "valid",
+      "to": "deny",
+      "variant": "security",
+      "role": "error",
+      "label": "No"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Example application values",
+      "items": [
+        "authenticated_user = analytics_service; query_context = {user_id: \"u17\", department: \"finance\", workload: \"interactive\"}.",
+        "The application owns these field meanings; the engine treats values as opaque."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Example selection",
+      "items": [
+        "users[u17].department = finance; department_logins[finance] = finance_reader.",
+        "Decision: target = reporting; backend_login = finance_reader; optional compute_type = interactive."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Trust and isolation",
+      "items": [
+        "SQL remarks may carry hints, but never authenticate the viewer or replace the integration identity.",
+        "Selection runs before cache lookup. The source role enforces access when the source executes."
+      ]
+    }
+  ]
+}

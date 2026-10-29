@@ -1,0 +1,212 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Shared application datasets: load, publish and read",
+    "output": "docs/interactive-guide/application-datasets.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "load",
+      "label": "Application-owned loading"
+    },
+    {
+      "id": "publish",
+      "label": "Engine-owned publication"
+    },
+    {
+      "id": "read",
+      "label": "Callback-scoped reads"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "lane": "load",
+      "col": 0,
+      "label": "Start or refresh",
+      "sublabel": "Startup / configured schedule",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 167,
+          "end_line": 200
+        }
+      ]
+    },
+    {
+      "id": "claim",
+      "lane": "load",
+      "col": 1,
+      "label": "Claim refresh lease",
+      "sublabel": "Join fresh startup or load",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 237,
+          "end_line": 254
+        }
+      ]
+    },
+    {
+      "id": "loader",
+      "lane": "load",
+      "col": 2,
+      "label": "Run dataset loader",
+      "sublabel": "Return complete JSON mapping",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 255,
+          "end_line": 265
+        }
+      ]
+    },
+    {
+      "id": "validate",
+      "lane": "publish",
+      "col": 2,
+      "label": "Bound and publish",
+      "sublabel": "Check token and revision",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 255,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "id": "live",
+      "lane": "publish",
+      "col": 1,
+      "label": "Current live dataset",
+      "sublabel": "Atomic complete replacement",
+      "type": "database",
+      "sources": [
+        {
+          "path": "src/datasets/store.rs",
+          "line": 142,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "id": "keep",
+      "lane": "publish",
+      "col": 3,
+      "label": "Keep last good value",
+      "sublabel": "Scheduled refresh failure",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 188,
+          "end_line": 200
+        }
+      ]
+    },
+    {
+      "id": "lookup",
+      "lane": "read",
+      "col": 1,
+      "label": "Read inside callback",
+      "sublabel": "Bounded get / get_many / read",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "docs/extensions.md",
+          "line": 61,
+          "end_line": 66
+        }
+      ]
+    },
+    {
+      "id": "context",
+      "lane": "read",
+      "col": 2,
+      "label": "Use app mappings",
+      "sublabel": "Context, routing and other hooks",
+      "type": "backend",
+      "sources": [
+        {
+          "path": "docs/extensions.md",
+          "line": 61,
+          "end_line": 66
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-to-claim",
+      "from": "start",
+      "to": "claim"
+    },
+    {
+      "id": "claim-to-loader",
+      "from": "claim",
+      "to": "loader",
+      "label": "Acquired"
+    },
+    {
+      "id": "loader-to-validate",
+      "from": "loader",
+      "to": "validate"
+    },
+    {
+      "id": "validate-to-live",
+      "from": "validate",
+      "to": "live",
+      "variant": "emphasis",
+      "label": "Publish"
+    },
+    {
+      "id": "validate-to-keep",
+      "from": "validate",
+      "to": "keep",
+      "role": "error",
+      "variant": "security",
+      "label": "Failed"
+    },
+    {
+      "id": "live-to-lookup",
+      "from": "live",
+      "to": "lookup"
+    },
+    {
+      "id": "lookup-to-context",
+      "from": "lookup",
+      "to": "context"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Example: users",
+      "items": [
+        "The application loader returns {u17: {department: \"finance\"}, u29: {department: \"operations\"}}.",
+        "Callbacks read current mappings with datasets.get(\"users\", \"u17\")."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Readiness and ownership",
+      "items": [
+        "Initial load failure prevents serving. Refresh failure preserves the last good values.",
+        "Dataset storage has its own namespace, separate from raw result caching. A scoped reader expires after its callback."
+      ]
+    }
+  ]
+}

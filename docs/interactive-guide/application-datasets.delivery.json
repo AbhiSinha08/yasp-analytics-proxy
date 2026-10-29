@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "829da8f7-af05-4482-997d-df8dedea4a64",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/application-datasets.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/application-datasets.html",
+  "specification": {
+    "sha256": "33c9b9c0dfcb8a73ed787f6e68564bb05fe23ff9781ba84e70e5215f44013948",
+    "bytes": 4697
+  },
+  "artifact": {
+    "sha256": "50db7faefb7d09c808649879794876026c2a1ca7eee3bd842fed6d98daea36ed",
+    "bytes": 818181
+  }
+}

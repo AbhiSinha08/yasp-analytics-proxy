@@ -1,0 +1,147 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "One query through YASP",
+    "output": "docs/interactive-guide/query-story.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "query",
+      "label": "Ordinary read-only query"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "context",
+      "lane": "query",
+      "col": 0,
+      "type": "backend",
+      "label": "Read context",
+      "sublabel": "App values",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 293,
+          "end_line": 322
+        }
+      ]
+    },
+    {
+      "id": "sql",
+      "lane": "query",
+      "col": 1,
+      "type": "backend",
+      "label": "Change SQL",
+      "sublabel": "Optional app hook",
+      "sources": [
+        {
+          "path": "src/gateway/query.rs",
+          "line": 242,
+          "end_line": 290
+        }
+      ]
+    },
+    {
+      "id": "schema",
+      "lane": "query",
+      "col": 2,
+      "type": "backend",
+      "label": "Trace columns",
+      "sublabel": "Optional schema facts",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 120,
+          "end_line": 129
+        }
+      ]
+    },
+    {
+      "id": "route",
+      "lane": "query",
+      "col": 3,
+      "type": "backend",
+      "label": "Choose source",
+      "sublabel": "Validate role; execute",
+      "sources": [
+        {
+          "path": "src/execution.rs",
+          "line": 134,
+          "end_line": 150
+        },
+        {
+          "path": "src/cache/execution.rs",
+          "line": 144,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "id": "result",
+      "lane": "query",
+      "col": 4,
+      "type": "backend",
+      "label": "Shape results",
+      "sublabel": "Optional app hook",
+      "sources": [
+        {
+          "path": "src/execution/processing.rs",
+          "line": 173,
+          "end_line": 240
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "context-to-sql",
+      "from": "context",
+      "to": "sql",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sql-to-schema",
+      "from": "sql",
+      "to": "schema",
+      "variant": "emphasis"
+    },
+    {
+      "id": "schema-to-route",
+      "from": "schema",
+      "to": "route",
+      "variant": "emphasis"
+    },
+    {
+      "id": "route-to-result",
+      "from": "route",
+      "to": "result",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Example scope",
+      "items": [
+        "An ordinary read-only query with application callbacks enabled, optional lineage enabled, and a source read.",
+        "The source route step groups selection, configured-bound validation and source execution."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Other paths",
+      "items": [
+        "Metadata and frontend controls use their own paths. Explicit transactions retain a compatible source route.",
+        "Eligible raw cache hits skip source execution; current context, route validation and result processing still run."
+      ]
+    }
+  ]
+}

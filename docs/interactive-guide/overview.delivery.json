@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9688a8b0-d9a6-4f91-8495-3be4dcd15b8d",
+  "status": "current",
+  "command": "deliver",
+  "type": "explainer",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.archify.md",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/overview.html",
+  "specification": {
+    "sha256": "2e7a150e4247a88dc22c051f0e01488604849451ebb9819e6d959c64c3559acf",
+    "bytes": 6043
+  },
+  "artifact": {
+    "sha256": "f765eb18d8660b588eeeeede48c007e637e328fa38921629b27627cd22598bbb",
+    "bytes": 1333300
+  },
+  "explainer": {
+    "preparedSha256": "835e2fbba8e52d4bddbbcc7a8850993c879e5d04c6f4ba863e5c728cc7fabbd6",
+    "dependencies": [
+      {
+        "kind": "diagram-spec",
+        "id": "system-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/system-map.json",
+        "relativePath": "system-map.json",
+        "sha256": "bf8695098cdf7776f95ad3af4cb1090e39ed695f853c980f6bc2c8e4a8412794",
+        "bytes": 6068
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "assembly-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/library-assembly.json",
+        "relativePath": "library-assembly.json",
+        "sha256": "47ea0954445f9e3b0f968ad2d231418cf0619fd856530d61ec3fdb10e6a6688c",
+        "bytes": 4108
+      },
+      {
+        "kind": "diagram-spec",
+        "id": "journey-picture",
+        "path": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-journey.json",
+        "relativePath": "query-journey.json",
+        "sha256": "ba59cf4354f698513632b24773d36b5d2785da07efa78d14e77f1bcada43e835",
+        "bytes": 5655
+      }
+    ]
+  }
+}

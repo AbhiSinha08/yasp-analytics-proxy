@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "e7e70426-11fd-4285-9d8d-abc7d2887a52",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-journey.json",
+  "output": "/home/abhisinha08/code/yasp/docs/interactive-guide/query-journey.html",
+  "specification": {
+    "sha256": "ba59cf4354f698513632b24773d36b5d2785da07efa78d14e77f1bcada43e835",
+    "bytes": 5655
+  },
+  "artifact": {
+    "sha256": "276026c52f81869dadaf3ac37c849508e887d31e533eed1e1bede7b544949d02",
+    "bytes": 816987
+  }
+}

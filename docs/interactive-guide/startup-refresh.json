@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Startup, refresh and storage",
+    "output": "docs/interactive-guide/startup-refresh.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:AbhiSinha08/yasp-analytics-proxy.git",
+      "revision": "526debf6d497e5d1e1f18d0397a1279855683f0f",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "loader",
+      "type": "backend",
+      "label": "Load application dataset",
+      "sublabel": "Fetch files / app services",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 107,
+          "end_line": 125
+        },
+        {
+          "path": "src/datasets.rs",
+          "line": 148,
+          "end_line": 169
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "Application dataset + cache",
+      "pos": [
+        350,
+        40
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/datasets/store.rs",
+          "line": 142,
+          "end_line": 196
+        },
+        {
+          "path": "src/cache/classification.rs",
+          "line": 181,
+          "end_line": 209
+        }
+      ]
+    },
+    {
+      "id": "queries",
+      "type": "backend",
+      "label": "Query completion",
+      "sublabel": "Raw results + sidecars",
+      "pos": [
+        700,
+        40
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/cache/execution.rs",
+          "line": 190,
+          "end_line": 225
+        }
+      ]
+    },
+    {
+      "id": "timer",
+      "type": "backend",
+      "label": "Refresh timers",
+      "sublabel": "Configured schedules",
+      "pos": [
+        40,
+        240
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/datasets.rs",
+          "line": 170,
+          "end_line": 207
+        },
+        {
+          "path": "src/catalog.rs",
+          "line": 219,
+          "end_line": 239
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "Catalog adapter",
+      "sublabel": "Fetch source schema",
+      "pos": [
+        40,
+        440
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 198,
+          "end_line": 204
+        },
+        {
+          "path": "src/catalog.rs",
+          "line": 282,
+          "end_line": 329
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "Process memory",
+      "sublabel": "Schema catalog snapshots",
+      "pos": [
+        350,
+        440
+      ],
+      "size": [
+        210,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/catalog.rs",
+          "line": 206,
+          "end_line": 248
+        },
+        {
+          "path": "src/catalog.rs",
+          "line": 317,
+          "end_line": 327
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "loader-to-redis",
+      "from": "loader",
+      "to": "redis",
+      "label": "Publish dataset",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queries-to-redis",
+      "from": "queries",
+      "to": "redis",
+      "label": "Cache writes",
+      "variant": "default"
+    },
+    {
+      "id": "timer-to-loader",
+      "from": "timer",
+      "to": "loader",
+      "label": "Refresh",
+      "variant": "default"
+    },
+    {
+      "id": "timer-to-catalog",
+      "from": "timer",
+      "to": "catalog",
+      "label": "Refresh",
+      "variant": "default"
+    },
+    {
+      "id": "catalog-to-memory",
+      "from": "catalog",
+      "to": "memory",
+      "label": "Publish snapshot",
+      "variant": "emphasis"
+    }
+  ]
+}
